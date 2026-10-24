@@ -73,6 +73,29 @@ def simulator_webkit_workaround(runtime_info):
     return {"SIMCTL_CHILD_DYLD_FALLBACK_LIBRARY_PATH": str(directory)}, evidence
 
 
+def read_ready_receipt(container, receipt, capture_id, case, font, launched_at):
+    """Accept only a fresh atomic receipt from this app container and launch UUID."""
+    container, receipt = Path(container).resolve(), Path(receipt)
+    temporary = container / "tmp"
+    expected = temporary / f"math-preview-ready-{capture_id}.json"
+    if str(uuid.UUID(capture_id)) != capture_id or receipt != expected:
+        raise RuntimeError("Invalid capture UUID or readiness receipt filename")
+    if temporary.resolve().parent != container or receipt.resolve().parent != temporary.resolve():
+        raise RuntimeError("Readiness receipt escaped the app data container tmp directory")
+    if not receipt.exists():
+        return None
+    info = receipt.stat()
+    if receipt.is_symlink() or not receipt.is_file() or info.st_size > 8192 or info.st_mtime < launched_at:
+        raise RuntimeError("Stale or invalid readiness receipt")
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    if (not isinstance(payload, dict) or payload.get("captureID") != capture_id
+            or payload.get("suite") != "math" or payload.get("case") != case
+            or type(payload.get("font")) is not int or payload.get("font") != font
+            or payload.get("ready") is not True):
+        raise RuntimeError("Readiness receipt does not match this synthetic capture")
+    return payload
+
+
 def main():
     if platform.system() != "Darwin":
         raise SystemExit("Native iOS Simulator capture requires macOS/Xcode; not verified on Windows")
@@ -90,7 +113,7 @@ def main():
         raise RuntimeError("Simulator Debug app missing")
     device = sim("create", "MathExperiencePreview-" + uuid.uuid4().hex[:12], kind, runtime).strip()
     manifest = {"capture_type": "native iOS Simulator (not physical hardware)",
-                "experience_format": "xkl-math-experience-v2", "synthetic_only": True, "readiness": "WK document.fonts.ready and measured render aggregation marker, plus 1 second native draw settling",
+                "experience_format": "xkl-math-experience-v2", "synthetic_only": True, "readiness": "Per-launch atomic app tmp receipt after true WK/font readiness and layout; console is diagnostic only",
                 "device": name, "device_type": kind,
                 "runtime": runtime_info, "simulator_workaround": workaround,
                 "status": "incomplete", "fixtures": []}
@@ -98,24 +121,34 @@ def main():
         sim("boot", device)
         sim("bootstatus", device, "-b")
         sim("install", device, str(app))
+        container = Path(sim("get_app_container", device, BUNDLE, "data").strip()).resolve()
         for case, font in CASES:
             started = time.monotonic()
             readiness_timeout = 90 if (case, font) == ("question", 26) else 45
             log = OUT / f"{case}-{font}.log"
             marker = f"MATH_EXPERIENCE_PREVIEW_RENDERED case={case} font={font}"
+            capture_id = str(uuid.uuid4())
+            receipt = container / "tmp" / f"math-preview-ready-{capture_id}.json"
+            if receipt.exists():
+                raise RuntimeError("Unexpected preexisting readiness receipt for fresh UUID")
+            launched_at = time.time()
             with log.open("w", encoding="utf-8") as stream:
                 process = subprocess.Popen(
                     ["xcrun", "simctl", "launch", "--console", "--terminate-running-process",
                      device, BUNDLE, "--math-experience-preview", "--math-experience-case", case,
-                     "--math-experience-font", str(font)], stdout=stream, stderr=subprocess.STDOUT,
+                     "--math-experience-font", str(font), "--preview-capture-id", capture_id], stdout=stream, stderr=subprocess.STDOUT,
                     env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES", **launch_environment})
                 try:
                     deadline = time.monotonic() + readiness_timeout
-                    while marker not in log.read_text(encoding="utf-8", errors="replace"):
-                        if process.poll() is not None:
-                            raise RuntimeError(f"Fixture exited before readiness: {case}; simctl exit code={process.returncode}; see {log}")
+                    while True:
+                        ready_receipt = read_ready_receipt(container, receipt, capture_id, case, font, launched_at)
+                        if ready_receipt is not None:
+                            break
+                        console_code = process.poll()
+                        if console_code not in (None, 0):
+                            raise RuntimeError(f"simctl console command failed before receipt: {case}; exit code={console_code}; app state unknown; see {log}")
                         if time.monotonic() > deadline:
-                            raise RuntimeError(f"Fixture readiness timed out: {marker}; see {log}")
+                            raise RuntimeError(f"Fixture readiness receipt timed out: {case}; simctl console code={console_code}; app state unknown; see {log}")
                         time.sleep(0.2)
                     ready_elapsed = time.monotonic() - started
                     # Renderer/font readiness marker precedes native compositing settling.
@@ -131,6 +164,9 @@ def main():
                         raise RuntimeError(f"Expected portrait phone screenshot, got {width}x{height}")
                     manifest["fixtures"].append({"case": case, "font_pt": font,
                         "file": screenshot.name, "pixels": [width, height], "ready_marker": marker,
+                        "capture_id": capture_id, "ready_receipt": ready_receipt,
+                        "receipt_relative_to_app_data": str(receipt.relative_to(container)),
+                        "simctl_console_exit_code_at_ready": process.poll(),
                         "capture_elapsed_seconds": round(time.monotonic() - started, 3),
                         "readiness_elapsed_seconds": round(ready_elapsed, 3),
                         "readiness_timeout_seconds": readiness_timeout,
@@ -140,6 +176,7 @@ def main():
                     print(f"Synthetic fixture failure: {error}", flush=True)
                     print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]), flush=True)
                     failure = {"case": case, "font_pt": font, "error": str(error),
+                               "capture_id": capture_id, "receipt_relative_to_app_data": str(receipt.relative_to(container)),
                                "simctl_exit_code": process.poll(), "console": log.name,
                                "elapsed_seconds": round(time.monotonic() - started, 3),
                                "readiness_timeout_seconds": readiness_timeout,

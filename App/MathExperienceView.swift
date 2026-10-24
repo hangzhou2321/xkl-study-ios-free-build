@@ -243,10 +243,31 @@ struct MathExperienceView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
             guard ["familiar", "card"].contains(selected) || questionReady else { previewReported = false; return }
+            writePreviewReadyReceipt(selected: selected, font: Int(fontSize))
             print("MATH_EXPERIENCE_PREVIEW_RENDERED case=\(selected) font=\(Int(fontSize))")
         }
         #endif
     }
+    #if DEBUG
+    private func writePreviewReadyReceipt(selected: String, font: Int) {
+        let args=ProcessInfo.processInfo.arguments
+        guard args.contains("--math-experience-preview"), let index=args.firstIndex(of:"--preview-capture-id"), index+1<args.count,
+              let uuid=UUID(uuidString:args[index+1]) else {
+            MathPreviewTrace.phase("receipt-invalid-capture-id",flag:false)
+            return
+        }
+        let captureID=uuid.uuidString.lowercased()
+        let target=FileManager.default.temporaryDirectory.appendingPathComponent("math-preview-ready-"+captureID+".json",isDirectory:false)
+        do {
+            let receipt:[String:Any] = ["suite":"math","case":selected,"font":font,"captureID":captureID,"ready":true]
+            let data=try JSONSerialization.data(withJSONObject:receipt,options:[.sortedKeys])
+            try data.write(to:target,options:.atomic)
+            MathPreviewTrace.phase("receipt-written",flag:true)
+        } catch {
+            MathPreviewTrace.phase("receipt-write-failed",flag:false)
+        }
+    }
+    #endif
     private func pauseCurrent() { if let id = store.engine?.current?.id { store.pause(sessionID: id) } }
     private func resumeCurrent() { if let id = store.engine?.current?.id { store.resume(sessionID: id) } }
     private func syncVisibility() {
