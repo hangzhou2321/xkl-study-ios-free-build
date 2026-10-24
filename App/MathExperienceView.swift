@@ -38,6 +38,7 @@ struct MathExperienceView: View {
                     proxy.scrollTo("math-top", anchor: .top)
                 }
                 .onChange(of: questionReady) { _, ready in
+                    if ready { renderFailure = nil }
                     if ready, previewCase != nil {
                         if previewCase == "answer" { proxy.scrollTo("math-answer", anchor: .top) }
                         if previewCase == "details" { proxy.scrollTo("math-details", anchor: .bottom) }
@@ -292,8 +293,12 @@ private struct MathExperienceCardSheet: View {
                     if let failure { Text("公式排版失败，暂停卡片评分：\(failure)").foregroundStyle(.red) }
                 }.padding(20)
             }.navigationTitle(card.title).toolbar { Button("关闭", action: close) }
-                .onChange(of: allReady) { _, ready in if ready { rendered() } }
+                .onChange(of: renderReady) { _, ready in if ready { failure = nil; rendered() } }
         }
+    }
+    private var renderReady: Bool {
+        let visibleRoles = recall && !revealed ? ["prompt"] : ["prompt", "answer", "detail"]
+        return visibleRoles.allSatisfy { ready.contains($0) }
     }
     private var allReady: Bool { failure == nil && ["prompt", "answer", "detail"].allSatisfy { ready.contains($0) } }
     private func cardRich(_ blocks: [MathRichBlock], role: String) -> some View {

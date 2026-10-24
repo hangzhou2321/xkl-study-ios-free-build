@@ -85,7 +85,9 @@ private struct MathWebContent: UIViewRepresentable {
         func render() {
             guard active, let web else { return }
             do {
-                let data = try JSONEncoder().encode(parent.blocks)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = .sortedKeys
+                let data = try encoder.encode(parent.blocks)
                 let signatureData = data + Data(String(parent.fontSize).utf8)
                 if signatureData != signature {
                     signature = signatureData
