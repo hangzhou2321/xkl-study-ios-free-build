@@ -183,7 +183,7 @@ private struct SyllabusTopicView: View {
                 if !sourceLeaves.isEmpty {
                     Section {
                         NavigationLink {
-                            SyllabusSourceLeavesView(leaves: sourceLeaves, source: source)
+                            SyllabusSourceLeavesView(store: store, leaves: sourceLeaves, source: source)
                         } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(source.title).font(.headline)
@@ -202,6 +202,7 @@ private struct SyllabusTopicView: View {
 }
 
 private struct SyllabusSourceLeavesView: View {
+    @ObservedObject var store: ConceptStore
     let leaves: [ConceptSyllabusTree.Leaf]
     let source: ConceptSyllabusTree.Source
     @State private var pageIndex = 0
@@ -219,7 +220,7 @@ private struct SyllabusSourceLeavesView: View {
                 }
                 ForEach(visible) { leaf in
                     NavigationLink {
-                        SyllabusLeafView(leaf: leaf, source: source)
+                        SyllabusLeafView(store: store, leaf: leaf, source: source)
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("第 \(leaf.number) 题 · PDF第 \(leaf.page) 页").font(.subheadline.bold())
@@ -268,6 +269,7 @@ private struct SyllabusStatisticsView: View {
 }
 
 private struct SyllabusLeafView: View {
+    @ObservedObject var store: ConceptStore
     let leaf: ConceptSyllabusTree.Leaf
     let source: ConceptSyllabusTree.Source
     @State private var pdfPresented = false
@@ -283,10 +285,24 @@ private struct SyllabusLeafView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("打开原PDF · 第 \(leaf.page) 页", systemImage: "doc.richtext") { pdfPresented = true }
             }
-            Section("第 \(leaf.number) 题") {
+            Section("资料摘要 · 非完整作答题") {
                 Text(leaf.prompt).textSelection(.enabled)
                 ForEach(leaf.options.indices, id: \.self) { index in
                     Text(leaf.options[index]).textSelection(.enabled)
+                }
+            }
+            if let bank=store.engine?.bank, let teaching=store.teaching {
+                Section("相关知识与完整核验题") {
+                    ForEach(leaf.linkedQuestionIDs, id: \.self) { id in
+                        if let question=bank.concepts.flatMap(\.questions).first(where: { $0.id == id }) {
+                            if teaching.questionPresentations?.contains(where: { $0.questionID == id }) == true {
+                                NavigationLink("查看完整核验题") { ProfessionalSourceStartView(store:store,question:question) }
+                            }
+                            if let links=teaching.questionLinks?.first(where: { $0.questionID == id }) {
+                                ProfessionalQuestionCardsView(primaryIDs:links.primaryCardIDs,supplementIDs:links.supplementCardIDs,guideIDs:links.guideConceptIDs,teaching:teaching,bank:bank,subject:store.subject)
+                            }
+                        }
+                    }
                 }
             }
             Section {
@@ -399,3 +415,4 @@ private struct SyllabusPDFCanvas: UIViewRepresentable {
         }
     }
 }
+

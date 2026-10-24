@@ -42,6 +42,7 @@ struct ConceptView: View {
     @State private var storyExpanded = false
     @State private var guidancePresented = false
     @State private var guidanceReturnsToPractice = false
+    @State private var questionImageFailure: String?
     @AppStorage("studyHapticsEnabled") private var haptics = true
 
     var body: some View {
@@ -80,7 +81,11 @@ struct ConceptView: View {
                             }
                         }
                         if let teaching = store.teaching {
-                            Section("问答背诵") {
+                            Section("主线与拓展") {
+                                if teaching.studyPlan != nil {
+                                    NavigationLink("主线学习与拓展", destination: ProfessionalStudyPlanView(subject: store.subject, bank: engine.bank, teaching: teaching))
+                                }
+                                NavigationLink("源题练习与资料索引", destination: ProfessionalSourcesView(store: store))
                                 NavigationLink {
                                     RecallStudyView(subject: store.subject, bank: engine.bank, teaching: teaching)
                                 } label: { Label("背知识点 · 问答卡", systemImage: "rectangle.on.rectangle") }
@@ -217,11 +222,20 @@ struct ConceptView: View {
                     if let lesson = store.currentLesson {
                         story(lesson, token: p.id)
                     }
-                    Text(q.prompt).font(.title3).textSelection(.enabled)
+                    Text(q.sourceLocation).font(.subheadline).foregroundStyle(.secondary)
+                    Text(q.prompt).font(.system(size:26)).textSelection(.enabled)
+                    if let presentation=store.teaching?.questionPresentations?.first(where: { $0.questionID == q.id }) {
+                        ForEach(presentation.beforeAnswer) { visual in ProfessionalVisualView(visual:visual,onFailure:{ questionImageFailure=$0 }) }
+                    }
+                    if let links=store.teaching?.questionLinks?.first(where: { $0.questionID == q.id }), let teaching=store.teaching {
+                        ProfessionalPracticeCardsView(store:store,token:p.id,primaryIDs:links.primaryCardIDs,supplementIDs:links.supplementCardIDs,guideIDs:links.guideConceptIDs,teaching:teaching,bank:e.bank)
+                    }
+                    if let questionImageFailure { Text(questionImageFailure+"，本题暂缓作答。").foregroundStyle(.orange) }
+                    if let reason=store.currentQuestionPracticeBlockedReason { Text(reason).foregroundStyle(.secondary) }
                     ForEach(p.order, id: \.self) { id in
                         if let option = q.options.first(where: { $0.id == id }) {
                             Button {
-                                perform { store.choose(id, token: p.id) }
+                                guard questionImageFailure == nil, store.currentQuestionPracticeBlockedReason == nil else { return }; perform { store.choose(id, token: p.id) }
                             } label: {
                                 HStack(alignment: .top, spacing: 12) {
                                     Image(systemName: indicator(id, presentation: p, question: q, revealed: e.record.review != nil))
@@ -232,7 +246,7 @@ struct ConceptView: View {
                                 .foregroundStyle(color(id, p: p, q: q, revealed: e.record.review != nil))
                                 .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
                             }.buttonStyle(.plain)
-                            .disabled(e.record.review != nil || store.blocked || actionLocked)
+                            .disabled(e.record.review != nil || store.blocked || actionLocked || questionImageFailure != nil || store.currentQuestionPracticeBlockedReason != nil)
                         }
                     }
                     if let answer = e.record.review {
@@ -240,9 +254,16 @@ struct ConceptView: View {
                               systemImage: answer.isCorrect == true ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundStyle(answer.isCorrect == true ? Color.green : Color.red)
                             .font(.headline)
+                        if store.teaching?.questionLinks?.contains(where: { $0.questionID == q.id && (!$0.primaryCardIDs.isEmpty || !$0.supplementCardIDs.isEmpty || !$0.guideConceptIDs.isEmpty) }) == true {
+                            Text(store.currentQuestionUsedCardHelp ? "本次作答前参考过本题知识卡。" : "本次作答前未查阅本题知识卡。").font(.footnote).foregroundStyle(.secondary)
+                        }
                         Text("正确选项：" + p.order.filter { q.answer.contains($0) }
                             .map { ExamPresentation.label($0, in: p.order) }.joined(separator: "、"))
-                        Text(q.explanation).textSelection(.enabled)
+                        Text(q.explanation.components(separatedBy:"\n").first ?? q.explanation).font(.system(size:24)).textSelection(.enabled)
+                        DisclosureGroup("详细说明") { Text(q.explanation).font(.system(size:22)).textSelection(.enabled) }
+                        if let presentation=store.teaching?.questionPresentations?.first(where: { $0.questionID == q.id }) {
+                            ForEach(presentation.afterAnswer) { visual in ProfessionalVisualView(visual:visual) }
+                        }
                         Text("解题方法").font(.headline)
                         Text(e.bank.studyScope == nil ? c.method : (store.currentLesson?.keyIdea ?? c.method))
                             .textSelection(.enabled)
@@ -269,6 +290,7 @@ struct ConceptView: View {
             .id(p.id)
             .task(id: p.id) {
                 storyExpanded = false
+                questionImageFailure = nil
                 if let position = store.guidance?.active, position.presentationID == p.id {
                     guidanceReturnsToPractice = true
                     guidancePresented = true
@@ -287,9 +309,9 @@ struct ConceptView: View {
                         Button("下一题") { perform { store.next(token: p.id) } }
                             .buttonStyle(.borderedProminent).frame(height: 48)
                     } else if q.type == .multiple {
-                        Button("提交答案") { perform { store.submit(token: p.id) } }
+                        Button("提交答案") { guard questionImageFailure == nil, store.currentQuestionPracticeBlockedReason == nil else { return }; perform { store.submit(token: p.id) } }
                             .buttonStyle(.borderedProminent).frame(height: 48)
-                            .disabled(p.selected.isEmpty)
+                            .disabled(p.selected.isEmpty || questionImageFailure != nil || store.currentQuestionPracticeBlockedReason != nil)
                     } else {
                         Text("点击上方选项作答").font(.footnote).foregroundStyle(.secondary).frame(height: 48)
                     }

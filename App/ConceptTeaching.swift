@@ -49,6 +49,49 @@ struct ConceptTeaching: Codable, Equatable {
     let lessons: [ConceptLesson]
     var syllabus: ConceptSyllabusTree? = nil
     var recallGroups: [SupplementRecallGroup]? = nil
+    var primaryRecallDeck: RecallDeck? = nil
+    var studyPlan: ProfessionalStudyPlan? = nil
+    var questionPresentations: [ProfessionalQuestionPresentation]? = nil
+    var questionLinks: [ProfessionalQuestionLinks]? = nil
+    var cardCorrections: [ProfessionalCardCorrection]? = nil
+    var sourceLeaves: [ProfessionalSourceLeaf]? = nil
+
+    var hasProfessionalExtension: Bool { primaryRecallDeck != nil || studyPlan != nil || questionPresentations != nil || questionLinks != nil || cardCorrections != nil || sourceLeaves != nil }
+    var hasCompleteProfessionalExtension: Bool { primaryRecallDeck != nil && studyPlan != nil && questionPresentations != nil && questionLinks != nil && cardCorrections != nil && sourceLeaves != nil }
+    func validatePrimaryRecallIdentity(from old: ConceptTeaching, bank: ConceptBank) throws {
+        let subject: ConceptSubject = bank.id == ConceptSubject.computer.bankID ? .computer : .power
+        let prior=try RecallDeck.make(subject:subject,bank:bank,teaching:old)
+        guard let primaryRecallDeck, primaryRecallDeck == prior else { throw ExamError.invalid("冻结主卡组与当前旧课程不一致，停止导入，原进度保留。") }
+    }
+    func validateAppendOnlyRecall(from old: ConceptTeaching, bank: ConceptBank) throws {
+        try validatePrimaryRecallIdentity(from:old,bank:bank)
+        for lesson in old.lessons {
+            guard lessons.first(where: { $0.conceptID == lesson.conceptID })?.recallCards == lesson.recallCards else { throw ExamError.invalid("旧背诵卡正文或顺序改变，拒绝替换。") }
+        }
+        let oldIDs=Set(old.lessons.map(\.conceptID))
+        guard lessons.filter({ !oldIDs.contains($0.conceptID) }).allSatisfy({ $0.recallCards == nil }) else { throw ExamError.invalid("新增背诵卡必须放入独立补充组，不能加入新主课卡组。") }
+        let prior=old.recallGroups ?? [], next=recallGroups ?? []
+        guard next.count >= prior.count, Array(next.prefix(prior.count)) == prior else { throw ExamError.invalid("旧补充卡组内容或顺序改变，拒绝替换。") }
+    }
+    func validatePrimarySnapshot(bank: ConceptBank) throws {
+        guard let primaryRecallDeck else { return }
+        try primaryRecallDeck.validate()
+        guard primaryRecallDeck.bankID == bank.id else { throw ExamError.invalid("冻结主卡组科目不匹配。") }
+        var ordered: [RecallDeck.Item]=[]
+        for concept in bank.concepts {
+            guard let lesson=lessons.first(where: { $0.conceptID == concept.id }) else { throw ExamError.invalid("冻结主卡组缺少旧课。") }
+            ordered += (lesson.recallCards ?? []).map { RecallDeck.Item(conceptID:concept.id,conceptTitle:concept.title,card:$0) }
+        }
+        for id in Set(primaryRecallDeck.cards.map(\.conceptID)) {
+            guard primaryRecallDeck.cards.filter({ $0.conceptID == id }) == ordered.filter({ $0.conceptID == id }) else { throw ExamError.invalid("冻结主卡组不能截断同一旧考点的卡片。") }
+        }
+        var index=0
+        for item in primaryRecallDeck.cards {
+            guard let position=ordered[index...].firstIndex(of:item) else { throw ExamError.invalid("冻结主卡组卡片、归属、正文或顺序不匹配。") }
+            index=position+1
+        }
+    }
+
 
     func validate(bank: ConceptBank, hash: String) throws {
         guard format == "xkl-teaching-v1", bankSHA256 == hash,
@@ -93,6 +136,19 @@ struct ConceptTeaching: Codable, Equatable {
                 try RecallDeck.makeSupplement(subject: subject, bank: bank, group: group).validate()
             }
         }
+        if hasProfessionalExtension {
+            guard let primaryRecallDeck, let studyPlan, let questionPresentations, let questionLinks, let cardCorrections, let sourceLeaves else { throw ExamError.invalid("专业课v5扩展字段不完整。") }
+            try validatePrimarySnapshot(bank:bank)
+            let supplementIDs=(recallGroups ?? []).flatMap { $0.recallCards.map(\.id) }
+            guard Set(supplementIDs).count == supplementIDs.count, Set(primaryRecallDeck.cards.map(\.id)).isDisjoint(with:Set(supplementIDs)) else { throw ExamError.invalid("主卡组与补充卡身份冲突。") }
+            try studyPlan.validate(bank:bank,teaching:self,deck:primaryRecallDeck)
+            try ProfessionalQuestionPresentation.validateAll(questionPresentations,bank:bank)
+            let activeIDs=Set(bank.concepts.flatMap { bank.activeQuestions(in:$0).map(\.id) })
+            guard activeIDs.isSubset(of:Set(questionPresentations.map(\.questionID))) else { throw ExamError.invalid("专业课v5可练题缺少已验证题级呈现，拒绝导入。") }
+            try ProfessionalQuestionLinks.validateAll(questionLinks,bank:bank,teaching:self)
+            try ProfessionalCardCorrection.validateAll(cardCorrections,deck:primaryRecallDeck,groups:recallGroups ?? [])
+            try ProfessionalSourceLeaf.validateAll(sourceLeaves,bank:bank,teaching:self)
+        }
     }
 }
 
@@ -105,9 +161,10 @@ struct ConceptCourse: Codable {
     static func load(_ data: Data, subject: ConceptSubject) throws -> (ConceptCourse, ConceptBank) {
         guard data.count <= 50 * 1_024 * 1_024 else { throw ExamError.invalid("课程包过大。") }
         let course = try JSONDecoder().decode(Self.self, from: data)
-        guard ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4"].contains(course.format), course.subject == subject else {
+        guard ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5"].contains(course.format), course.subject == subject else {
             throw ExamError.invalid("请在对应科目中导入课程包。")
         }
+        guard (course.format == "xkl-course-v5") == course.teaching.hasProfessionalExtension else { throw ExamError.invalid("专业课扩展必须显式使用完整v5课程格式。") }
         let (pack, bank) = try ConceptContent.load(course.bankContent)
         guard bank.id == subject.bankID else { throw ExamError.invalid("课程科目标识不一致。") }
         try course.teaching.validate(bank: bank, hash: pack.bankSHA256)
@@ -143,6 +200,9 @@ struct ConceptCoachingEvent: Codable, Equatable, Identifiable {
     let beforeAnswer: Bool
     let teachingSHA256: String?
     let recordedAt: Date
+    var linkedPrimaryCardIDs: [String]? = nil
+    var linkedSupplementCardIDs: [String]? = nil
+    var linkedGuideConceptIDs: [String]? = nil
 }
 
 struct ConceptCoachingRecord: Codable, Equatable {
@@ -182,6 +242,9 @@ struct ConceptCoachingRecord: Codable, Equatable {
                   event.teachingSHA256.map(ExamContent.isHash) ?? true else {
                 throw ExamError.invalid("教学记录的考点、时间或序号无效。")
             }
+            if event.kind != "linked-card-help" {
+                guard event.linkedPrimaryCardIDs == nil, event.linkedSupplementCardIDs == nil, event.linkedGuideConceptIDs == nil else { throw ExamError.invalid("旧教学事件不能混入知识卡查询字段。") }
+            }
             if event.kind == "story" {
                 guard event.reason == nil, event.automatic != nil,
                       event.teachingSHA256 != nil,
@@ -192,6 +255,12 @@ struct ConceptCoachingRecord: Codable, Equatable {
                 guard event.attemptID != nil, event.automatic == nil, !event.beforeAnswer else {
                     throw ExamError.invalid("错因标记记录无效。")
                 }
+            } else if event.kind == "linked-card-help" {
+                guard event.beforeAnswer, event.attemptID == nil, event.reason == nil, event.automatic == nil, event.teachingSHA256 != nil,
+                      let primary=event.linkedPrimaryCardIDs, let supplement=event.linkedSupplementCardIDs, let guides=event.linkedGuideConceptIDs,
+                      !(primary+supplement+guides).isEmpty,
+                      [primary,supplement,guides].allSatisfy({ ids in ids.count <= 12 && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.count <= 160 }) }),
+                      Set(primary).isDisjoint(with:Set(supplement)), Set(guides).isSubset(of:Set(concepts.keys)) else { throw ExamError.invalid("答前知识卡查询的关联或时间边界无效。") }
             } else { throw ExamError.invalid("未知的教学记录类型。") }
             expected += 1
         }

@@ -122,7 +122,7 @@ final class ConceptStore: ObservableObject {
             let header = try JSONDecoder().decode(Header.self, from: input)
             let bytes: Data
             let importedTeaching: ConceptTeaching?
-            if ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4"].contains(header.format) {
+            if ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5"].contains(header.format) {
                 let (course, _) = try ConceptCourse.load(input, subject: subject)
                 bytes = course.bankContent
                 importedTeaching = course.teaching
@@ -133,6 +133,43 @@ final class ConceptStore: ObservableObject {
             let (pack, bank) = try ConceptContent.load(bytes)
             guard bank.id == subject.bankID else {
                 throw ExamError.invalid("请在对应科目中导入题库。")
+            }
+            if let importedTeaching, importedTeaching.hasProfessionalExtension {
+                if engine == nil {
+                    // Missing active pointer is not proof of a fresh installation. Never guess a bank.
+                    let children = try FileManager.default.contentsOfDirectory(at: directory,
+                        includingPropertiesForKeys: [.isDirectoryKey])
+                    let evidenceNames = ["content.xklconcepts", "current.json", "migration.json",
+                        "teaching-active.json", Self.professionalMarkerName]
+                    for child in children where ExamContent.isHash(child.lastPathComponent) {
+                        if try child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true,
+                           evidenceNames.contains(where: { FileManager.default.fileExists(atPath: child.appendingPathComponent($0).path) }) {
+                            throw ExamError.invalid("已有课程内容或进度但当前课程索引缺失，停止导入并保留原档案；不会猜测版本或新建空进度。")
+                        }
+                    }
+                }
+                guard let primary = importedTeaching.primaryRecallDeck else {
+                    throw ExamError.invalid("专业课v5缺少冻结主卡组，停止导入。")
+                }
+                // Read-only evidence check also applies when no Concept engine has been loaded.
+                _ = try RecallStore.preflightPrimary(subject: subject, deck: primary,
+                    baseDirectory: directory.deletingLastPathComponent())
+            }
+            if teaching?.hasProfessionalExtension == true && importedTeaching?.hasProfessionalExtension != true {
+                throw ExamError.invalid("当前已是专业课v5，请导入完整v5课程；不能降级教学或单独替换题库，原进度保留。")
+            }
+            // Validate immutable primary recall identity BEFORE creating directories, migration or pointers.
+            if let existing = engine, let importedTeaching, importedTeaching.hasProfessionalExtension {
+                guard let oldTeaching = teaching else {
+                    throw ExamError.invalid("当前课程缺少可核对的旧主卡组，停止升级，原记录保留。")
+                }
+                try importedTeaching.validateAppendOnlyRecall(from: oldTeaching, bank: existing.bank)
+                let oldIDs = Set(existing.bank.concepts.flatMap(\.questions).map(\.id))
+                let addedIDs = Set(bank.concepts.flatMap(\.questions).map(\.id)).subtracting(oldIDs)
+                let presented = Set((importedTeaching.questionPresentations ?? []).map(\.questionID))
+                guard addedIDs.isSubset(of: presented) else {
+                    throw ExamError.invalid("新增题缺少核验后的题级呈现契约，停止升级。")
+                }
             }
             let base = try folder(pack.bankSHA256)
             let content = base.appendingPathComponent("content.xklconcepts")
@@ -170,13 +207,33 @@ final class ConceptStore: ObservableObject {
                 } else { try write(data, target) }
                 try write(encode(hash), base.appendingPathComponent("teaching-active.json"))
             }
-            try loadSupport(loaded)
+            // Validate and persist the required marker before switching active bank or publishing support.
+            let checkedSupport = try readSupport(loaded)
+            try ensureProfessionalMarker(loaded, lesson: checkedSupport.lesson)
             wrote = true
             try write(encode(pack.bankSHA256), activeURL)
+            try loadSupport(loaded)
             engine = loaded
             error = nil
         } catch {
             if wrote { fail(error) } else { self.error = error.localizedDescription }
+        }
+    }
+
+    private struct ProfessionalRequiredMarker: Codable {
+        var format = "xkl-professional-v5-required-v1"
+        let bankSHA256: String
+    }
+    private static let professionalMarkerName = "professional-v5-required.json"
+    private func ensureProfessionalMarker(_ e: ConceptEngine, lesson: ConceptTeaching?) throws {
+        guard lesson?.hasProfessionalExtension == true else { return }
+        let path = try folder(e.record.bankSHA256).appendingPathComponent(Self.professionalMarkerName)
+        if !FileManager.default.fileExists(atPath: path.path) {
+            try write(encode(ProfessionalRequiredMarker(bankSHA256: e.record.bankSHA256)), path)
+        }
+        let marker = try JSONDecoder().decode(ProfessionalRequiredMarker.self, from: bounded(path))
+        guard marker.format == "xkl-professional-v5-required-v1", marker.bankSHA256 == e.record.bankSHA256 else {
+            throw ExamError.invalid("专业课v5保护标识不一致，已停止写入。")
         }
     }
 
@@ -235,6 +292,9 @@ final class ConceptStore: ObservableObject {
         for (name, data) in support.files
         where name.hasPrefix("teaching/") || name.hasPrefix("ancestors/") || name == "teaching-active.json" {
             generated[name] = data
+        }
+        if support.lesson?.hasProfessionalExtension == true {
+            generated[Self.professionalMarkerName] = try encode(ProfessionalRequiredMarker(bankSHA256: hash))
         }
         if let previousMigration = support.files["migration.json"] {
             generated["ancestors/migration-\(oldHash).json"] = previousMigration
@@ -309,6 +369,9 @@ final class ConceptStore: ObservableObject {
         guard !blocked, var candidate = engine else { return }
         var wrote = false
         do {
+            if let teaching, teaching.hasProfessionalExtension {
+                try ProfessionalQuestionPresentation.validatePracticeContent(teaching.questionPresentations ?? [], bank: candidate.bank)
+            }
             let base = try folder(candidate.record.bankSHA256)
             if candidate.record.attempts.count >= 1_000 {
                 let bytes = try encode(candidate.record), hash = StudySHA256.hex(bytes)
@@ -322,6 +385,7 @@ final class ConceptStore: ObservableObject {
                 try candidate.rotate(hash: hash)
             }
             try operation(&candidate)
+            try validateQuestionPractice(candidate)
             try candidate.record.validate(bank: candidate.bank, hash: candidate.record.bankSHA256)
             wrote = true
             try write(encode(candidate.record), base.appendingPathComponent("current.json"))
@@ -332,7 +396,65 @@ final class ConceptStore: ObservableObject {
         }
     }
 
-    func start(newLimit: Int = 3) { change { try $0.start(day: ConceptCalendar.studyDay(Date()), newLimit: newLimit) } }
+    func start(newLimit: Int = 3) {
+        if let reason = currentQuestionPracticeBlockedReason { error = reason; return }
+        change { try $0.start(day: ConceptCalendar.studyDay(Date()), newLimit: newLimit) }
+    }
+    /// nil means an audited source question can be entered; non-nil is a read-only explanation.
+    func sourceQuestionAvailability(_ questionID: String) -> String? {
+        guard !blocked, let e = engine else { return "课程记录当前不可写。" }
+        guard let concept = e.bank.concepts.first(where: { $0.questions.contains { $0.id == questionID } }),
+              let question = concept.questions.first(where: { $0.id == questionID }) else { return "只有原图索引，尚未核验完整题目与答案。" }
+        guard let presentation = teaching?.questionPresentations?.first(where: { $0.questionID == questionID }),
+              presentation.sourceQuestionDigest == question.professionalDigest else { return "原题尚未完成逐题核验，仅可阅读。" }
+        do { try ProfessionalQuestionPresentation.validateAll([presentation], bank: e.bank) }
+        catch { return error.localizedDescription }
+        guard e.bank.isActive(questionID) else { return "此题不在当前练习范围内，仅可阅读。" }
+        if let shown = e.shown { return shown.questionID == questionID ? nil : "请先完成当前题或结果页，原断点会保留。" }
+        let progress = e.record.progress[concept.id] ?? ConceptProgress()
+        if progress.usedQuestionIDs.contains(questionID) { return "此题已作答，可查看历史记录，不重复评分。" }
+        if progress.familiar { return "此考点已标熟悉，恢复复习后方可练习。" }
+        return nil
+    }
+    func startQuestion(_ questionID: String, expectedCurrentToken: UUID?) {
+        guard !blocked, engine?.shown?.id == expectedCurrentToken else {
+            error = "当前题目已变化，请重新打开题源入口。"; return
+        }
+        if let reason = sourceQuestionAvailability(questionID) { error = reason; return }
+        change { try $0.startQuestion(questionID: questionID, day: ConceptCalendar.studyDay(Date())) }
+    }
+    private func validateQuestionPractice(_ candidate: ConceptEngine, questionID: String? = nil) throws {
+        guard let teaching, teaching.hasProfessionalExtension,
+              let id = questionID ?? candidate.shown?.questionID else { return }
+        guard let presentation = teaching.questionPresentations?.first(where: { $0.questionID == id }) else {
+            throw ExamError.invalid("原题尚缺核验后的题级呈现，不能作答评分。")
+        }
+        try ProfessionalQuestionPresentation.validateAll([presentation], bank: candidate.bank)
+    }
+    var currentQuestionPracticeBlockedReason: String? {
+        guard let e = engine else { return nil }
+        do { try validateQuestionPractice(e) }
+        catch { return error.localizedDescription }
+        return nil
+    }
+    var currentQuestionPresentation: ProfessionalQuestionPresentation? {
+        guard let id = engine?.shown?.questionID else { return nil }
+        return teaching?.questionPresentations?.first { $0.questionID == id }
+    }
+    var currentQuestionLinks: ProfessionalQuestionLinks? {
+        guard let id = engine?.shown?.questionID else { return nil }
+        return teaching?.questionLinks?.first { $0.questionID == id }
+    }
+    func sourceQuestionHistory(_ questionID: String) throws -> [ConceptAttempt] {
+        guard let e = engine else { return [] }
+        let loaded = try load(e.record.bankSHA256)
+        var attempts = loaded.engine.record.attempts
+        for (_, bytes) in loaded.volumes {
+            attempts += try JSONDecoder().decode(ConceptRecord.self, from: bytes).attempts
+        }
+        return attempts.filter { $0.mode == "answer" && $0.presentation.questionID == questionID }
+            .sorted { $0.sequence < $1.sequence }
+    }
     func refreshStudyDate() {
         guard !blocked, let existing = engine else { return }
         do {
@@ -345,12 +467,16 @@ final class ConceptStore: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
     func choose(_ id: String, token: UUID) {
+        if let reason = currentQuestionPracticeBlockedReason { error = reason; return }
         change {
             if $0.question?.type == .multiple { $0.toggle(id, token: token) }
             else { try $0.answer(id, token: token, day: ConceptCalendar.studyDay(Date())) }
         }
     }
-    func submit(token: UUID) { change { try $0.answer(token: token, day: ConceptCalendar.studyDay(Date())) } }
+    func submit(token: UUID) {
+        if let reason = currentQuestionPracticeBlockedReason { error = reason; return }
+        change { try $0.answer(token: token, day: ConceptCalendar.studyDay(Date())) }
+    }
     func next(token: UUID) {
         change { try $0.nextOnDay(token: token, day: ConceptCalendar.studyDay(Date())) }
     }
@@ -439,6 +565,30 @@ final class ConceptStore: ObservableObject {
                        reason: nil, automatic: automatic, teachingHash: teachingHash)
     }
 
+    /// Records actual pre-answer linked-card exposure; never writes Recall grades or question progress.
+    @discardableResult
+    func openLinkedCardHelp(token: UUID) -> Bool {
+        guard !blocked, let e = engine, let p = e.record.presentation, p.id == token,
+              e.record.review == nil, let teaching, let teachingHash,
+              let links = teaching.questionLinks?.first(where: { $0.questionID == p.questionID }) else { return false }
+        do {
+            try ProfessionalQuestionLinks.validateAll([links], bank: e.bank, teaching: teaching)
+            try validateQuestionPractice(e)
+            guard !(links.primaryCardIDs + links.supplementCardIDs + links.guideConceptIDs).isEmpty else { return false }
+        } catch { self.error = error.localizedDescription; return false }
+        if coachingEvents.contains(where: {
+            $0.kind == "linked-card-help" && $0.presentationID == token && $0.beforeAnswer &&
+            $0.teachingSHA256 == teachingHash && $0.linkedPrimaryCardIDs == links.primaryCardIDs &&
+            $0.linkedSupplementCardIDs == links.supplementCardIDs && $0.linkedGuideConceptIDs == links.guideConceptIDs
+        }) { return true } // The exact exposure snapshot was already durably recorded.
+        return appendCoaching(kind: "linked-card-help", p: p, attemptID: nil, reason: nil,
+                              automatic: nil, teachingHash: teachingHash, links: links)
+    }
+    var currentQuestionUsedCardHelp: Bool {
+        guard let p = engine?.shown else { return false }
+        return coachingEvents.contains { $0.kind == "linked-card-help" && $0.beforeAnswer && $0.presentationID == p.id && $0.questionID == p.questionID }
+    }
+
     func setReason(_ reason: ConceptMistakeReason?, attemptID: UUID) {
         guard !blocked, let answer = engine?.record.review, answer.id == attemptID else { return }
         guard selectedReason(attemptID: attemptID) != reason else { return }
@@ -446,9 +596,11 @@ final class ConceptStore: ObservableObject {
                        reason: reason, automatic: nil, teachingHash: teachingHash)
     }
 
+    @discardableResult
     private func appendCoaching(kind: String, p: ConceptPresentation, attemptID: UUID?,
-                                reason: ConceptMistakeReason?, automatic: Bool?, teachingHash: String?) {
-        guard let e = engine, var candidate = coaching else { return }
+                                reason: ConceptMistakeReason?, automatic: Bool?, teachingHash: String?,
+                                links: ProfessionalQuestionLinks? = nil) -> Bool {
+        guard let e = engine, var candidate = coaching else { return false }
         do {
             let base = try folder(e.record.bankSHA256)
             let volumeFolder = base.appendingPathComponent("coaching-volumes", isDirectory: true)
@@ -464,7 +616,9 @@ final class ConceptStore: ObservableObject {
             let event = ConceptCoachingEvent(id: UUID(), sequence: candidate.nextSequence, kind: kind,
                 conceptID: p.conceptID, questionID: p.questionID, presentationID: p.id,
                 attemptID: attemptID, reason: reason, automatic: automatic,
-                beforeAnswer: e.record.review == nil, teachingSHA256: teachingHash, recordedAt: Date())
+                beforeAnswer: e.record.review == nil, teachingSHA256: teachingHash, recordedAt: Date(),
+                linkedPrimaryCardIDs: links?.primaryCardIDs, linkedSupplementCardIDs: links?.supplementCardIDs,
+                linkedGuideConceptIDs: links?.guideConceptIDs)
             candidate.events.append(event)
             candidate.nextSequence += 1
             try candidate.validate(bank: e.bank, hash: e.record.bankSHA256)
@@ -475,7 +629,8 @@ final class ConceptStore: ObservableObject {
             try write(encode(candidate), base.appendingPathComponent("coaching-current.json"))
             coaching = candidate
             coachingEvents.append(event)
-        } catch { fail(error) }
+            return true
+        } catch { fail(error); return false }
     }
 
     private func readSupport(_ e: ConceptEngine) throws -> (
@@ -483,6 +638,15 @@ final class ConceptStore: ObservableObject {
         allEvents: [ConceptCoachingEvent], files: [String: Data]) {
         let base = try folder(e.record.bankSHA256)
         var files: [String: Data] = [:]
+        let professionalMarker = base.appendingPathComponent(Self.professionalMarkerName)
+        if FileManager.default.fileExists(atPath: professionalMarker.path) {
+            let data = try bounded(professionalMarker)
+            let required = try JSONDecoder().decode(ProfessionalRequiredMarker.self, from: data)
+            guard required.format == "xkl-professional-v5-required-v1", required.bankSHA256 == e.record.bankSHA256 else {
+                throw ExamError.invalid("专业课v5保护标识损坏，不能退回无教学题库。")
+            }
+            files[Self.professionalMarkerName] = data
+        }
         var teachingBanks = [e.record.bankSHA256: e.bank]
         let ancestors = base.appendingPathComponent("ancestors")
         if FileManager.default.fileExists(atPath: ancestors.path) {
@@ -540,6 +704,11 @@ final class ConceptStore: ObservableObject {
                 files["teaching/" + url.lastPathComponent] = bytes
             }
         }
+        if files[Self.professionalMarkerName] != nil {
+            guard lesson?.hasProfessionalExtension == true, selectedTeaching != nil else {
+                throw ExamError.invalid("专业课v5必要教学或索引缺失，已停止评分，原档案保留。")
+            }
+        }
         let stateURL = base.appendingPathComponent("coaching-current.json")
         let marker = base.appendingPathComponent("coaching-created.json")
         let volumeFolder = base.appendingPathComponent("coaching-volumes")
@@ -594,6 +763,18 @@ final class ConceptStore: ObservableObject {
                   event.teachingSHA256.map({ files["teaching/\($0).json"] != nil }) ?? true else {
                 throw ExamError.invalid("教学记录缺失、重复或缺少对应教学版本。")
             }
+            if event.kind == "linked-card-help" {
+                guard let hash = event.teachingSHA256, let bytes = files["teaching/\(hash).json"] else {
+                    throw ExamError.invalid("题内知识卡辅助记录缺少当时的教学快照。")
+                }
+                let snapshot = try JSONDecoder().decode(ConceptTeaching.self, from: bytes)
+                guard let links = snapshot.questionLinks?.first(where: { $0.questionID == event.questionID }),
+                      event.linkedPrimaryCardIDs == links.primaryCardIDs,
+                      event.linkedSupplementCardIDs == links.supplementCardIDs,
+                      event.linkedGuideConceptIDs == links.guideConceptIDs else {
+                    throw ExamError.invalid("题内知识卡辅助记录与当时关联不一致。")
+                }
+            }
             if event.kind == "reason" || !event.beforeAnswer {
                 guard let id = event.attemptID, let answer = byID[id], answer.mode == "answer",
                       answer.presentation.id == event.presentationID,
@@ -608,6 +789,8 @@ final class ConceptStore: ObservableObject {
 
     private func loadSupport(_ e: ConceptEngine) throws {
         let loaded = try readSupport(e)
+        // Backfill only from an already-valid selected v5 teaching; never create/reset study state.
+        try ensureProfessionalMarker(e, lesson: loaded.lesson)
         let guidance = try ConceptGuidanceStore(directory: directory, subject: subject, writer: write)
         teaching = loaded.lesson
         teachingHash = loaded.teachingHash

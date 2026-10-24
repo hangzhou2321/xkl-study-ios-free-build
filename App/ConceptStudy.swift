@@ -17,6 +17,7 @@ struct ConceptQuestion: Codable, Equatable, Identifiable {
     let sourceIDs: [String]
     let sourceLocation: String
     let verification: String
+    var preserveOptionOrder: Bool? = nil
 }
 
 struct StudyConcept: Codable, Equatable, Identifiable {
@@ -62,7 +63,7 @@ struct ConceptBank: Codable, Equatable {
         try validate()
         guard id == old.id, concepts.count >= old.concepts.count,
               Array(concepts.prefix(old.concepts.count).map(\.id)) == old.concepts.map(\.id),
-              old.sources.allSatisfy({ sources.contains($0) }) else {
+              Array(sources.prefix(old.sources.count)) == old.sources else {
             throw ExamError.invalid("题库更新改变了原考点或来源，原学习记录已保留。")
         }
         for (before, after) in zip(old.concepts, concepts) {
@@ -403,6 +404,33 @@ struct ConceptEngine {
         present(now: now)
     }
 
+    /// Explicit source practice uses the same answer reducer and schedule. Never reopens consumed IDs.
+    mutating func startQuestion(questionID: String, day: Int, now: Date = Date()) throws {
+        guard day >= record.day, (18_000...50_000).contains(day) else {
+            throw ExamError.invalid("日期无效，原断点保留。")
+        }
+        if let shown {
+            guard shown.questionID == questionID else {
+                throw ExamError.invalid("请先完成当前题或结果页，原断点未替换。")
+            }
+            return // Same live presentation/result resumes with exact token and selection.
+        }
+        guard let concept = bank.concepts.first(where: { $0.questions.contains { $0.id == questionID } }),
+              let question = concept.questions.first(where: { $0.id == questionID }), bank.isActive(questionID) else {
+            throw ExamError.invalid("题目不存在或未纳入当前练习范围。")
+        }
+        let progress = record.progress[concept.id] ?? ConceptProgress()
+        guard !progress.familiar, !progress.usedQuestionIDs.contains(questionID) else {
+            throw ExamError.invalid("此题已作答或考点已标熟悉，仅可查看历史，不能重复评分。")
+        }
+        try updateDay(day)
+        record.queue.removeAll { $0 == concept.id }
+        record.queue.insert(concept.id, at: 0)
+        let order = question.type == .judgment || question.preserveOptionOrder == true ? question.options.map(\.id) : question.options.map(\.id).shuffled()
+        record.presentation = ConceptPresentation(id: UUID(), conceptID: concept.id, questionID: question.id,
+            order: order, selected: [], presentedAt: now)
+    }
+
     /// Reconcile due reviews even if today's date was already stored by an
     /// older app. This never grades, starts fresh work, or replaces a live card.
     mutating func refreshDue(day: Int, now: Date = Date()) throws {
@@ -574,7 +602,7 @@ struct ConceptEngine {
             let p = record.progress[id] ?? ConceptProgress()
             let unused = conceptQuestions(id).filter { !p.usedQuestionIDs.contains($0.id) }
             if !p.familiar, let q = unused.first {
-                let order = q.type == .judgment ? q.options.map(\.id) : q.options.map(\.id).shuffled()
+                let order = q.type == .judgment || q.preserveOptionOrder == true ? q.options.map(\.id) : q.options.map(\.id).shuffled()
                 record.presentation = ConceptPresentation(id: UUID(), conceptID: id, questionID: q.id,
                     order: order, selected: [], presentedAt: now)
                 return

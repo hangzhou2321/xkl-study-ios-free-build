@@ -9,15 +9,32 @@ struct RecallStudyView: View {
     @State private var exporting = false
     @State private var document: RecallExportDocument?
     private let subject: ConceptSubject
+    private let teaching: ConceptTeaching
+    private let planSelection: ProfessionalRecallSelection?
 
-    init(subject: ConceptSubject, bank: ConceptBank, teaching: ConceptTeaching, supplementGroup: SupplementRecallGroup? = nil) {
+    init(subject: ConceptSubject, bank: ConceptBank, teaching: ConceptTeaching, supplementGroup: SupplementRecallGroup? = nil, planSelection: ProfessionalRecallSelection? = nil, baseDirectory: URL? = nil) {
         self.subject = subject
-        _store = StateObject(wrappedValue: RecallStore(subject: subject, bank: bank, teaching: teaching, supplementGroup: supplementGroup))
+        self.teaching = teaching
+        self.planSelection = planSelection
+        _store = StateObject(wrappedValue: RecallStore(subject: subject, bank: bank, teaching: teaching, baseDirectory: baseDirectory, supplementGroup: supplementGroup))
     }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if let engine = store.engine {
+                    let selectionDay=(try? ConceptCalendar.studyDay(Date())) ?? engine.record.state.day
+                    Text("当前选择 \(engine.selectedTotal) 张 / 完整档案 \(engine.deck.cards.count) 张").font(.subheadline)
+                    Text("当前选择：待复习 \(engine.selectedDueCount(day:selectionDay)) 张 · 待学 \(engine.selectedNewCount) 张").font(.footnote).foregroundStyle(.secondary)
+                    if let planSelection {
+                        Text(planSelection.title).font(.title2.bold())
+                        Text("此入口范围 \(planSelection.cardIDs.count) 张 / 完整档案 \(engine.deck.cards.count) 张").font(.subheadline)
+                        Text(engine.item == nil ? "按本范围学习；原成绩保留，其他卡仍可从拓展入口学习。" : "先继续上次这一张，后续按本范围；原成绩保留，其他卡仍可从拓展入口学习。").font(.footnote).foregroundStyle(.secondary)
+                        Button(engine.item == nil ? "按这部分开始" : "按这部分继续") {
+                            beginSelectedScope()
+                        }.buttonStyle(.borderedProminent).disabled(store.blocked)
+                    }
+                    if !selectionIsApplied(engine) { Text("点上方按钮即可按这部分学习；已有当前卡和成绩会保留。").font(.footnote).foregroundStyle(.secondary) }
+                    Group {
                     if let item = engine.item {
                         Text(item.conceptTitle).font(.subheadline).foregroundStyle(.secondary)
                         Text(item.card.prompt).font(.title2.weight(.semibold)).textSelection(.enabled)
@@ -55,15 +72,19 @@ struct RecallStudyView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         Text("\(subject.title) · 问答背诵").font(.title2.bold())
-                        Text("\(engine.deck.cards.count) 张卡 · \(Set(engine.deck.cards.map(\.conceptID)).count) 个考点")
+                        Text("完整档案 \(engine.deck.cards.count) 张卡 · \(Set(engine.deck.cards.map(\.conceptID)).count) 个考点").font(.subheadline).foregroundStyle(.secondary)
                         let day = (try? ConceptCalendar.studyDay(Date())) ?? engine.record.state.day
-                        Text("到期 \(engine.dueCount(day: day)) 张 · 未学 \(engine.newCount) 张")
+                        if engine.record.state.selection != nil {
+                            DisclosureGroup("完整档案统计") { Text("全部卡到期 \(engine.dueCount(day:day)) 张 · 未学 \(engine.newCount) 张；不表示本范围需要学习这些卡。").font(.footnote).foregroundStyle(.secondary) }
+                        }
                         Stepper("本次新卡：\(newLimit)", value: $newLimit, in: 1...25)
                             .disabled(!engine.record.state.queue.isEmpty || store.blocked)
-                        Button(engine.record.state.queue.isEmpty ? "开始背诵" : "继续背诵") {
-                            store.act("start", newLimit: newLimit)
-                        }.buttonStyle(.borderedProminent)
-                            .disabled(store.blocked || (engine.record.state.queue.isEmpty && engine.newCount == 0 && engine.dueCount(day: day) == 0))
+                        if planSelection == nil {
+                            Button(engine.record.state.queue.isEmpty ? "开始背诵" : "继续背诵") {
+                                store.act("start", newLimit: newLimit)
+                            }.buttonStyle(.borderedProminent)
+                                .disabled(store.blocked || (engine.record.state.queue.isEmpty && engine.selectedNewCount == 0 && engine.selectedDueCount(day: day) == 0))
+                        }
                         Text("到期卡优先。记住后沿用专业课的跨天间隔；没记住则次日复习。本轮有足够其他卡时，再安排一次间隔补背。")
                             .font(.footnote).foregroundStyle(.secondary)
                         Text("背诵自评单独保存，不计入原题的答对次数。")
@@ -72,6 +93,7 @@ struct RecallStudyView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                         Button("返回专业课做题") { dismiss() }.buttonStyle(.bordered)
                     }
+                    }.disabled(!selectionIsApplied(engine))
                 } else {
                     ContentUnavailableView("背诵卡暂不可用", systemImage: "rectangle.on.rectangle",
                         description: Text(store.error ?? "请先导入问答背诵卡课程包。"))
@@ -95,8 +117,28 @@ struct RecallStudyView: View {
         .task { store.act("refresh") }
         .onChange(of: scenePhase) { _, phase in if phase == .active { store.act("refresh") } }
     }
+    private func selectionIsApplied(_ engine:RecallEngine)->Bool {
+        guard let planSelection else { return true }
+        return engine.record.state.selection?.id == planSelection.id && engine.record.state.selection?.cardIDs == planSelection.cardIDs && (try? engine.deck.hash) == planSelection.deckSHA256
+    }
+    private func beginSelectedScope() {
+        guard !store.blocked, let planSelection, let engine=store.engine else { return }
+        guard (try? engine.deck.hash) == planSelection.deckSHA256 else {
+            store.error="这部分范围与当前课程不一致，请返回课程重新打开。"
+            return
+        }
+        if !selectionIsApplied(engine) {
+            store.applySelection(planID:planSelection.id,cardIDs:planSelection.cardIDs,expectedDeckSHA256:planSelection.deckSHA256)
+            guard !store.blocked, store.error == nil, let saved=store.engine, selectionIsApplied(saved) else { return }
+        }
+        guard let saved=store.engine, selectionIsApplied(saved) else { return }
+        if saved.item == nil { store.act("start",newLimit:newLimit) }
+    }
     @ViewBuilder private func answer(_ card: RecallCard) -> some View {
-        Text(card.answer).font(.title3).textSelection(.enabled)
+        Text(card.answer).font(.system(size: 25)).textSelection(.enabled)
+        ForEach((teaching.cardCorrections ?? []).filter { $0.cardID == card.id && $0.sourceCardDigest == card.professionalDigest }, id: \.cardID) { correction in
+            VStack(alignment: .leading, spacing: 8) { Text("校勘说明").font(.headline); Text(correction.note); Text(correction.sourceRef).font(.caption).foregroundStyle(.secondary) }.padding().background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        }
         if let detail = card.detail, !detail.isEmpty {
             DisclosureGroup("补充解释") { Text(detail).font(.body).textSelection(.enabled).padding(.top, 8) }
         }

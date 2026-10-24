@@ -285,6 +285,36 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "AC258F4A06AA8AEF5CD9D220";
 		};
+		"91BF534336079A5AB86E8397" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "ProfessionalQuestionPresentation.swift";
+			"sourceTree" = "<group>";
+		};
+		"3FEEF3D855A3EB5D138F5DD4" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "91BF534336079A5AB86E8397";
+		};
+		"A15F359F10D27B0738AAC3D4" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "ProfessionalStudyPlan.swift";
+			"sourceTree" = "<group>";
+		};
+		"E4E098C0D5D79BE6B698AB13" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "A15F359F10D27B0738AAC3D4";
+		};
+		"CE5CE25F6E72AAE53E6FEC46" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "ProfessionalStudyPlanView.swift";
+			"sourceTree" = "<group>";
+		};
+		"760AE13AA3401A8221AA26D0" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "CE5CE25F6E72AAE53E6FEC46";
+		};
 		"CBAB490ACD2FB51EC569F2D8" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -432,6 +462,9 @@
 				"2103C5FD9503E208CBBF176E",
 				"50323850A4A0D23361A7DC9D",
 				"AC258F4A06AA8AEF5CD9D220",
+				"91BF534336079A5AB86E8397",
+				"A15F359F10D27B0738AAC3D4",
+				"CE5CE25F6E72AAE53E6FEC46",
 				"CBAB490ACD2FB51EC569F2D8",
 				"DC3E3B738B052ECE867E0529",
 				"F7D0F73E261C6E31875BDB36",
@@ -533,6 +566,9 @@
 				"FC81299C965FE85C9BE39BAD",
 				"5D8876CDF7F13AB186DA9881",
 				"F26A2AFEF4782C53793359B3",
+				"3FEEF3D855A3EB5D138F5DD4",
+				"E4E098C0D5D79BE6B698AB13",
+				"760AE13AA3401A8221AA26D0",
 				"E43EFD2D6E0E9CEC28BCAB0D",
 				"31C34CD967FA67016EE8A98E",
 				"15D42ABF864B74CD76A6EF46",

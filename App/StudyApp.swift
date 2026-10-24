@@ -8,7 +8,9 @@ import StudyCore
 struct StudyApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--math-experience-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--professional-preview") {
+                ProfessionalPriorityPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--math-experience-preview") {
                 MathExperiencePreview()
             } else if ProcessInfo.processInfo.arguments.contains("--math-reader-preview") {
                 MathReaderPreview()
