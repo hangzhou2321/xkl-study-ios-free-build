@@ -6,7 +6,7 @@ var modelSources = ["PocketEngine.swift", "StudyModels.swift", "StudyHistory.swi
     "ConceptGuidance.swift", "ConceptGuidanceStore.swift", "ConceptDiagram.swift", "ConceptSyllabus.swift", "RecallStudy.swift", "MathPractice.swift"]
 var modelExcludes = ["StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
     "Info.plist", "Assets.xcassets", "ExamStore.swift", "ExamView.swift", "ConceptStore.swift", "ConceptView.swift",
-    "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift"]
+    "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift"]
 #if os(macOS)
 // Exercise real import/persistence against temporary directories on the build host.
 modelSources += ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift"]

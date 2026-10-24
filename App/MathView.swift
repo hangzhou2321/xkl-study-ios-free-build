@@ -13,26 +13,17 @@ struct MathView: View {
     @State private var syllabus=0
     @State private var zoom: MathZoom?
     @State private var exportURL: URL?
+    @AppStorage("math.reader.fontSize.v1") private var readerFontSize = 26.0
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment:.leading,spacing:20) {
                     if let engine=store.engine {
                         if let q=engine.currentQuestion, let p=engine.presentation {
-                            Text(q.prompt).font(.title2.bold())
-                            Text("先在纸上独立完成，再翻解析。原题以题图为准。").foregroundStyle(.secondary)
-                            if let text=q.questionText, !text.isEmpty { Text(text).font(.body).textSelection(.enabled) }
-                            ForEach(Array(q.questionVisuals.enumerated()),id:\.offset) { _,visual in visualView(visual,content:engine.archive.content) }
-                            if p.revealed {
-                                Divider(); Text("解析与答案").font(.headline)
-                                ForEach(Array(q.answerVisuals.enumerated()),id:\.offset) { _,visual in visualView(visual,content:engine.archive.content) }
-                                if let answer=q.answerText { Text(answer).textSelection(.enabled) }
-                                if let note=q.solutionNote { Text(note).foregroundStyle(.secondary).textSelection(.enabled) }
-                                HStack { Button("没记住") { store.grade(false,presentationID:p.id) }.buttonStyle(.bordered)
-                                    Button("记住了") { store.grade(true,presentationID:p.id) }.buttonStyle(.borderedProminent) }
-                                Text("记住了：刚才独立完成且关键步骤正确；看懂解析不能替代独立完成。").font(.footnote)
-                            } else { Button("翻解析") { store.reveal() }.buttonStyle(.borderedProminent) }
-                            Text(q.sourceRefs.joined(separator:"\n")).font(.caption).foregroundStyle(.secondary)
+                            MathReader(question: q, revealed: p.revealed, fontSize: $readerFontSize) { visual in
+                                visualView(visual,content:engine.archive.content)
+                            }.id(p.id)
+                            DisclosureGroup("来源") { Text(verbatim:q.sourceRefs.joined(separator:"\n")).font(.caption).foregroundStyle(.secondary) }
                             Button("回到课程") { store.leave() }
                         } else {
                             Text(engine.archive.content.title).font(.title2.bold())
@@ -40,17 +31,23 @@ struct MathView: View {
                             Picker("来源",selection:$source) { Text("全部").tag("all"); Text("基础").tag("foundation"); Text("强化").tag("reinforcement") }
                             Picker("考纲",selection:$syllabus) { Text("全部考纲").tag(0); ForEach(engine.archive.content.syllabus) { Text("\($0.id) \($0.title)").tag($0.id) } }
                             Button("开始（\(store.questions().count)题可选）") { syncFilters(); store.start() }.buttonStyle(.borderedProminent).disabled(store.blocked)
-                            Text("真实复习日由每天第一次评分的FSRS决定。首次没记住后至少10分钟可选补练；同日反复评分不会推迟真实复习日。无需完成固定轮次。").font(.footnote).foregroundStyle(.secondary)
+                            DisclosureGroup("复习安排说明") { Text("真实复习日由每天第一次评分的FSRS决定。首次没记住后至少10分钟可选补练；同日反复评分不会推迟真实复习日。无需完成固定轮次。").font(.footnote).foregroundStyle(.secondary) }
                             DisclosureGroup("待核题（\(engine.archive.content.questions.filter { !$0.eligible }.count)）") {
                                 ForEach(engine.archive.content.questions.filter { !$0.eligible }) { q in
-                                    VStack(alignment:.leading) { Text(q.prompt); Text(q.reviewStatus).font(.caption)
-                                        ForEach(Array(q.questionVisuals.enumerated()),id:\.offset) { _,v in visualView(v,content:engine.archive.content) }
-                                        if let note=q.solutionNote { Text(note).font(.footnote) }
+                                    VStack(alignment:.leading) {
+                                        Text(verbatim:q.reviewStatus).font(.caption)
+                                        MathReader(question:q,revealed:false,fontSize:$readerFontSize) { visual in
+                                            visualView(visual,content:engine.archive.content)
+                                        }.id(q.id)
+                                        if let note=q.solutionNote {
+                                            Text(verbatim:note).font(.system(size:min(34,max(20,readerFontSize))))
+                                                .lineSpacing(10).fixedSize(horizontal:false,vertical:true).textSelection(.enabled)
+                                        }
                                     }
                                 }
                             }
                             let a=engine.score(allRatings:false), b=engine.score(allRatings:true)
-                            Text("双模型同一清洁评价集：\(a.count)次。每日首次 Brier：\(a.brier.map { String(format:"%.4f",$0) } ?? "暂无")；全部评分：\(b.brier.map { String(format:"%.4f",$0) } ?? "暂无")。仅比较预测，不能据此声称记忆提升。跨App看答案无法观测。").font(.caption).foregroundStyle(.secondary)
+                            DisclosureGroup("算法评价信息") { Text("双模型同一清洁评价集：\(a.count)次。每日首次 Brier：\(a.brier.map { String(format:"%.4f",$0) } ?? "暂无")；全部评分：\(b.brier.map { String(format:"%.4f",$0) } ?? "暂无")。仅比较预测，不能据此声称记忆提升。跨App看答案无法观测。").font(.caption).foregroundStyle(.secondary) }
                             Button("导出数学记录") { do { exportURL=try store.export() } catch { store.error=error.localizedDescription } }
                             if let exportURL { ShareLink("分享数学记录文件",item:exportURL) }
                         }
@@ -58,6 +55,14 @@ struct MathView: View {
                     Button("导入数学包") { importing=true }.disabled(store.blocked)
                 }.padding(20).frame(maxWidth:760)
             }.navigationTitle("数学")
+            .safeAreaInset(edge:.bottom,spacing:0) {
+                if let engine=store.engine, let p=engine.presentation, engine.currentQuestion != nil {
+                    MathReaderControls(revealed:p.revealed, reveal:{
+                        guard store.engine?.presentation?.id == p.id else { return }
+                        store.reveal()
+                    }, grade:{ store.grade($0,presentationID:p.id) })
+                }
+            }
             .onAppear { store.processInbox(); syncFilters() }.onChange(of:mode) { _,_ in syncFilters() }.onChange(of:source) { _,_ in syncFilters() }.onChange(of:syllabus) { _,_ in syncFilters() }
             .fileImporter(isPresented:$importing,allowedContentTypes:[.data,.json]) { result in
                 switch result { case .success(let url):store.importContent(from:url); case .failure(let error):store.error=error.localizedDescription }

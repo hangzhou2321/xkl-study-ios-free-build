@@ -3,6 +3,33 @@ import UniformTypeIdentifiers
 import UIKit
 import StudyCore
 
+#if DEBUG
+@main
+struct StudyApp: App {
+    var body: some Scene {
+        WindowGroup {
+            if ProcessInfo.processInfo.arguments.contains("--math-reader-preview") {
+                MathReaderPreview()
+            } else { StudyApplicationRoot() }
+        }
+    }
+}
+
+private struct StudyApplicationRoot: View {
+    @StateObject private var store = StudyStore()
+    @StateObject private var examStore = ExamStore()
+    @StateObject private var conceptStore = ConceptStore()
+    @StateObject private var powerStore = ConceptStore(subject: .power)
+    @StateObject private var flow = StudyFlowStore()
+    @StateObject private var mathStore = MathStore()
+
+    var body: some View {
+        RootView(store: store, exams: examStore, concepts: conceptStore, power: powerStore, flow: flow, math: mathStore)
+            .preferredColorScheme(nil)
+    }
+}
+
+#else
 @main
 struct StudyApp: App {
     @StateObject private var store = StudyStore()
@@ -19,6 +46,8 @@ struct StudyApp: App {
         }
     }
 }
+
+#endif
 
 struct RootView: View {
     @ObservedObject var store: StudyStore
