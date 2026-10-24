@@ -1,0 +1,58 @@
+[
+  {
+    "file": "pocket_model.c",
+    "sha256": "f7753a242a40b59ebb901bc32cc38b74f48b4724cbc62dd602a40949c8b9b3c3"
+  },
+  {
+    "file": "pocket_model.h",
+    "sha256": "f510eab99e2c175f2dc8d263c89445f30a5a75e0819967fc4b3355f336508a58"
+  },
+  {
+    "file": "pocket_word_model.c",
+    "sha256": "f0bb70abff8d1ca1daf2d32e250b31ba0ff739e7127319c6a1d7604c75170a6a",
+    "localSHA256": "7319ea6675634bf57ce40dfaf6a1e3e858a906b049152065746cd5aceec229da",
+    "localPatch": "calendar-due-refresh-v1; original upstream source preserved"
+  },
+  {
+    "file": "pocket_word_model.h",
+    "sha256": "b09b76f1f9949284b7bb75caeec4353793154af4e8e4687f351cdbb75b266a2e",
+    "localSHA256": "05ed330017c1d99c501fbb28240a20de6d1d29c67f678d0af66b9a8555b8ca21",
+    "localPatch": "calendar-due-refresh-v1; original upstream source preserved"
+  },
+  {
+    "file": "pocket_word_recording.c",
+    "sha256": "18558a9bbed3429f8811445a44e8aee2f384f0c90f44b5af1fadad060967f9e1"
+  },
+  {
+    "file": "pocket_word_recording.h",
+    "sha256": "0d38fa5cbdfabf245aee00de3e52db820af98af9b5d7d7a3d70e3e7f9c6b4f03"
+  },
+  {
+    "file": "pocket_log.c",
+    "sha256": "dcac2d8b6da2f999538e2a461752647c976664a6b6a58bbff524054dbf06b307"
+  },
+  {
+    "file": "pocket_log.h",
+    "sha256": "b1a7c2586a24bf3c408b79d7243136f956c0d73353a82fc08a31c0c322aa04d9"
+  },
+  {
+    "file": "pocket_storage.c",
+    "sha256": "9bfd01acbc7866f01a752c8c8952c656c5f9350aca65b7ad1f0204f617bbcec0"
+  },
+  {
+    "file": "pocket_storage.h",
+    "sha256": "2cae0b94ff854ff34e41efd50937bf3c6699153f7c50af5926cb8d65c77d3e31"
+  },
+  {
+    "file": "pocket_word_targets.h",
+    "sha256": "64cb687abdd95ce23b6cfa531da1ddb9a29f038ed00aa311a31634eabee9a575"
+  },
+  {
+    "file": "pocket_senses.h",
+    "sha256": "cde09c10edef85caf34f105a40b90eb5d71442a2a9c44df07f83ac0ecaf873a9"
+  },
+  {
+    "file": "pocket_deck.h",
+    "sha256": "e460b21e87638374faa4b593ab1e0309b65e6223c25407795f4f49f5103911c6"
+  }
+]

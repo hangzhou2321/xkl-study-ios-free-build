@@ -1,0 +1,4 @@
+# Preserve the byte-identical upstream C sources recorded in source-manifest.json.
+* -text
+*.sh text eol=lf
+*.yml text eol=lf

@@ -1,0 +1,40 @@
+name: Build unsigned iOS app
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Standard macOS runner
+        type: choice
+        default: macos-15
+        options:
+          - macos-15
+          - macos-15-intel
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ${{ inputs.runner || 'macos-15' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private content from build context
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = ['Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json']
+          assert not any(Path(p).exists() for p in forbidden), 'Private content must be imported on the phone, not uploaded'
+          assert not list(Path('.').rglob('*.xklcontent')), 'Private import packages must stay local'
+          assert not list(Path('.').rglob('*.xklquestions')), 'Question bank packages must stay local'
+          assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
+          assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
+          assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
+          assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
+          PY
+      - name: Test and compile
+        run: bash tools/build_unsigned_ios.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: XKLStudy-unsigned-iOS
+          path: build/XKLStudy-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 1

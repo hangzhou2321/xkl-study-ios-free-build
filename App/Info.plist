@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key><string>背词</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.14.0</string>
+    <key>CFBundleVersion</key><string>25</string>
+    <key>LSRequiresIPhoneOS</key><true/>
+    <key>UIFileSharingEnabled</key><true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>通过蓝牙与您选择的背词设备交接学习进度和逐次记录。</string>
+    <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+    <key>UILaunchScreen</key><dict/>
+    <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <key>UTImportedTypeDeclarations</key><array><dict>
+        <key>UTTypeIdentifier</key><string>org.xkl.personal-content</string>
+        <key>UTTypeDescription</key><string>背词个人内容包</string>
+        <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>xklcontent</string></array></dict>
+    </dict><dict>
+        <key>UTTypeIdentifier</key><string>org.xkl.question-bank</string>
+        <key>UTTypeDescription</key><string>背词题库包</string>
+        <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>xklquestions</string></array></dict>
+    </dict><dict>
+        <key>UTTypeIdentifier</key><string>org.xkl.concept-bank</string>
+        <key>UTTypeDescription</key><string>专业课考点题库</string>
+        <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>xklconcepts</string></array></dict>
+    </dict><dict>
+        <key>UTTypeIdentifier</key><string>org.xkl.concept-course</string>
+        <key>UTTypeDescription</key><string>专业课故事与变式课程</string>
+        <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>xklcourse</string></array></dict>
+    </dict></array>
+</dict>
+</plist>

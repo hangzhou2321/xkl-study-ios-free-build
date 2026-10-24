@@ -1,0 +1,525 @@
+{
+  "reference": "py-fsrs 6.3.2",
+  "cases": [
+    [
+      {
+        "day": 20745,
+        "rating": 1,
+        "stability": 0.212,
+        "difficulty": 6.4133,
+        "retrievability": null,
+        "interval": 1
+      },
+      {
+        "day": 20746,
+        "rating": 3,
+        "stability": 1.8867876195204154,
+        "difficulty": 6.402115069296838,
+        "retrievability": 0.7661957302284143,
+        "interval": 2
+      },
+      {
+        "day": 20749,
+        "rating": 3,
+        "stability": 7.638230927412736,
+        "difficulty": 6.3909413235243795,
+        "retrievability": 0.8651312025131213,
+        "interval": 8
+      },
+      {
+        "day": 20765,
+        "rating": 1,
+        "stability": 1.3103801136229734,
+        "difficulty": 8.798955323938301,
+        "retrievability": 0.8418658758041873,
+        "interval": 1
+      },
+      {
+        "day": 20766,
+        "rating": 3,
+        "stability": 2.5276550343009494,
+        "difficulty": 8.785384737911201,
+        "retrievability": 0.9174761551293754,
+        "interval": 3
+      },
+      {
+        "day": 20945,
+        "rating": 4,
+        "stability": 29.78506950276201,
+        "difficulty": 8.364745287689175,
+        "retrievability": 0.5188964266597333,
+        "interval": 30
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "rating": 2,
+        "stability": 1.2931,
+        "difficulty": 5.112170705601056,
+        "retrievability": null,
+        "interval": 1
+      },
+      {
+        "day": 20746,
+        "rating": 3,
+        "stability": 4.546029441066125,
+        "difficulty": 5.102286904192293,
+        "retrievability": 0.9166697187203525,
+        "interval": 5
+      },
+      {
+        "day": 20749,
+        "rating": 3,
+        "stability": 12.771010244571965,
+        "difficulty": 5.0924129865849395,
+        "retrievability": 0.9259510055604501,
+        "interval": 13
+      },
+      {
+        "day": 20765,
+        "rating": 1,
+        "stability": 1.6139101276936774,
+        "difficulty": 8.372137889578998,
+        "retrievability": 0.8837817352107686,
+        "interval": 2
+      },
+      {
+        "day": 20766,
+        "rating": 3,
+        "stability": 3.085399958140382,
+        "difficulty": 8.358994120986257,
+        "retrievability": 0.92942468062886,
+        "interval": 3
+      },
+      {
+        "day": 20945,
+        "rating": 4,
+        "stability": 39.94564435095635,
+        "difficulty": 7.795874796390664,
+        "retrievability": 0.5348400549170912,
+        "interval": 40
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "rating": 3,
+        "stability": 2.3065,
+        "difficulty": 2.118103970459016,
+        "retrievability": null,
+        "interval": 2
+      },
+      {
+        "day": 20746,
+        "rating": 3,
+        "stability": 7.31530074407728,
+        "difficulty": 2.111214235785395,
+        "retrievability": 0.9468474993825461,
+        "interval": 7
+      },
+      {
+        "day": 20749,
+        "rating": 3,
+        "stability": 19.833473465759585,
+        "difficulty": 2.1043313908464483,
+        "retrievability": 0.9492258833357938,
+        "interval": 20
+      },
+      {
+        "day": 20765,
+        "rating": 1,
+        "stability": 1.995074626013981,
+        "difficulty": 7.389975788014609,
+        "retrievability": 0.914066545984969,
+        "interval": 2
+      },
+      {
+        "day": 20766,
+        "rating": 3,
+        "stability": 4.029192063335338,
+        "difficulty": 7.377814181523433,
+        "retrievability": 0.9402265931606539,
+        "interval": 4
+      },
+      {
+        "day": 20945,
+        "rating": 4,
+        "stability": 63.63151919738771,
+        "difficulty": 6.486830244144543,
+        "retrievability": 0.5568570065807378,
+        "interval": 64
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "rating": 4,
+        "stability": 8.2956,
+        "difficulty": 1.0,
+        "retrievability": null,
+        "interval": 8
+      },
+      {
+        "day": 20746,
+        "rating": 3,
+        "stability": 13.485062611471017,
+        "difficulty": 1.0,
+        "retrievability": 0.9829234388308534,
+        "interval": 13
+      },
+      {
+        "day": 20749,
+        "rating": 3,
+        "stability": 27.20671036741978,
+        "difficulty": 1.0,
+        "retrievability": 0.9700361179067605,
+        "interval": 27
+      },
+      {
+        "day": 20765,
+        "rating": 1,
+        "stability": 2.3323995275756038,
+        "difficulty": 7.0269895692968385,
+        "retrievability": 0.9322109978978665,
+        "interval": 2
+      },
+      {
+        "day": 20766,
+        "rating": 3,
+        "stability": 4.572813225307914,
+        "difficulty": 7.0151909490243805,
+        "retrievability": 0.9473319893163367,
+        "interval": 5
+      },
+      {
+        "day": 20945,
+        "rating": 4,
+        "stability": 75.35518090048633,
+        "difficulty": 6.003035225586943,
+        "retrievability": 0.5675666537794134,
+        "interval": 75
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "rating": 3,
+        "stability": 2.3065,
+        "difficulty": 2.118103970459016,
+        "retrievability": null,
+        "interval": 2
+      },
+      {
+        "day": 20745,
+        "rating": 1,
+        "stability": 0.7750839828558984,
+        "difficulty": 7.394502741279718,
+        "retrievability": 1.0,
+        "interval": 1
+      },
+      {
+        "day": 20745,
+        "rating": 2,
+        "stability": 0.7750839828558984,
+        "difficulty": 8.25557787278606,
+        "retrievability": 1.0,
+        "interval": 1
+      },
+      {
+        "day": 20745,
+        "rating": 3,
+        "stability": 0.8281648000472626,
+        "difficulty": 8.24255066421011,
+        "retrievability": 1.0,
+        "interval": 1
+      },
+      {
+        "day": 20745,
+        "rating": 4,
+        "stability": 1.5156418705173513,
+        "difficulty": 7.640521362625016,
+        "retrievability": 1.0,
+        "interval": 2
+      },
+      {
+        "day": 20746,
+        "rating": 1,
+        "stability": 0.40603456212882777,
+        "difficulty": 9.209683785646414,
+        "retrievability": 0.9259620604293811,
+        "interval": 1
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "rating": 4,
+        "stability": 8.2956,
+        "difficulty": 1.0,
+        "retrievability": null,
+        "interval": 8
+      },
+      {
+        "day": 20925,
+        "rating": 4,
+        "stability": 259.37412396362146,
+        "difficulty": 1.0,
+        "retrievability": 0.619692330087872,
+        "interval": 180
+      },
+      {
+        "day": 21105,
+        "rating": 4,
+        "stability": 1049.3755435390951,
+        "difficulty": 1.0,
+        "retrievability": 0.9230894580533284,
+        "interval": 180
+      },
+      {
+        "day": 21285,
+        "rating": 4,
+        "stability": 1812.6503354686295,
+        "difficulty": 1.0,
+        "retrievability": 0.9763177262811951,
+        "interval": 180
+      },
+      {
+        "day": 21465,
+        "rating": 4,
+        "stability": 2532.828794417042,
+        "difficulty": 1.0,
+        "retrievability": 0.9857771478546029,
+        "interval": 180
+      },
+      {
+        "day": 21645,
+        "rating": 4,
+        "stability": 3223.126395215317,
+        "difficulty": 1.0,
+        "retrievability": 0.9896683322765657,
+        "interval": 180
+      },
+      {
+        "day": 21825,
+        "rating": 4,
+        "stability": 3891.1278311292963,
+        "difficulty": 1.0,
+        "retrievability": 0.9918144166071412,
+        "interval": 180
+      },
+      {
+        "day": 22005,
+        "rating": 4,
+        "stability": 4541.514507657385,
+        "difficulty": 1.0,
+        "retrievability": 0.9931843024740572,
+        "interval": 180
+      },
+      {
+        "day": 22185,
+        "rating": 4,
+        "stability": 5177.422723318469,
+        "difficulty": 1.0,
+        "retrievability": 0.9941392100777569,
+        "interval": 180
+      },
+      {
+        "day": 22365,
+        "rating": 4,
+        "stability": 5801.086398272909,
+        "difficulty": 1.0,
+        "retrievability": 0.9948453037613295,
+        "interval": 180
+      },
+      {
+        "day": 22545,
+        "rating": 4,
+        "stability": 6414.1712229628765,
+        "difficulty": 1.0,
+        "retrievability": 0.9953899989673209,
+        "interval": 180
+      },
+      {
+        "day": 22725,
+        "rating": 4,
+        "stability": 7017.963610061828,
+        "difficulty": 1.0,
+        "retrievability": 0.995823804117265,
+        "interval": 180
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "rating": 1,
+        "stability": 0.212,
+        "difficulty": 6.4133,
+        "retrievability": null,
+        "interval": 1
+      },
+      {
+        "day": 20746,
+        "rating": 1,
+        "stability": 0.10088578982099844,
+        "difficulty": 8.806304468856837,
+        "retrievability": 0.7661957302284143,
+        "interval": 1
+      },
+      {
+        "day": 20747,
+        "rating": 1,
+        "stability": 0.05503453011833104,
+        "difficulty": 9.592868765339693,
+        "retrievability": 0.6936817601938027,
+        "interval": 1
+      },
+      {
+        "day": 20748,
+        "rating": 1,
+        "stability": 0.033369187408475304,
+        "difficulty": 9.85140710095639,
+        "retrievability": 0.6360298619300166,
+        "interval": 1
+      },
+      {
+        "day": 20749,
+        "rating": 1,
+        "stability": 0.021934476251248988,
+        "difficulty": 9.936386893812918,
+        "retrievability": 0.5907280913280574,
+        "interval": 1
+      },
+      {
+        "day": 20750,
+        "rating": 1,
+        "stability": 0.015355708866801014,
+        "difficulty": 9.964319173862265,
+        "retrievability": 0.554688607615003,
+        "interval": 1
+      },
+      {
+        "day": 20751,
+        "rating": 1,
+        "stability": 0.01130411521790723,
+        "difficulty": 9.973500324374982,
+        "retrievability": 0.5255466231425656,
+        "interval": 1
+      },
+      {
+        "day": 20752,
+        "rating": 1,
+        "stability": 0.00866865701231436,
+        "difficulty": 9.976518106116687,
+        "retrievability": 0.5016150647712347,
+        "interval": 1
+      },
+      {
+        "day": 20753,
+        "rating": 1,
+        "stability": 0.006876025323825099,
+        "difficulty": 9.977510030454273,
+        "retrievability": 0.48169470957527627,
+        "interval": 1
+      },
+      {
+        "day": 20754,
+        "rating": 1,
+        "stability": 0.0056106537242907074,
+        "difficulty": 9.97783606923895,
+        "retrievability": 0.4649204357998848,
+        "interval": 1
+      },
+      {
+        "day": 20755,
+        "rating": 1,
+        "stability": 0.004689228959161181,
+        "difficulty": 9.97794323597041,
+        "retrievability": 0.4506558018896013,
+        "interval": 1
+      },
+      {
+        "day": 20756,
+        "rating": 1,
+        "stability": 0.004000301039754203,
+        "difficulty": 9.977978460946307,
+        "retrievability": 0.4384232189111878,
+        "interval": 1
+      }
+    ],
+    [
+      {
+        "day": 20745,
+        "timestampMs": 1792454340000,
+        "rating": 3,
+        "stability": 2.3065,
+        "difficulty": 2.118103970459016,
+        "retrievability": null,
+        "interval": 2
+      },
+      {
+        "day": 20746,
+        "timestampMs": 1792454460000,
+        "rating": 3,
+        "stability": 2.3065,
+        "difficulty": 2.111214235785395,
+        "retrievability": 1.0,
+        "interval": 2
+      },
+      {
+        "day": 20746,
+        "timestampMs": 1792540340000,
+        "rating": 1,
+        "stability": 0.7750839828558984,
+        "difficulty": 7.392238132342694,
+        "retrievability": 1.0,
+        "interval": 1
+      },
+      {
+        "day": 20747,
+        "timestampMs": 1792540840000,
+        "rating": 3,
+        "stability": 0.8281648000472626,
+        "difficulty": 7.38007426350719,
+        "retrievability": 1.0,
+        "interval": 1
+      },
+      {
+        "day": 20747,
+        "timestampMs": 1792627140000,
+        "rating": 2,
+        "stability": 0.8281648000472626,
+        "difficulty": 8.24599957687359,
+        "retrievability": 1.0,
+        "interval": 1
+      },
+      {
+        "day": 20748,
+        "timestampMs": 1792713540000,
+        "rating": 3,
+        "stability": 2.2747815306987564,
+        "difficulty": 8.232981946593554,
+        "retrievability": 0.8865325230109102,
+        "interval": 2
+      },
+      {
+        "day": 20749,
+        "timestampMs": 1792799940000,
+        "rating": 4,
+        "stability": 5.197383615610559,
+        "difficulty": 7.627755225483248,
+        "retrievability": 0.946241744900545,
+        "interval": 5
+      },
+      {
+        "day": 20750,
+        "timestampMs": 1792886340000,
+        "rating": 1,
+        "stability": 0.8415220981070738,
+        "difficulty": 9.205487643177648,
+        "retrievability": 0.9737067727705128,
+        "interval": 1
+      }
+    ]
+  ]
+}
