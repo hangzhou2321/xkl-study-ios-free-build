@@ -10,11 +10,11 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "build/math-reader-previews"
+OUT = ROOT / "build/math-experience-previews"
 BUNDLE = "local.xkl.study"
-CASES = [("options", 26), ("expressions", 26), ("matrix", 26),
-         ("piecewise", 26), ("answer", 26), ("options", 34),
-         ("diagram", 26), ("fallback", 26)]
+CASES = [(case, 26) for case in (
+    "question", "hint", "answer", "details", "card", "familiar", "undo", "resume",
+    "diagram", "matrix", "piecewise")] + [("question", 34), ("details", 34)]
 
 
 def run(*args, **kwargs):
@@ -67,9 +67,9 @@ def main():
     app = ROOT / "build/DerivedData/Build/Products/Debug-iphonesimulator/XKLStudy.app"
     if not app.is_dir():
         raise RuntimeError("Simulator Debug app missing")
-    device = sim("create", "MathReaderPreview-" + uuid.uuid4().hex[:12], kind, runtime).strip()
+    device = sim("create", "MathExperiencePreview-" + uuid.uuid4().hex[:12], kind, runtime).strip()
     manifest = {"capture_type": "native iOS Simulator (not physical hardware)",
-                "synthetic_only": True, "readiness": "onAppear marker plus 1 second native draw settling",
+                "experience_format": "xkl-math-experience-v2", "synthetic_only": True, "readiness": "WK document.fonts.ready and measured render aggregation marker, plus 1 second native draw settling",
                 "device": name, "device_type": kind,
                 "runtime": runtime_info, "fixtures": []}
     try:
@@ -78,12 +78,12 @@ def main():
         sim("install", device, str(app))
         for case, font in CASES:
             log = OUT / f"{case}-{font}.log"
-            marker = f"MATH_READER_PREVIEW_READY case={case} font={font}"
+            marker = f"MATH_EXPERIENCE_PREVIEW_RENDERED case={case} font={font}"
             with log.open("w", encoding="utf-8") as stream:
                 process = subprocess.Popen(
                     ["xcrun", "simctl", "launch", "--console", "--terminate-running-process",
-                     device, BUNDLE, "--math-reader-preview", "--math-reader-case", case,
-                     "--math-reader-font", str(font)], stdout=stream, stderr=subprocess.STDOUT,
+                     device, BUNDLE, "--math-experience-preview", "--math-experience-case", case,
+                     "--math-experience-font", str(font)], stdout=stream, stderr=subprocess.STDOUT,
                     env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES"})
                 try:
                     deadline = time.monotonic() + 45
@@ -93,7 +93,7 @@ def main():
                         if time.monotonic() > deadline:
                             raise RuntimeError(f"Fixture readiness timed out: {marker}; see {log}")
                         time.sleep(0.2)
-                    # onAppear marker precedes the next native layout/drawing pass.
+                    # Renderer/font readiness marker precedes native compositing settling.
                     time.sleep(1.0)
                     screenshot = OUT / f"{case}-{font}.png"
                     sim("io", device, "screenshot", "--type=png", str(screenshot))
@@ -102,6 +102,8 @@ def main():
                     if header[:8] != b"\x89PNG\r\n\x1a\n":
                         raise RuntimeError("Simulator screenshot is not PNG")
                     width, height = struct.unpack(">II", header[16:24])
+                    if width < 320 or not 1.5 <= height / width <= 2.5:
+                        raise RuntimeError(f"Expected portrait phone screenshot, got {width}x{height}")
                     manifest["fixtures"].append({"case": case, "font_pt": font,
                         "file": screenshot.name, "pixels": [width, height], "ready_marker": marker})
                 finally:

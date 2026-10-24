@@ -20,6 +20,10 @@ jobs:
           assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
           assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
           assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
+          assert not list(Path('.').rglob('*.xklmathguide')), 'Private math guide packages must stay local'
+          assert not list(Path('.').rglob('*.xklguide')), 'Private guide packages must stay local'
+          assert not list(Path('.').rglob('guide.json')), 'Private math guide content must stay local'
+          assert not list(Path('.').rglob('*math-guide*.json')), 'Private math guide payloads must stay local'
           assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
           PY
       - name: Test and compile
@@ -46,13 +50,17 @@ jobs:
           assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
           assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
           assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
+          assert not list(Path('.').rglob('*.xklmathguide')), 'Private math guide packages must stay local'
+          assert not list(Path('.').rglob('*.xklguide')), 'Private guide packages must stay local'
+          assert not list(Path('.').rglob('guide.json')), 'Private math guide content must stay local'
+          assert not list(Path('.').rglob('*math-guide*.json')), 'Private math guide payloads must stay local'
           assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
           PY
-      - name: Capture native synthetic math reader previews
+      - name: Capture native synthetic math experience v2 previews
         run: python3 tools/capture_math_reader_previews.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: math-reader-native-simulator-previews
-          path: build/math-reader-previews/
+          name: math-experience-v2-native-simulator-previews
+          path: build/math-experience-previews/
           if-no-files-found: error
           retention-days: 3

@@ -39,6 +39,11 @@ def main():
         ref = add("assets", "PBXFileReference", lastKnownFileType="folder.assetcatalog", path="Assets.xcassets", sourceTree="<group>")
         app_children.append(ref)
         resource_builds.append(add("build-assets", "PBXBuildFile", fileRef=ref))
+    renderer = ROOT / "App/MathRenderer"
+    if renderer.exists():
+        ref = add("mathrenderer", "PBXFileReference", lastKnownFileType="folder", path="MathRenderer", sourceTree="<group>")
+        app_children.append(ref)
+        resource_builds.append(add("build-mathrenderer", "PBXBuildFile", fileRef=ref))
     if not args.without_personal_resources:
         for name in ("deck.json", "personal-state.bin", "resource-manifest.json"):
             if not (ROOT / "Resources" / name).exists():

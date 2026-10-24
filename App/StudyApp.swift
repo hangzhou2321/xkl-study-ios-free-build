@@ -8,7 +8,9 @@ import StudyCore
 struct StudyApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--math-reader-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--math-experience-preview") {
+                MathExperiencePreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--math-reader-preview") {
                 MathReaderPreview()
             } else { StudyApplicationRoot() }
         }
@@ -22,9 +24,10 @@ private struct StudyApplicationRoot: View {
     @StateObject private var powerStore = ConceptStore(subject: .power)
     @StateObject private var flow = StudyFlowStore()
     @StateObject private var mathStore = MathStore()
+    @StateObject private var mathExperience = MathExperienceStore()
 
     var body: some View {
-        RootView(store: store, exams: examStore, concepts: conceptStore, power: powerStore, flow: flow, math: mathStore)
+        RootView(store: store, exams: examStore, concepts: conceptStore, power: powerStore, flow: flow, math: mathStore, mathExperience: mathExperience)
             .preferredColorScheme(nil)
     }
 }
@@ -38,10 +41,11 @@ struct StudyApp: App {
     @StateObject private var powerStore = ConceptStore(subject: .power)
     @StateObject private var flow = StudyFlowStore()
     @StateObject private var mathStore = MathStore()
+    @StateObject private var mathExperience = MathExperienceStore()
 
     var body: some Scene {
         WindowGroup {
-            RootView(store: store, exams: examStore, concepts: conceptStore, power: powerStore, flow: flow, math: mathStore)
+            RootView(store: store, exams: examStore, concepts: conceptStore, power: powerStore, flow: flow, math: mathStore, mathExperience: mathExperience)
                 .preferredColorScheme(nil)
         }
     }
@@ -56,6 +60,7 @@ struct RootView: View {
     @ObservedObject var power: ConceptStore
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var math: MathStore
+    @ObservedObject var mathExperience: MathExperienceStore
     @State private var importing = false
     @State private var selectedTab = 5
     @State private var examPracticing = false
@@ -90,7 +95,7 @@ struct RootView: View {
                           && flow.state.isPaused && professionalPracticing)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
-            MathView(store: math)
+            MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6)
                 .tabItem { Label("数学", systemImage: "function") }
                 .tag(6)
             RecordsView(store: store, importing: $importing)
@@ -725,3 +730,4 @@ struct TaskFeedbackView: View {
         }
     }
 }
+
