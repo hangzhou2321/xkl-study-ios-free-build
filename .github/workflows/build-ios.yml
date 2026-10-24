@@ -58,7 +58,8 @@ jobs:
           PY
       - name: Capture native synthetic math experience v2 previews
         run: python3 tools/capture_math_reader_previews.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: math-experience-v2-native-simulator-previews
           path: build/math-experience-previews/

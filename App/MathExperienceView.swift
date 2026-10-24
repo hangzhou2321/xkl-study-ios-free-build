@@ -347,14 +347,18 @@ private struct MathExperienceImage: View {
         do {
             try FileManager.default.createDirectory(at:old,withIntermediateDirectories:true)
             try FileManager.default.createDirectory(at:fresh,withIntermediateDirectories:true)
-            let renderer=UIGraphicsImageRenderer(size:CGSize(width:600,height:360))
+            let format=UIGraphicsImageRendererFormat()
+            format.scale=1
+            let renderer=UIGraphicsImageRenderer(size:CGSize(width:600,height:360),format:format)
             let image=renderer.image { context in
                 UIColor.white.setFill(); context.fill(CGRect(x:0,y:0,width:600,height:360))
                 let p=UIBezierPath(); p.move(to:CGPoint(x:100,y:280)); p.addLine(to:CGPoint(x:100,y:70)); p.addLine(to:CGPoint(x:420,y:280)); p.close(); UIColor.black.setStroke(); p.lineWidth=5; p.stroke()
                 ("3" as NSString).draw(at:CGPoint(x:60,y:170),withAttributes:[.font:UIFont.systemFont(ofSize:30),.foregroundColor:UIColor.black])
                 ("4" as NSString).draw(at:CGPoint(x:250,y:290),withAttributes:[.font:UIFont.systemFont(ofSize:30),.foregroundColor:UIColor.black])
             }
-            let asset=MathAsset(id:"synthetic-diagram",mimeType:"image/jpeg",width:600,height:360,dataBase64:image.jpegData(compressionQuality:0.9)!.base64EncodedString())
+            guard let pixels=image.cgImage, let jpeg=image.jpegData(compressionQuality:0.9) else { fatalError("Synthetic preview image encoding failed") }
+            print("MATH_EXPERIENCE_PREVIEW_IMAGE width=\(pixels.width) height=\(pixels.height) sha256=\(StudySHA256.hex(jpeg))")
+            let asset=MathAsset(id:"synthetic-diagram",mimeType:"image/jpeg",width:pixels.width,height:pixels.height,dataBase64:jpeg.base64EncodedString())
             let visual=MathVisual(assetID:asset.id,normalizedCrop:[0,0,1,1])
             func text(_ v:String)->MathRichBlock { MathRichBlock(kind:.text,value:v) }
             func math(_ v:String)->MathRichBlock { MathRichBlock(kind:.math,value:v) }
@@ -403,7 +407,9 @@ private struct MathExperienceImage: View {
             if selected == "resume" { active.pause(sessionID:id) }
         }
         store=selected == "resume" ? MathExperienceStore(directory:fresh,legacyDirectory:old,clock:{ previewNow }) : active
-        precondition(store.engine != nil && store.guide != nil && !store.blocked,"Synthetic fixture must validate")
+        let diagnostics="case=\(selected) legacyBlocked=\(legacy.blocked) legacyEngine=\(legacy.engine != nil) legacyError=\(legacy.error ?? "none") newBlocked=\(store.blocked) newEngine=\(store.engine != nil) guide=\(store.guide != nil) newError=\(store.error ?? "none")"
+        print("MATH_EXPERIENCE_PREVIEW_VALIDATION \(diagnostics)")
+        precondition(legacy.engine != nil && !legacy.blocked && legacy.error == nil && store.engine != nil && store.guide != nil && !store.blocked && store.error == nil,"Synthetic fixture validation failed: \(diagnostics)")
     }
 }
 

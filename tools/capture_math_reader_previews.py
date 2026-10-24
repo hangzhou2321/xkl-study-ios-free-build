@@ -71,7 +71,7 @@ def main():
     manifest = {"capture_type": "native iOS Simulator (not physical hardware)",
                 "experience_format": "xkl-math-experience-v2", "synthetic_only": True, "readiness": "WK document.fonts.ready and measured render aggregation marker, plus 1 second native draw settling",
                 "device": name, "device_type": kind,
-                "runtime": runtime_info, "fixtures": []}
+                "runtime": runtime_info, "status": "incomplete", "fixtures": []}
     try:
         sim("boot", device)
         sim("bootstatus", device, "-b")
@@ -89,7 +89,7 @@ def main():
                     deadline = time.monotonic() + 45
                     while marker not in log.read_text(encoding="utf-8", errors="replace"):
                         if process.poll() is not None:
-                            raise RuntimeError(f"Fixture exited before readiness: {case}; see {log}")
+                            raise RuntimeError(f"Fixture exited before readiness: {case}; simctl exit code={process.returncode}; see {log}")
                         if time.monotonic() > deadline:
                             raise RuntimeError(f"Fixture readiness timed out: {marker}; see {log}")
                         time.sleep(0.2)
@@ -106,6 +106,20 @@ def main():
                         raise RuntimeError(f"Expected portrait phone screenshot, got {width}x{height}")
                     manifest["fixtures"].append({"case": case, "font_pt": font,
                         "file": screenshot.name, "pixels": [width, height], "ready_marker": marker})
+                except Exception as error:
+                    # Only this launch's synthetic fixture console, never host/user files.
+                    print(f"Synthetic fixture failure: {error}", flush=True)
+                    print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]), flush=True)
+                    failure = {"case": case, "font_pt": font, "error": str(error),
+                               "simctl_exit_code": process.poll(), "console": log.name}
+                    try:
+                        failure_image = OUT / f"failure-{case}-{font}.png"
+                        sim("io", device, "screenshot", "--type=png", str(failure_image))
+                        failure["diagnostic_screenshot"] = failure_image.name
+                    except Exception as screenshot_error:
+                        failure["screenshot_error"] = str(screenshot_error)
+                    manifest["failure"] = failure
+                    raise
                 finally:
                     subprocess.run(["xcrun", "simctl", "terminate", device, BUNDLE],
                                    capture_output=True, text=True)
@@ -114,8 +128,9 @@ def main():
                     except subprocess.TimeoutExpired:
                         process.terminate()
                         process.wait(timeout=5)
-        (OUT / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        manifest["status"] = "complete"
     finally:
+        (OUT / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         # Only touch the ephemeral device created by this script, including on failure.
         subprocess.run(["xcrun", "simctl", "shutdown", device], capture_output=True, text=True)
         subprocess.run(["xcrun", "simctl", "delete", device], capture_output=True, text=True)
