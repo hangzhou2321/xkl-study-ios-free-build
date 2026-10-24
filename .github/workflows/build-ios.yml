@@ -1,10 +1,17 @@
 name: Build unsigned iOS app
 on:
   workflow_dispatch:
+    inputs:
+      preview_only:
+        description: Run only native synthetic previews; reuse previously verified Release IPA
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
   build:
+    if: ${{ !inputs.preview_only }}
     runs-on: macos-15-intel
     timeout-minutes: 20
     steps:

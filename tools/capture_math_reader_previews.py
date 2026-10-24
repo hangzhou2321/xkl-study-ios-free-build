@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Capture synthetic DEBUG fixtures using native iOS Simulator, never local banks."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -53,12 +54,32 @@ def select_device():
     return name, runtime, kind, runtimes[runtime]
 
 
+def simulator_webkit_workaround(runtime_info):
+    """Official iOS 18.5 Simulator-only workaround; never alter the app bundle."""
+    evidence = {"official_url": "https://bugs.webkit.org/show_bug.cgi?id=293831#c2",
+                "scope": "Simulator launch child process only", "applied": False}
+    if runtime_info.get("version") != "18.5":
+        return {}, evidence
+    bundle = runtime_info.get("bundlePath")
+    if not bundle:
+        raise RuntimeError("iOS 18.5 runtime bundlePath missing; cannot verify official WebKit workaround")
+    directory = Path(bundle) / "Contents/Resources/RuntimeRoot/System/Cryptexes/OS/usr/lib/swift"
+    library = directory / "libswiftWebKit.dylib"
+    if not library.is_file():
+        raise RuntimeError(f"Official runtime WebKit library missing: {library}")
+    evidence.update({"applied": True, "library": str(library),
+                     "library_sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
+                     "fallback_library_path": str(directory)})
+    return {"SIMCTL_CHILD_DYLD_FALLBACK_LIBRARY_PATH": str(directory)}, evidence
+
+
 def main():
     if platform.system() != "Darwin":
         raise SystemExit("Native iOS Simulator capture requires macOS/Xcode; not verified on Windows")
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
     name, runtime, kind, runtime_info = select_device()
+    launch_environment, workaround = simulator_webkit_workaround(runtime_info)
     run("python3", "tools/generate_xcode_project.py", "--without-personal-resources")
     run("xcodebuild", "-project", "XKLStudy.xcodeproj", "-scheme", "XKLStudy",
         "-configuration", "Debug", "-sdk", "iphonesimulator",
@@ -71,7 +92,8 @@ def main():
     manifest = {"capture_type": "native iOS Simulator (not physical hardware)",
                 "experience_format": "xkl-math-experience-v2", "synthetic_only": True, "readiness": "WK document.fonts.ready and measured render aggregation marker, plus 1 second native draw settling",
                 "device": name, "device_type": kind,
-                "runtime": runtime_info, "status": "incomplete", "fixtures": []}
+                "runtime": runtime_info, "simulator_workaround": workaround,
+                "status": "incomplete", "fixtures": []}
     try:
         sim("boot", device)
         sim("bootstatus", device, "-b")
@@ -84,7 +106,7 @@ def main():
                     ["xcrun", "simctl", "launch", "--console", "--terminate-running-process",
                      device, BUNDLE, "--math-experience-preview", "--math-experience-case", case,
                      "--math-experience-font", str(font)], stdout=stream, stderr=subprocess.STDOUT,
-                    env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES"})
+                    env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES", **launch_environment})
                 try:
                     deadline = time.monotonic() + 45
                     while marker not in log.read_text(encoding="utf-8", errors="replace"):
