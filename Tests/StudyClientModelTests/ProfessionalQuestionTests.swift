@@ -9,7 +9,7 @@ import CoreGraphics
 
 /// Entirely synthetic question source and raster fixtures; never reads private courses.
 final class ProfessionalQuestionTests: XCTestCase {
-    private let hash=String(repeating:"a",count:64)
+    private let fixtureHash=String(repeating:"a",count:64)
     private func fixture(append:Bool=false) throws -> (ConceptBank,ConceptTeaching,ConceptCourse) {
         let bank=ConceptBank(id:ConceptSubject.computer.bankID,title:"Synthetic",scope:"Test",notice:"Fiction only",
             sources:[.init(id:"s",title:"Synthetic",reference:"generated")],
@@ -50,7 +50,7 @@ final class ProfessionalQuestionTests: XCTestCase {
         return ConceptCourse(format:"xkl-course-v5",subject:.computer,bankContent:course.bankContent,teaching:t)
     }
     func testStartQuestionPreservesLiveTokenSelectionResultAndConsumedIDs() throws {
-        let (bank,_,_)=try fixture();var e=try ConceptEngine(bank:bank,hash:hash)
+        let (bank,_,_)=try fixture();var e=try ConceptEngine(bank:bank,hash:fixtureHash)
         try e.startQuestion(questionID:"c0q1",day:21_000)
         let shown=try XCTUnwrap(e.shown)
         XCTAssertEqual(e.record.queue,["c0"])
@@ -68,22 +68,22 @@ final class ProfessionalQuestionTests: XCTestCase {
         XCTAssertThrowsError(try e.startQuestion(questionID:"c0q1",day:21_000))
         XCTAssertEqual(e.record.progress["c0"]?.usedQuestionIDs,["c0q1"])
         XCTAssertEqual(e.record.attempts.count,1)
-        try e.record.validate(bank:bank,hash:hash)
+        try e.record.validate(bank:bank,hash:fixtureHash)
     }
     func testSourceEntryKeepsOtherQueuedConceptAndRefusesInactiveFamiliar() throws {
-        let (bank,_,_)=try fixture();var e=try ConceptEngine(bank:bank,hash:hash)
+        let (bank,_,_)=try fixture();var e=try ConceptEngine(bank:bank,hash:fixtureHash)
         e.record.queue=["c1"]
         try e.startQuestion(questionID:"c0q0",day:21_000)
         XCTAssertEqual(e.record.queue,["c0","c1"])
         XCTAssertTrue(e.record.progress.isEmpty)
         XCTAssertTrue(e.record.attempts.isEmpty)
-        var f=try ConceptEngine(bank:bank,hash:hash)
+        var f=try ConceptEngine(bank:bank,hash:fixtureHash)
         f.record.progress["c0"]=ConceptProgress(familiar:true)
         XCTAssertThrowsError(try f.startQuestion(questionID:"c0q0",day:21_000))
         XCTAssertNil(f.shown)
         var scoped=bank
         scoped.studyScope = .init(id:"test",title:"Test",sourceReference:"test",includedQuestionIDs:["c1q0","c1q1"],excludedQuestionReasons:["c0q0":"excluded","c0q1":"excluded"])
-        var g=try ConceptEngine(bank:scoped,hash:hash)
+        var g=try ConceptEngine(bank:scoped,hash:fixtureHash)
         XCTAssertThrowsError(try g.startQuestion(questionID:"c0q0",day:21_000))
         XCTAssertEqual(g.record.day,0)
     }
@@ -103,10 +103,10 @@ final class ProfessionalQuestionTests: XCTestCase {
             questions:[fixed]+Array(concept.questions.dropFirst()))
         let ordered=ConceptBank(id:bank.id,title:bank.title,scope:bank.scope,notice:bank.notice,sources:bank.sources,
             concepts:[replacement]+Array(bank.concepts.dropFirst()))
-        var direct=try ConceptEngine(bank:ordered,hash:hash)
+        var direct=try ConceptEngine(bank:ordered,hash:fixtureHash)
         try direct.startQuestion(questionID:fixed.id,day:21_000)
         XCTAssertEqual(direct.shown?.order,fixed.options.map(\.id))
-        var ordinary=try ConceptEngine(bank:ordered,hash:hash)
+        var ordinary=try ConceptEngine(bank:ordered,hash:fixtureHash)
         try ordinary.start(day:21_000,newLimit:1)
         XCTAssertEqual(ordinary.shown?.questionID,fixed.id)
         XCTAssertEqual(ordinary.shown?.order,fixed.options.map(\.id))
@@ -137,7 +137,7 @@ final class ProfessionalQuestionTests: XCTestCase {
         let afterOnly=ProfessionalQuestionPresentation(questionID:q.id,sourceQuestionDigest:q.professionalDigest,requiredDiagram:true,beforeAnswer:[],afterAnswer:[visual])
         XCTAssertThrowsError(try ProfessionalQuestionPresentation.validateAll([afterOnly],bank:bank))
         XCTAssertThrowsError(try ProfessionalQuestionPresentation.validateAll([good,good],bank:bank))
-        let bad=ProfessionalQuestionPresentation(questionID:q.id,sourceQuestionDigest:hash,requiredDiagram:false,beforeAnswer:[],afterAnswer:[])
+        let bad=ProfessionalQuestionPresentation(questionID:q.id,sourceQuestionDigest:fixtureHash,requiredDiagram:false,beforeAnswer:[],afterAnswer:[])
         XCTAssertThrowsError(try ProfessionalQuestionPresentation.validateAll([bad],bank:bank))
     }
     func testLinksAndPendingSourceLeavesCannotInventCardsOrScorableQuestion() throws {
@@ -168,7 +168,7 @@ final class ProfessionalQuestionTests: XCTestCase {
         let all=try XCTUnwrap(valid.teaching.questionPresentations)
         XCTAssertNoThrow(try ProfessionalQuestionPresentation.validatePracticeContent(all,bank:bank))
         // An idle engine has no shown ID: validating only the old current pointer would miss this.
-        var idle=try ConceptEngine(bank:bank,hash:hash)
+        var idle=try ConceptEngine(bank:bank,hash:fixtureHash)
         XCTAssertNil(idle.shown)
         let incomplete=Array(all.dropFirst())
         XCTAssertThrowsError(try ProfessionalQuestionPresentation.validatePracticeContent(incomplete,bank:bank))
@@ -184,7 +184,7 @@ final class ProfessionalQuestionTests: XCTestCase {
     }
     func testSourceFileReferencesAreMetadataOnlyUniqueBudgetedAndForbiddenInPractice() throws {
         let (bank,t,c)=try fixture();let valid=try v5(bank,t,c)
-        let file=ProfessionalSourceFileAsset(sha256:hash,mimeType:"image/jpeg",byteCount:3*1_024*1_024,
+        let file=ProfessionalSourceFileAsset(sha256:fixtureHash,mimeType:"image/jpeg",byteCount:3*1_024*1_024,
             pixelWidth:4032,pixelHeight:3024,crop:.init(x:0,y:0,width:1,height:1),altText:"Synthetic metadata only")
         func leaf(_ id:String,_ asset:ProfessionalSourceFileAsset) -> ProfessionalSourceLeaf {
             .init(sourceQuestionID:id,sourceID:"s",page:1,label:"Synthetic source",status:"pending",
@@ -194,7 +194,7 @@ final class ProfessionalQuestionTests: XCTestCase {
         // No assets exist: course metadata validation must not open any file, even 800 references.
         let repeated=(0..<800).map{leaf("leaf\($0)",file)}
         XCTAssertNoThrow(try ProfessionalSourceLeaf.validateAll(repeated,bank:bank,teaching:valid.teaching))
-        let altered=ProfessionalSourceFileAsset(sha256:hash,mimeType:file.mimeType,byteCount:file.byteCount-1,
+        let altered=ProfessionalSourceFileAsset(sha256:fixtureHash,mimeType:file.mimeType,byteCount:file.byteCount-1,
             pixelWidth:file.pixelWidth,pixelHeight:file.pixelHeight,crop:file.crop,altText:file.altText)
         XCTAssertThrowsError(try ProfessionalSourceLeaf.validateAll([leaf("a",file),leaf("b",altered)],bank:bank,teaching:valid.teaching))
         let unique=(0..<33).map { i -> ProfessionalSourceLeaf in
@@ -242,14 +242,14 @@ final class ProfessionalQuestionTests: XCTestCase {
     func testLegacyCoachingEventsKeepMissingHelpFieldsAndRoundTrip() throws {
         let (bank,_,_)=try fixture()
         let legacy=ConceptCoachingEvent(id:UUID(),sequence:1,kind:"story",conceptID:"c0",questionID:"c0q0",presentationID:UUID(),
-            attemptID:nil,reason:nil,automatic:false,beforeAnswer:true,teachingSHA256:hash,recordedAt:Date(timeIntervalSince1970:1_800_000_000))
+            attemptID:nil,reason:nil,automatic:false,beforeAnswer:true,teachingSHA256:fixtureHash,recordedAt:Date(timeIntervalSince1970:1_800_000_000))
         let bytes=try GuidanceFixture.encode(legacy)
         let object=try XCTUnwrap(JSONSerialization.jsonObject(with:bytes) as? [String:Any])
         for key in ["linkedPrimaryCardIDs","linkedSupplementCardIDs","linkedGuideConceptIDs"] { XCTAssertNil(object[key]) }
         let decoded=try JSONDecoder().decode(ConceptCoachingEvent.self,from:bytes)
         XCTAssertEqual(decoded,legacy);XCTAssertEqual(try GuidanceFixture.encode(decoded),bytes)
-        let record=ConceptCoachingRecord(bankSHA256:hash,nextSequence:2,events:[decoded])
-        XCTAssertNoThrow(try record.validate(bank:bank,hash:hash))
+        let record=ConceptCoachingRecord(bankSHA256:fixtureHash,nextSequence:2,events:[decoded])
+        XCTAssertNoThrow(try record.validate(bank:bank,hash:fixtureHash))
     }
     func testRasterRejectsUnknownFieldsBadHashCropFormatAndDimensions() throws {
         let bytes=Data([137,80,78,71,13,10,26,10])
@@ -284,7 +284,7 @@ final class ProfessionalQuestionTests: XCTestCase {
         try bytes.write(to:file)
         XCTAssertEqual(try asset.croppedCGImage(assetRoot:assets).width,2)
         let (bank,t,c)=try fixture();let course=try v5(bank,t,c)
-        let second=ProfessionalSourceFileAsset(sha256:hash,mimeType:"image/png",byteCount:bytes.count,pixelWidth:4,pixelHeight:4,
+        let second=ProfessionalSourceFileAsset(sha256:fixtureHash,mimeType:"image/png",byteCount:bytes.count,pixelWidth:4,pixelHeight:4,
             crop:asset.crop,altText:"Synthetic missing continuation page")
         let leaf=ProfessionalSourceLeaf(sourceQuestionID:"cross-page",sourceID:"s",page:1,label:"Two-page synthetic source",status:"pending",
             visual:.init(id:"first",kind:"sourceFile",sourceFile:asset),primaryCardIDs:[],supplementCardIDs:[],
