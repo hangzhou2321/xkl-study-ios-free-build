@@ -20,16 +20,27 @@ struct MathExperienceView: View {
     @State private var familiarExpanded = false
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
+        #if DEBUG
+        let _ = MathPreviewTrace.phase("experience.body",flag:inCourse)
+        #endif
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         Color.clear.frame(height: 1).id("math-top")
-                        if inCourse { course }
+                        if inCourse {
+                            course
+                            #if DEBUG
+                                .onAppear { MathPreviewTrace.phase("experience.course-appear") }
+                            #endif
+                        }
                         else if let engine = store.engine, let session = engine.current,
                                 let q = engine.currentQuestion,
                                 let guide = store.guide?.questions.first(where: { $0.questionID == q.id }) {
                             question(q, guide: guide, session: session, content: engine.baseline.content)
+                            #if DEBUG
+                                .onAppear { MathPreviewTrace.phase("experience.question-appear") }
+                            #endif
                         } else { course }
                     }.padding(20).frame(maxWidth: 820).frame(maxWidth: .infinity)
                 }
@@ -50,7 +61,23 @@ struct MathExperienceView: View {
             .navigationTitle(inCourse ? "数学课程" : "数学")
             .safeAreaInset(edge: .bottom, spacing: 0) { controls }
             .toolbar { if !inCourse { Button("回到课程") { pauseCurrent(); inCourse = true } } }
-            .onAppear { store.processGuideInbox(); configurePreview(); syncVisibility() }
+            .onAppear {
+                #if DEBUG
+                MathPreviewTrace.phase("experience.outer-appear-enter")
+                #endif
+                store.processGuideInbox()
+                #if DEBUG
+                MathPreviewTrace.phase("experience.inbox-return")
+                #endif
+                configurePreview()
+                #if DEBUG
+                MathPreviewTrace.phase("experience.configure-return")
+                #endif
+                syncVisibility()
+                #if DEBUG
+                MathPreviewTrace.phase("experience.outer-appear-return")
+                #endif
+            }
             .onChange(of: isVisible) { _, _ in syncVisibility() }
             .onChange(of: fontSize) { _, value in if previewCase == nil { storedFontSize = value } }
             .onChange(of: scenePhase) { _, phase in
@@ -336,6 +363,7 @@ private struct MathExperienceImage: View {
     let font: Double
     let directory: URL
     init() {
+        MathPreviewTrace.phase("fixture.init-enter")
         let args = ProcessInfo.processInfo.arguments
         func arg(_ name: String) -> String? { guard let i=args.firstIndex(of:name), i+1<args.count else { return nil }; return args[i+1] }
         let selected=arg("--math-experience-case") ?? "question"
@@ -409,6 +437,7 @@ private struct MathExperienceImage: View {
         store=selected == "resume" ? MathExperienceStore(directory:fresh,legacyDirectory:old,clock:{ previewNow }) : active
         let diagnostics="case=\(selected) legacyBlocked=\(legacy.blocked) legacyEngine=\(legacy.engine != nil) legacyError=\(legacy.error ?? "none") newBlocked=\(store.blocked) newEngine=\(store.engine != nil) guide=\(store.guide != nil) newError=\(store.error ?? "none")"
         print("MATH_EXPERIENCE_PREVIEW_VALIDATION \(diagnostics)")
+        MathPreviewTrace.phase("fixture.init-validated",flag:store.engine != nil && legacy.engine != nil)
         precondition(legacy.engine != nil && !legacy.blocked && legacy.error == nil && store.engine != nil && store.guide != nil && !store.blocked && store.error == nil,"Synthetic fixture validation failed: \(diagnostics)")
     }
 }
@@ -416,6 +445,7 @@ private struct MathExperienceImage: View {
 struct MathExperiencePreview: View {
     @StateObject private var fixture=MathExperiencePreviewFixture()
     var body: some View {
+        let _ = MathPreviewTrace.phase("preview.body")
         MathExperienceView(store:fixture.store,legacy:fixture.legacy,previewCase:fixture.selectedCase,previewFont:fixture.font)
     }
 }

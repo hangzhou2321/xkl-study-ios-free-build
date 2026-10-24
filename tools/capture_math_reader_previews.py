@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/math-experience-previews"
 BUNDLE = "local.xkl.study"
 CASES = [(case, 26) for case in (
-    "question", "hint", "answer", "details", "card", "familiar", "undo", "resume",
+    "familiar", "question", "hint", "answer", "details", "card", "undo", "resume",
     "diagram", "matrix", "piecewise")] + [("question", 34), ("details", 34)]
 
 
@@ -99,6 +99,8 @@ def main():
         sim("bootstatus", device, "-b")
         sim("install", device, str(app))
         for case, font in CASES:
+            started = time.monotonic()
+            readiness_timeout = 90 if (case, font) == ("question", 26) else 45
             log = OUT / f"{case}-{font}.log"
             marker = f"MATH_EXPERIENCE_PREVIEW_RENDERED case={case} font={font}"
             with log.open("w", encoding="utf-8") as stream:
@@ -108,13 +110,14 @@ def main():
                      "--math-experience-font", str(font)], stdout=stream, stderr=subprocess.STDOUT,
                     env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES", **launch_environment})
                 try:
-                    deadline = time.monotonic() + 45
+                    deadline = time.monotonic() + readiness_timeout
                     while marker not in log.read_text(encoding="utf-8", errors="replace"):
                         if process.poll() is not None:
                             raise RuntimeError(f"Fixture exited before readiness: {case}; simctl exit code={process.returncode}; see {log}")
                         if time.monotonic() > deadline:
                             raise RuntimeError(f"Fixture readiness timed out: {marker}; see {log}")
                         time.sleep(0.2)
+                    ready_elapsed = time.monotonic() - started
                     # Renderer/font readiness marker precedes native compositing settling.
                     time.sleep(1.0)
                     screenshot = OUT / f"{case}-{font}.png"
@@ -127,13 +130,21 @@ def main():
                     if width < 320 or not 1.5 <= height / width <= 2.5:
                         raise RuntimeError(f"Expected portrait phone screenshot, got {width}x{height}")
                     manifest["fixtures"].append({"case": case, "font_pt": font,
-                        "file": screenshot.name, "pixels": [width, height], "ready_marker": marker})
+                        "file": screenshot.name, "pixels": [width, height], "ready_marker": marker,
+                        "capture_elapsed_seconds": round(time.monotonic() - started, 3),
+                        "readiness_elapsed_seconds": round(ready_elapsed, 3),
+                        "readiness_timeout_seconds": readiness_timeout,
+                        "timing_scope": "diagnostic only; does not establish acceptable product loading speed"})
                 except Exception as error:
                     # Only this launch's synthetic fixture console, never host/user files.
                     print(f"Synthetic fixture failure: {error}", flush=True)
                     print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]), flush=True)
                     failure = {"case": case, "font_pt": font, "error": str(error),
-                               "simctl_exit_code": process.poll(), "console": log.name}
+                               "simctl_exit_code": process.poll(), "console": log.name,
+                               "elapsed_seconds": round(time.monotonic() - started, 3),
+                               "readiness_timeout_seconds": readiness_timeout,
+                               "phase_trace": [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                                               if "MATH_" in line][-80:]}
                     try:
                         failure_image = OUT / f"failure-{case}-{font}.png"
                         sim("io", device, "screenshot", "--type=png", str(failure_image))

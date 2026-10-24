@@ -1,6 +1,29 @@
 import SwiftUI
 import WebKit
 
+#if DEBUG
+/// Preview-only, process-local diagnostics. Never changes SwiftUI state or logs content.
+enum MathPreviewTrace {
+    private static let lock = NSLock()
+    private static var emitted = Set<String>()
+    private static var counter = 0
+    private static let started = ProcessInfo.processInfo.systemUptime
+    static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("--math-experience-preview") }
+    static func nextID() -> Int { lock.lock(); defer { lock.unlock() }; counter += 1; return counter }
+    static func phase(_ name: String, flag: Bool? = nil) {
+        guard enabled else { return }
+        let key=name + (flag.map { "-\($0)" } ?? "")
+        lock.lock(); let fresh=emitted.insert(key).inserted; lock.unlock()
+        guard fresh else { return }
+        let baseline=started
+        let elapsed=ProcessInfo.processInfo.systemUptime-baseline
+        let line="MATH_PREVIEW_PHASE phase=\(name) flag=\(flag.map { $0 ? "true" : "false" } ?? "none") elapsed=\(String(format:"%.3f",elapsed))\n"
+        FileHandle.standardOutput.write(Data(line.utf8))
+    }
+}
+#endif
+
+
 /// Pass only currently visible blocks. Hidden answers must never enter this view.
 struct MathRichTextView: View {
     var blocks: [MathRichBlock]
@@ -11,6 +34,9 @@ struct MathRichTextView: View {
     @State private var failure: String?
 
     var body: some View {
+        #if DEBUG
+        let _ = MathPreviewTrace.phase("rich.body")
+        #endif
         VStack(alignment: .leading, spacing: 8) {
             MathWebContent(blocks: blocks, fontSize: fontSize, height: $height, onReady: { value in
                 if value { failure = nil }
@@ -37,12 +63,21 @@ private struct MathWebContent: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> WKWebView {
+        #if DEBUG
+        MathPreviewTrace.phase("wk.\(context.coordinator.traceID).make-start")
+        #endif
         let controller = WKUserContentController()
         controller.add(context.coordinator, name: "mathRenderer")
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = controller
         configuration.websiteDataStore = .nonPersistent()
+        #if DEBUG
+        MathPreviewTrace.phase("wk.\(context.coordinator.traceID).configuration-created")
+        #endif
         let web = WKWebView(frame: .zero, configuration: configuration)
+        #if DEBUG
+        MathPreviewTrace.phase("wk.\(context.coordinator.traceID).web-created")
+        #endif
         web.isOpaque = false
         web.backgroundColor = .clear
         web.scrollView.isScrollEnabled = false
@@ -51,7 +86,13 @@ private struct MathWebContent: UIViewRepresentable {
         if let folder = Bundle.main.url(forResource: "MathRenderer", withExtension: nil),
            FileManager.default.fileExists(atPath: folder.appendingPathComponent("index.html").path) {
             context.coordinator.folder = folder.standardizedFileURL
+            #if DEBUG
+            MathPreviewTrace.phase("wk.\(context.coordinator.traceID).load-enter")
+            #endif
             context.coordinator.navigation = web.loadFileURL(folder.appendingPathComponent("index.html"), allowingReadAccessTo: folder)
+            #if DEBUG
+            MathPreviewTrace.phase("wk.\(context.coordinator.traceID).load-return")
+            #endif
         } else {
             DispatchQueue.main.async { onReady(false); onFailure("离线公式资源缺失") }
         }
@@ -60,6 +101,9 @@ private struct MathWebContent: UIViewRepresentable {
             guard let coordinator, !coordinator.ready else { return }
             coordinator.fail("离线公式引擎未就绪")
         }
+        #if DEBUG
+        MathPreviewTrace.phase("wk.\(context.coordinator.traceID).make-return")
+        #endif
         return web
     }
     func updateUIView(_ web: WKWebView, context: Context) {
@@ -72,6 +116,9 @@ private struct MathWebContent: UIViewRepresentable {
         web.navigationDelegate = nil
     }
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        #if DEBUG
+        let traceID = MathPreviewTrace.nextID()
+        #endif
         var parent: MathWebContent
         weak var web: WKWebView?
         var folder: URL?
@@ -83,6 +130,9 @@ private struct MathWebContent: UIViewRepresentable {
         var active = true
         init(_ parent: MathWebContent) { self.parent = parent }
         func render() {
+            #if DEBUG
+            MathPreviewTrace.phase("wk.\(traceID).render-enter",flag:ready)
+            #endif
             guard active, let web else { return }
             do {
                 let encoder = JSONEncoder()
@@ -99,6 +149,9 @@ private struct MathWebContent: UIViewRepresentable {
                     }
                 }
                 guard ready, sentToken != token else { return }
+                #if DEBUG
+                MathPreviewTrace.phase("wk.\(traceID).render-dispatch")
+                #endif
                 sentToken = token
                 let payload: [String: Any] = ["token": token, "fontSize": parent.fontSize,
                                               "blocks": try JSONSerialization.jsonObject(with: data)]
@@ -112,7 +165,12 @@ private struct MathWebContent: UIViewRepresentable {
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard active, let payload = message.body as? [String: Any] else { return }
-            if payload["ready"] as? Bool == true { ready = true; render(); return }
+            if payload["ready"] as? Bool == true {
+                #if DEBUG
+                MathPreviewTrace.phase("wk.\(traceID).js-page-ready")
+                #endif
+                ready = true; render(); return
+            }
             guard payload["token"] as? String == token else { return }
             if let value = payload["height"] as? Double, value.isFinite {
                 parent.height = CGFloat(max(40, min(100_000, value)))
@@ -120,6 +178,9 @@ private struct MathWebContent: UIViewRepresentable {
             if let errors = payload["errors"] as? [String], !errors.isEmpty {
                 fail(errors.joined(separator: "\n"))
             } else if payload["height"] as? Double != nil {
+                #if DEBUG
+                MathPreviewTrace.phase("wk.\(traceID).render-success")
+                #endif
                 parent.onReady(true)
             }
         }
@@ -132,6 +193,9 @@ private struct MathWebContent: UIViewRepresentable {
             decisionHandler(.allow)
         }
         func fail(_ message: String) {
+            #if DEBUG
+            MathPreviewTrace.phase("wk.\(traceID).render-fail")
+            #endif
             guard active else { return }
             parent.onReady(false)
             parent.onFailure(message)
