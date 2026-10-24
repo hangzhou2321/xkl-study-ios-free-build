@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CryptoKit
 import StudyCore
 
 private struct MathExperienceLegacyDisk: Codable { var format: String; var contentSHA256: String; var events: [MathEvent]; var importedPackageSHA256: String? }
@@ -37,12 +38,12 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
             let disk=try JSONDecoder().decode(MathExperienceLegacyDisk.self,from:old)
             guard disk.format == "xkl-math-disk-v1" else { throw MathFailure.invalid("旧数学档案格式无效。") }
             let content=try Data(contentsOf:self.legacyDirectory.appendingPathComponent(disk.contentSHA256+".xklmath"))
-            guard StudySHA256.hex(content) == disk.contentSHA256 else { throw MathFailure.invalid("旧数学内容校验失败。") }
-            legacyHash=StudySHA256.hex(old); contentHash=disk.contentSHA256; packageHash=disk.importedPackageSHA256 ?? ""
+            guard Self.systemSHA256(content) == disk.contentSHA256 else { throw MathFailure.invalid("旧数学内容校验失败。") }
+            legacyHash=Self.systemSHA256(old); contentHash=disk.contentSHA256; packageHash=disk.importedPackageSHA256 ?? ""
             try FileManager.default.createDirectory(at:self.directory,withIntermediateDirectories:true)
             try immutable(old,name:"baseline-archive.json"); try immutable(content,name:"baseline-content.xklmath")
             let manifest=try JSONSerialization.data(withJSONObject:["format":"xkl-math-experience-baseline-v1","archiveSHA256":legacyHash,"contentSHA256":contentHash,"importedPackageSHA256":packageHash],options:[.sortedKeys])
-            try immutable(manifest,name:"baseline.json"); baselineManifestHash=StudySHA256.hex(manifest)
+            try immutable(manifest,name:"baseline.json"); baselineManifestHash=Self.systemSHA256(manifest)
             var events: [MathExperienceEvent]=[]
             if FileManager.default.fileExists(atPath:archiveURL.path) {
                 let state=try JSONDecoder().decode(MathExperienceDisk.self,from:Data(contentsOf:archiveURL))
@@ -57,17 +58,20 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
         } catch { blocked=true; self.error=error.localizedDescription }
         if !blocked { processGuideInbox() }
     }
+    private static func systemSHA256(_ data: Data) -> String {
+        SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined()
+    }
     private func immutable(_ bytes: Data,name: String) throws {
         let url=directory.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath:url.path) { guard try Data(contentsOf:url) == bytes else { throw MathFailure.invalid("不可变基线已改变，原文件保留。") } }
         else { try writeData(bytes,url) }
     }
     private func validateBaseline() throws {
-        guard StudySHA256.hex(try Data(contentsOf:directory.appendingPathComponent("baseline.json"))) == baselineManifestHash,
-              StudySHA256.hex(try Data(contentsOf:legacyDirectory.appendingPathComponent("archive.json"))) == legacyHash,
-              StudySHA256.hex(try Data(contentsOf:legacyDirectory.appendingPathComponent(contentHash+".xklmath"))) == contentHash,
-              StudySHA256.hex(try Data(contentsOf:directory.appendingPathComponent("baseline-archive.json"))) == legacyHash,
-              StudySHA256.hex(try Data(contentsOf:directory.appendingPathComponent("baseline-content.xklmath"))) == contentHash else { blocked=true; throw MathFailure.invalid("数学基线发生变化，停止写入并保留现场。") }
+        guard Self.systemSHA256(try Data(contentsOf:directory.appendingPathComponent("baseline.json"))) == baselineManifestHash,
+              Self.systemSHA256(try Data(contentsOf:legacyDirectory.appendingPathComponent("archive.json"))) == legacyHash,
+              Self.systemSHA256(try Data(contentsOf:legacyDirectory.appendingPathComponent(contentHash+".xklmath"))) == contentHash,
+              Self.systemSHA256(try Data(contentsOf:directory.appendingPathComponent("baseline-archive.json"))) == legacyHash,
+              Self.systemSHA256(try Data(contentsOf:directory.appendingPathComponent("baseline-content.xklmath"))) == contentHash else { blocked=true; throw MathFailure.invalid("数学基线发生变化，停止写入并保留现场。") }
     }
     @discardableResult private func change(_ action: (inout MathExperienceEngine) throws -> Void) -> Bool {
         guard !blocked, var candidate=engine else { return false }
@@ -135,10 +139,10 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
                 let v=try url.resourceValues(forKeys:[.isRegularFileKey,.isSymbolicLinkKey,.fileSizeKey]); guard v.isRegularFile == true, v.isSymbolicLink != true, let size=v.fileSize, size <= limit else { throw MathFailure.invalid("导学收件必须是受限普通文件。") }; return try Data(contentsOf:url)
             }
             let iv=try inbox.resourceValues(forKeys:[.isDirectoryKey,.isSymbolicLinkKey]); guard iv.isDirectory == true, iv.isSymbolicLink != true else { throw MathFailure.invalid("收件目录不可为链接。") }
-            let requestBytes=try read(requestURL,limit:65536), request=try JSONDecoder().decode(InboxRequest.self,from:requestBytes), requestHash=StudySHA256.hex(requestBytes)
+            let requestBytes=try read(requestURL,limit:65536), request=try JSONDecoder().decode(InboxRequest.self,from:requestBytes), requestHash=Self.systemSHA256(requestBytes)
             guard !request.contentFile.hasPrefix("."), !request.contentFile.isEmpty, request.contentFile.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }), request.expectedSHA256.count == 64, request.expectedSHA256.allSatisfy({ $0.isHexDigit && !$0.isUppercase }), request.courseID == engine.baseline.content.id else { throw MathFailure.invalid("导学收件请求无效。") }
             let bytes=try read(inbox.appendingPathComponent(request.contentFile),limit:32*1024*1024)
-            guard StudySHA256.hex(bytes) == request.expectedSHA256 else { throw MathFailure.invalid("导学收件摘要不匹配。") }
+            guard Self.systemSHA256(bytes) == request.expectedSHA256 else { throw MathFailure.invalid("导学收件摘要不匹配。") }
             let candidate=try JSONDecoder().decode(MathGuide.self,from:bytes)
             guard request.guideID == nil || request.guideID == candidate.id, request.guideVersion == nil || request.guideVersion == candidate.version else { throw MathFailure.invalid("导学收件标识或版本不匹配。") }
             try candidate.validate(content:engine.baseline.content,packageSHA256:packageHash)

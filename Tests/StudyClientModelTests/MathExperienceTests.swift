@@ -1,5 +1,9 @@
 import XCTest
 import StudyCore
+#if os(macOS)
+import CryptoKit
+import Dispatch
+#endif
 @testable import StudyClientModel
 
 private let syntheticPackageHash=StudySHA256.hex(Data("new synthetic package bytes for regression only".utf8))
@@ -211,6 +215,38 @@ final class MathExperienceTests: XCTestCase {
 }
 #if os(macOS)
 @MainActor final class MathExperiencePersistenceTests: XCTestCase {
+    func testFortyEightMiBCanonicalBaselineValidationPerformance() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let legacy=root.appendingPathComponent("MathPractice"), destination=root.appendingPathComponent("MathExperience")
+        try FileManager.default.createDirectory(at:legacy,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:destination,withIntermediateDirectories:true)
+        var b=try experienceBaseline(); b.content.questions[0].solutionNote=""
+        let targetBytes=48*1024*1024, overhead=try JSONEncoder().encode(b.content).count
+        b.content.questions[0].solutionNote=String(repeating:"x",count:targetBytes-overhead)
+        let bytes=try JSONEncoder().encode(b.content)
+        XCTAssertEqual(bytes.count,targetBytes)
+        let hash=SHA256.hash(data:bytes).map { String(format:"%02x",$0) }.joined()
+        try bytes.write(to:legacy.appendingPathComponent(hash+".xklmath"))
+        let archive=try JSONSerialization.data(withJSONObject:["format":"xkl-math-disk-v1","contentSHA256":hash,"events":JSONSerialization.jsonObject(with:JSONEncoder().encode(b.events))])
+        try archive.write(to:legacy.appendingPathComponent("archive.json"))
+        var engine=try MathExperienceEngine(baseline:b)
+        let now=Date(timeIntervalSince1970:1791000000)
+        try engine.present(questionID:"stable-1",now:now)
+        let disk=try JSONSerialization.data(withJSONObject:["format":"xkl-math-experience-v2","legacySHA256":SHA256.hash(data:archive).map { String(format:"%02x",$0) }.joined(),"contentSHA256":hash,"events":JSONSerialization.jsonObject(with:JSONEncoder().encode(engine.events))])
+        try disk.write(to:destination.appendingPathComponent("events.json"))
+        let store=MathExperienceStore(directory:destination,legacyDirectory:legacy,clock:{ now })
+        XCTAssertFalse(store.blocked); let sessionID=try XCTUnwrap(store.engine?.current?.id)
+        // Observe one real transaction without XCTest performance variance/baseline gates.
+        // It checks both full 48 MiB canonical copies plus archive/manifest.
+        let eventCount=store.engine!.events.count, started=DispatchTime.now().uptimeNanoseconds
+        store.pause(sessionID:sessionID)
+        let elapsed=DispatchTime.now().uptimeNanoseconds-started
+        print("MATH_BASELINE_48MIB_PAUSE_ELAPSED_MS=\(Double(elapsed)/1_000_000)")
+        XCTAssertEqual(store.engine?.events.count,eventCount+1)
+        XCTAssertNil(store.error); XCTAssertEqual(store.engine?.current?.id,sessionID)
+        XCTAssertEqual(try Data(contentsOf:legacy.appendingPathComponent("archive.json")),archive)
+    }
     func testFailedWriteDoesNotAdvanceAndOldBytesAreUntouched() throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }
