@@ -102,7 +102,7 @@ private struct MathWebContent: UIViewRepresentable {
                                               "blocks": try JSONSerialization.jsonObject(with: data)]
                 // WK argument transport never embeds author content in JavaScript source.
                 let renderToken = token
-                web.callAsyncJavaScript("window.renderContent(payload)", arguments: ["payload": payload], in: nil, contentWorld: .page) { [weak self] result in
+                web.callAsyncJavaScript("window.renderContent(payload)", arguments: ["payload": payload], in: nil, in: .page) { [weak self] result in
                     guard let self, self.active, self.token == renderToken else { return }
                     if case .failure(let error) = result { self.fail(error.localizedDescription) }
                 }
