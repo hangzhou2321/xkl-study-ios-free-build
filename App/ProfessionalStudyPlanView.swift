@@ -58,15 +58,54 @@ struct ProfessionalStudyPlanView: View {
     }
 }
 
+#if DEBUG
+private struct ProfessionalQuestionZoomPreview {
+    var autoOpen=false
+    var didAppear:(Int,Int)->Void = { _,_ in }
+}
+private struct ProfessionalQuestionZoomKey: EnvironmentKey {
+    static let defaultValue=ProfessionalQuestionZoomPreview()
+}
+private extension EnvironmentValues {
+    var professionalQuestionZoomPreview: ProfessionalQuestionZoomPreview {
+        get { self[ProfessionalQuestionZoomKey.self] }
+        set { self[ProfessionalQuestionZoomKey.self]=newValue }
+    }
+}
+#endif
+
 struct ProfessionalVisualView: View {
     let visual: ProfessionalQuestionVisual
     var onFailure: (String) -> Void = { _ in }
+    @State private var zoomed=false
+    #if DEBUG
+    @Environment(\.professionalQuestionZoomPreview) private var zoomPreview
+    #endif
     var body: some View {
         if visual.kind == "vector", let diagram = visual.diagram {
             ConceptDiagramView(diagram: diagram)
         } else if let raster = visual.raster {
             if let image = try? raster.croppedCGImage() {
-                Image(decorative: image, scale: 1).resizable().scaledToFit().accessibilityLabel(raster.altText)
+                VStack(alignment:.leading,spacing:10) {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit().accessibilityLabel(raster.altText)
+                        .onTapGesture { zoomed=true }
+                    Button("放大题图") { zoomed=true }.buttonStyle(.bordered)
+                }
+                .fullScreenCover(isPresented:$zoomed) {
+                    NavigationStack {
+                        ScrollView([.horizontal,.vertical]) {
+                            // This is the same verified crop, never the full source page.
+                            Image(decorative:image,scale:1).frame(width:CGFloat(image.width),height:CGFloat(image.height)).accessibilityLabel(raster.altText)
+                        }.navigationTitle("题图 · 横竖滑动查看").navigationBarTitleDisplayMode(.inline)
+                            .toolbar { Button("关闭") { zoomed=false } }
+                    }
+                    #if DEBUG
+                    .onAppear { zoomPreview.didAppear(image.width,image.height) }
+                    #endif
+                }
+                #if DEBUG
+                .onAppear { if zoomPreview.autoOpen { zoomed=true } }
+                #endif
             } else {
                 Text("题图暂不可读，本题暂缓作答。").foregroundStyle(.orange).onAppear { onFailure("题图暂不可读") }
             }
@@ -436,12 +475,24 @@ import UIKit
             let bankBytes=try JSONEncoder().encode(bank),hash=StudySHA256.hex(bankBytes)
             let deck=RecallDeck(subject:subject,bankID:subjectID,cards:cards.map { RecallDeck.Item(conceptID:concept.id,conceptTitle:concept.title,card:$0) })
             let format=UIGraphicsImageRendererFormat();format.scale=1
-            let image=UIGraphicsImageRenderer(size:CGSize(width:600,height:220),format:format).image { context in
-                UIColor.white.setFill();context.fill(CGRect(x:0,y:0,width:600,height:220))
-                ("1 ─── o──o ─── 输出" as NSString).draw(at:CGPoint(x:35,y:80),withAttributes:[.font:UIFont.systemFont(ofSize:38),.foregroundColor:UIColor.black])
+            let wideQuestion=["question","question-zoom"].contains(selectedCase)
+            let imageWidth:CGFloat=wideQuestion ? 1200:600
+            let imageHeight:CGFloat=wideQuestion ? 440:220
+            let image=UIGraphicsImageRenderer(size:CGSize(width:imageWidth,height:imageHeight),format:format).image { context in
+                UIColor.white.setFill();context.fill(CGRect(x:0,y:0,width:imageWidth,height:imageHeight))
+                if wideQuestion {
+                    let line=UIBezierPath();line.move(to:CGPoint(x:70,y:105));line.addLine(to:CGPoint(x:1120,y:105));line.lineWidth=3;UIColor.black.setStroke();line.stroke()
+                    for (x,label) in [(CGFloat(110),"Z₇ · 合成细标签"),(CGFloat(760),"Rₓ · 合成细标签")] {
+                        (label as NSString).draw(at:CGPoint(x:x,y:55),withAttributes:[.font:UIFont.systemFont(ofSize:18),.foregroundColor:UIColor.black])
+                    }
+                    ("输入1 · 闭合开关 · 输出" as NSString).draw(at:CGPoint(x:380,y:130),withAttributes:[.font:UIFont.systemFont(ofSize:24),.foregroundColor:UIColor.black])
+                    ("不可显示的答案（纯合成）" as NSString).draw(at:CGPoint(x:40,y:300),withAttributes:[.font:UIFont.boldSystemFont(ofSize:48),.foregroundColor:UIColor.red])
+                } else {
+                    ("1 ─── o──o ─── 输出" as NSString).draw(at:CGPoint(x:35,y:80),withAttributes:[.font:UIFont.systemFont(ofSize:38),.foregroundColor:UIColor.black])
+                }
             }
             let bytes=image.pngData()!,pixels=image.cgImage!
-            let raster=ProfessionalRasterAsset(mimeType:"image/png",bytes:bytes,sha256:StudySHA256.hex(bytes),pixelWidth:pixels.width,pixelHeight:pixels.height,crop:ProfessionalNormalizedCrop(x:0,y:0,width:1,height:1),altText:"合成闭合开关示意")
+            let raster=ProfessionalRasterAsset(mimeType:"image/png",bytes:bytes,sha256:StudySHA256.hex(bytes),pixelWidth:pixels.width,pixelHeight:pixels.height,crop:ProfessionalNormalizedCrop(x:0,y:0,width:1,height:wideQuestion ? 0.5:1),altText:"合成闭合开关示意")
             let visual=ProfessionalQuestionVisual(id:"synthetic-visual",kind:"raster",raster:raster)
             let supplementCards=(1...13).map { index in RecallCard(id:"synthetic-supplement:card-\(index)",prompt:"合成补卡\(index)：判断前应怎样核对条件？",answer:"先检查适用条件，再核对输入和状态。") }
             let supplement=SupplementRecallGroup(id:"synthetic-supplement",title:"合成补充卡组",branchID:"synthetic-branch",recallCards:supplementCards)
@@ -474,7 +525,7 @@ import UIKit
             let path=root.appendingPathComponent("synthetic.xklcourse")
             try JSONEncoder().encode(course).write(to:path)
             target.importContent(path)
-            if ["question","answer","guide-only"].contains(selectedCase) {
+            if ["question","question-zoom","answer","guide-only"].contains(selectedCase) {
                 target.startQuestion(first.id,expectedCurrentToken:nil)
                 if selectedCase == "answer",let token=target.engine?.shown?.id { target.choose("yes",token:token) }
             }
@@ -497,10 +548,14 @@ import UIKit
 
 struct ProfessionalPriorityPreview: View {
     @StateObject private var fixture=ProfessionalPreviewFixture()
+    @State private var zoomAppeared=false
+    @State private var zoomWidth=0
+    @State private var zoomHeight=0
+    @State private var receiptReported=false
     var body: some View {
         NavigationStack {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
-                if ["question","answer","guide-only"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
+                if ["question","question-zoom","answer","guide-only"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
                 else if fixture.selectedCase == "sources" { ProfessionalSourcesView(store:fixture.store,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)) }
                 else if fixture.selectedCase == "source-image",let leaf=teaching.sourceLeaves?.first {
                     ProfessionalSourceLeafView(store:fixture.store,leaf:leaf,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true))
@@ -510,18 +565,24 @@ struct ProfessionalPriorityPreview: View {
                     RecallStudyView(subject:fixture.subject,bank:bank,teaching:teaching,baseDirectory:fixture.root)
                 } else { ProfessionalStudyPlanView(subject:fixture.subject,bank:bank,teaching:teaching,recallBaseDirectory:fixture.root) }
             }
-        }.onAppear {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(350))
-                guard criticalStateReady() else { print("PROFESSIONAL_PREVIEW_NOT_READY"); return }
-                writeReadyReceipt()
-                print("PROFESSIONAL_PREVIEW_RENDERED subject=\(fixture.subject.rawValue) case=\(fixture.selectedCase)")
-            }
+        }.environment(\.professionalQuestionZoomPreview,ProfessionalQuestionZoomPreview(autoOpen:fixture.selectedCase == "question-zoom",didAppear:{ width,height in zoomWidth=width; zoomHeight=height; zoomAppeared=true }))
+        .onAppear { if fixture.selectedCase != "question-zoom" { reportWhenReady() } }
+        .onChange(of:zoomAppeared) { _,shown in if shown && fixture.selectedCase == "question-zoom" { reportWhenReady() } }
+    }
+    private func reportWhenReady() {
+        guard !receiptReported else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !receiptReported,criticalStateReady() else { print("PROFESSIONAL_PREVIEW_NOT_READY"); return }
+            receiptReported=true
+            writeReadyReceipt()
+            print("PROFESSIONAL_PREVIEW_RENDERED subject=\(fixture.subject.rawValue) case=\(fixture.selectedCase)")
         }
     }
     private func criticalStateReady()->Bool {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
+        case "question-zoom": return zoomAppeared && zoomWidth == 1200 && zoomHeight == 220 && engine.shown != nil && engine.record.review == nil && !fixture.store.currentQuestionUsedCardHelp
         case "question", "guide-only":
             guard engine.shown != nil,engine.record.review == nil else { return false }
             if fixture.selectedCase == "guide-only" { return fixture.store.currentQuestionLinks?.primaryCardIDs.isEmpty == true && fixture.store.currentQuestionLinks?.supplementCardIDs.isEmpty == true && fixture.store.currentQuestionLinks?.guideConceptIDs.isEmpty == false }

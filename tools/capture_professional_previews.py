@@ -15,8 +15,19 @@ OUT = ROOT / "build/professional-previews"
 BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
 CASES = ("plan", "sources", "question", "answer", "recall", "guide-only",
-         "source-image", "supplement-mainline", "supplement-related")
+         "source-image", "supplement-mainline", "supplement-related", "question-zoom")
 CAPTURES = [(subject, case) for subject in SUBJECTS for case in CASES]
+
+
+def selected_cases(raw):
+    """Parse data only: exact fixture allowlist, no commands or shell expansion."""
+    if not raw.strip():
+        return CASES
+    cases = tuple(part.strip() for part in raw.split(","))
+    if (len(cases) > len(CASES) or len(set(cases)) != len(cases)
+            or any(case not in CASES for case in cases)):
+        raise ValueError("PROFESSIONAL_PREVIEW_CASES must be distinct comma-separated allowed fixture names")
+    return cases
 
 
 def run(*args, **kwargs):
@@ -98,6 +109,8 @@ def read_ready_receipt(container, receipt, capture_id, subject, case, launched_a
 
 
 def main():
+    cases = selected_cases(os.environ.get("PROFESSIONAL_PREVIEW_CASES", ""))
+    captures = [(subject, case) for subject in SUBJECTS for case in cases]
     if platform.system() != "Darwin":
         raise SystemExit("Native iOS Simulator capture requires macOS/Xcode; not verified on Windows")
     os.chdir(ROOT)
@@ -117,13 +130,14 @@ def main():
                 "suite": "professional", "synthetic_only": True, "readiness": "Per-launch atomic app tmp receipt after native production page appearance, critical synthetic store/image state validation and layout; console is diagnostic only",
                 "device": name, "device_type": kind,
                 "runtime": runtime_info, "simulator_workaround": workaround,
+                "requested_cases": list(cases), "requested_capture_count": len(captures),
                 "status": "incomplete", "fixtures": []}
     try:
         sim("boot", device)
         sim("bootstatus", device, "-b")
         sim("install", device, str(app))
         container = Path(sim("get_app_container", device, BUNDLE, "data").strip()).resolve()
-        for subject, case in CAPTURES:
+        for subject, case in captures:
             started = time.monotonic()
             readiness_timeout = 90 if case == "question" else 45
             log = OUT / f"{subject}-{case}.log"

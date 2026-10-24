@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      professional_cases:
+        description: Optional comma-separated preview case subset; blank runs all synthetic cases
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -70,6 +75,8 @@ jobs:
           assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
           PY
       - name: Capture native synthetic professional previews
+        env:
+          PROFESSIONAL_PREVIEW_CASES: ${{ inputs.professional_cases }}
         run: python3 tools/capture_professional_previews.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
