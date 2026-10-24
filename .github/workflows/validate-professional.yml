@@ -7,6 +7,11 @@ on:
         type: boolean
         required: false
         default: false
+      build_only:
+        description: Run only tests and Release build; reuse matching-source native previews
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
@@ -42,6 +47,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   preview:
+    if: ${{ !inputs.build_only }}
     runs-on: macos-15-intel
     timeout-minutes: 25
     steps:
