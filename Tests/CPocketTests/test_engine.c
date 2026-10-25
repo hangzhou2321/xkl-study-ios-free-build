@@ -289,7 +289,7 @@ static void test_rotation_undo_and_real_capacity(void) {
     xkl_engine_free(e);puts("PASS upgrade recovery from an exactly full legacy log, retaining the revealed answer and seven-stage recovery");
 }
 int main(int argc,char **argv) {
-    assert(argc==2);test_personal(argv[1]);test_reveal_undo();test_wrong_partial_resume();test_partial_recheck();test_long_term();test_snapshot_validation();test_log_sequence();test_calendar_rollover_preserves_task();
+    assert(argc==1 || argc==2);if(argc==2) test_personal(argv[1]);test_reveal_undo();test_wrong_partial_resume();test_partial_recheck();test_long_term();test_snapshot_validation();test_log_sequence();test_calendar_rollover_preserves_task();
     test_conservative_completion();test_conservative_exclusions();
     test_rotation_preserves_every_learning_transition();test_rotation_undo_and_real_capacity();
     puts("PASS all CPocket engine tests");return 0;

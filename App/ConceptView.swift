@@ -7,6 +7,7 @@ struct ProfessionalCoursesView: View {
     @ObservedObject var power: ConceptStore
     @Binding var subject: ConceptSubject
     @Binding var practicing: Bool
+    @Binding var recalling: Bool
     var onStart: () -> Void = {}
     var onOverlayChanged: (Bool) -> Void = { _ in }
 
@@ -14,6 +15,7 @@ struct ProfessionalCoursesView: View {
         VStack(spacing: 0) {
             Picker("专业课", selection: Binding(get: { subject }, set: {
                 practicing = false
+                recalling = false
                 subject = $0
             })) {
                 Text(ConceptSubject.computer.shortTitle).tag(ConceptSubject.computer)
@@ -23,7 +25,7 @@ struct ProfessionalCoursesView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
             ConceptView(store: subject == .computer ? computer : power,
-                        practicing: $practicing, onStart: onStart, onOverlayChanged: onOverlayChanged)
+                        practicing: $practicing, recalling: $recalling, onStart: onStart, onOverlayChanged: onOverlayChanged)
                 .id(subject.rawValue)
         }
     }
@@ -33,6 +35,7 @@ struct ConceptView: View {
     @ObservedObject var store: ConceptStore
     @State private var importing = false
     @Binding var practicing: Bool
+    @Binding var recalling: Bool
     var onStart: () -> Void = {}
     var onOverlayChanged: (Bool) -> Void = { _ in }
     @State private var exporting = false
@@ -50,52 +53,41 @@ struct ConceptView: View {
             Group {
                 if let engine = store.engine {
                     List {
-                        Section {
-                            Text(engine.bank.title).font(.headline)
-                            Text(engine.bank.scope).font(.footnote).foregroundStyle(.secondary)
-                            Text("主练 \(engine.activeConcepts.count) 个考点 · \(engine.activeQuestionCount) 道题")
-                            Text("累计已练 \(engine.record.progress.values.filter { !$0.usedQuestionIDs.isEmpty }.count) 个考点")
-                            if let scope = engine.bank.studyScope {
-                                Text(scope.title).font(.subheadline.weight(.medium))
-                                let parkedCount = engine.bank.concepts.reduce(0) { $0 + $1.questions.count } - engine.activeQuestionCount
-                                Text("另有 \(parkedCount) 道题已停用，原学习记录保留，不再进入新学或到期复习。")
+                        if let teaching = store.teaching, let plan = teaching.studyPlan {
+                            Section {
+                                Text("珞研讲义必学主线").font(.headline)
+                                Text("基础、强化一次、强化二次讲义；主卡和必要补卡自动接续。").font(.subheadline).foregroundStyle(.secondary)
+                                Text("共 \(plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }) 张 · 采用单词同款调度")
                                     .font(.footnote).foregroundStyle(.secondary)
-                                if let url = URL(string: scope.sourceReference), url.scheme == "https" {
-                                    Link("查看范围依据", destination: url).font(.footnote)
-                                } else {
-                                    Text(scope.sourceReference).font(.caption).foregroundStyle(.secondary)
-                                }
+                                Button { recalling = true; onStart() } label: {
+                                    Label("继续背卡", systemImage: "rectangle.on.rectangle")
+                                        .font(.headline).frame(maxWidth:.infinity,minHeight:42)
+                                }.buttonStyle(.borderedProminent).disabled(store.blocked)
+                                Text("回忆 → 翻答案 → 自评。中途离开会保存断点；做题检验可按需进行。").font(.footnote).foregroundStyle(.secondary)
                             }
-                            Stepper("本次新考点：\(newConceptLimit)", value: $newConceptLimit, in: 1...25)
-                                .disabled(engine.shown != nil || store.blocked)
-                            Text(engine.shown == nil ? "到期复习全部加入；新考点从少量开始，可按实际用时调整。" : "当前练习继续原队列；结束后可设置下次的新考点数量。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            Button(engine.shown == nil ? "开始练习" : "继续练习", systemImage: "play.fill") {
-                                if engine.shown == nil { store.start(newLimit: newConceptLimit) }
-                                if store.error == nil { practicing = true; onStart() }
-                            }
-                            .disabled(store.blocked)
-                            if store.teaching == nil {
-                                Text("当前题库还没有故事和例题。导入对应课程包后即可查看，原学习记录会保留。")
-                                    .font(.footnote).foregroundStyle(.secondary)
+                        } else {
+                            Section("背卡主线") {
+                                Text("请先导入带主线计划的最新版课程；已有练习记录保留。")
+                                Button("导入课程") { importing = true }
                             }
                         }
+                        Section("做题检验 · 可选") {
+                            NavigationLink("珞研原题与变式检验", destination: ProfessionalSourcesView(store: store))
+                            Text("隔一段时间再独立做题，检查能否组合运用；不要求逐题做完才继续背卡。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            if engine.shown != nil {
+                                NavigationLink("继续已保存的当前题", destination: ProfessionalSourcePracticeView(store:store))
+                            }
+                            NavigationLink("旧练习模式与记录") {
+                                List { legacyPracticeControls(engine) }.navigationTitle("旧练习模式")
+                            }.font(.subheadline)
+                        }
                         if let teaching = store.teaching {
-                            Section("主线与拓展") {
+                            Section("按需查看") {
                                 if teaching.studyPlan != nil {
-                                    NavigationLink("主线学习与拓展", destination: ProfessionalStudyPlanView(subject: store.subject, bank: engine.bank, teaching: teaching))
+                                    NavigationLink("拓展选学与学习范围", destination: ProfessionalStudyPlanView(subject:store.subject,bank:engine.bank,teaching:teaching,practiceStore:store))
                                 }
-                                NavigationLink("源题练习与资料索引", destination: ProfessionalSourcesView(store: store))
-                                NavigationLink {
-                                    RecallStudyView(subject: store.subject, bank: engine.bank, teaching: teaching)
-                                } label: { Label("背知识点 · 问答卡", systemImage: "rectangle.on.rectangle") }
-                                if !(teaching.recallGroups ?? []).isEmpty {
-                                    NavigationLink {
-                                        SupplementRecallGroupsView(subject: store.subject, bank: engine.bank, teaching: teaching)
-                                    } label: { Label("补充知识卡 · 按考纲主题", systemImage: "rectangle.stack.badge.plus") }
-                                }
-                                Text("先回忆，翻答案后自评记住或没记住；卡片按间隔复习，自评与原题成绩分别保存。")
-                                    .font(.footnote).foregroundStyle(.secondary)
+                                Text("原题和变式成绩单独记录；背卡不会自动记作做题正确。").font(.footnote).foregroundStyle(.secondary)
                             }
                         }
                         Section("理解知识") {
@@ -113,13 +105,6 @@ struct ConceptView: View {
                             Text("按章节查看知识联系；每次讲清一步，先判断、再解释，最后回忆核对。")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
-                        Section("练习方式") {
-                            Text("每次默认 3 个新考点，可选 1—25 个；到期复习全部加入。答完看解析，后续改用同考点的另一道题。")
-                            Text("新考点可先看分步讲解，再回到原题；旧课程仍可展开故事。讲解小检查、回忆核对和选填错因不会改变客观判分。")
-                            Text("答错后最多补做一道未做过的变式；至少隔开 3 个其他考点，题量不足就留到明天。")
-                            Text("已答过的原题不会自动重刷。用完变式会显示待补题，不算已掌握。")
-                            Text("这是独立的专业课练习，不计入公共题库的 30 分钟预算。")
-                        }.font(.footnote)
                         if !engine.exhausted.isEmpty {
                             Section("待补充变式（\(engine.exhausted.count)）") {
                                 ForEach(engine.exhausted) { Text($0.title) }
@@ -170,6 +155,13 @@ struct ConceptView: View {
             }
             .navigationTitle(store.subject.title)
             .navigationDestination(isPresented: $practicing) { practice }
+            .navigationDestination(isPresented: $recalling) {
+                if let engine=store.engine, let teaching=store.teaching, teaching.studyPlan != nil {
+                    ProfessionalRecallView(subject:store.subject,bank:engine.bank,teaching:teaching,practiceStore:store)
+                } else {
+                    ContentUnavailableView("背卡主线暂不可用",systemImage:"rectangle.on.rectangle",description:Text("返回课程首页，导入带主线计划的最新版课程。"))
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -205,6 +197,46 @@ struct ConceptView: View {
         .onDisappear { onOverlayChanged(guidancePresented) }
     }
 
+    @ViewBuilder private func legacyPracticeControls(_ engine:ConceptEngine)->some View {
+        Section("旧练习队列与记录") {
+            Text(engine.bank.title).font(.headline)
+            Text(engine.bank.scope).font(.footnote).foregroundStyle(.secondary)
+            Text("主练 \(engine.activeConcepts.count) 个考点 · \(engine.activeQuestionCount) 道题")
+            Text("累计已练 \(engine.record.progress.values.filter { !$0.usedQuestionIDs.isEmpty }.count) 个考点")
+            if let scope = engine.bank.studyScope {
+                Text(scope.title).font(.subheadline.weight(.medium))
+                let parkedCount = engine.bank.concepts.reduce(0) { $0 + $1.questions.count } - engine.activeQuestionCount
+                Text("另有 \(parkedCount) 道题已停用，原学习记录保留，不再进入新学或到期复习。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if let url = URL(string: scope.sourceReference), url.scheme == "https" {
+                    Link("查看范围依据", destination: url).font(.footnote)
+                } else {
+                    Text(scope.sourceReference).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Stepper("本次新考点：\(newConceptLimit)", value: $newConceptLimit, in: 1...25)
+                .disabled(engine.shown != nil || store.blocked)
+            Text(engine.shown == nil ? "到期复习全部加入；新考点从少量开始，可按实际用时调整。" : "当前练习继续原队列；结束后可设置下次的新考点数量。")
+                .font(.footnote).foregroundStyle(.secondary)
+            Button(engine.shown == nil ? "开始练习" : "继续练习", systemImage: "play.fill") {
+                if engine.shown == nil { store.start(newLimit: newConceptLimit) }
+                if store.error == nil { practicing = true; onStart() }
+            }
+            .disabled(store.blocked)
+            if store.teaching == nil {
+                Text("当前题库还没有故事和例题。导入对应课程包后即可查看，原学习记录会保留。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        Section("练习方式") {
+            Text("每次默认 3 个新考点，可选 1—25 个；到期复习全部加入。答完看解析，后续改用同考点的另一道题。")
+            Text("新考点可先看分步讲解，再回到原题；旧课程仍可展开故事。讲解小检查、回忆核对和选填错因不会改变客观判分。")
+            Text("答错后最多补做一道未做过的变式；至少隔开 3 个其他考点，题量不足就留到明天。")
+            Text("已答过的原题不会自动重刷。用完变式会显示待补题，不算已掌握。")
+            Text("这是独立的专业课练习，不计入公共题库的 30 分钟预算。")
+        }.font(.footnote)
+    }
+
     @ViewBuilder private var practice: some View {
         if let e = store.engine, let c = e.concept, let q = e.question, let p = e.shown {
             ScrollView {
@@ -224,6 +256,9 @@ struct ConceptView: View {
                     }
                     Text(q.sourceLocation).font(.subheadline).foregroundStyle(.secondary)
                     Text(q.prompt).font(.system(size:26)).textSelection(.enabled)
+                    if let note=store.teaching?.questionPracticeNotes?.first(where: { $0.questionID == q.id }) {
+                        ProfessionalQuestionPracticeNoteView(store:store,note:note)
+                    }
                     if let presentation=store.teaching?.questionPresentations?.first(where: { $0.questionID == q.id }) {
                         ForEach(presentation.beforeAnswer) { visual in ProfessionalVisualView(visual:visual,onFailure:{ questionImageFailure=$0 }) }
                     }

@@ -46,6 +46,17 @@ xkl_engine_t *xkl_engine_seed(const uint8_t *image, size_t length,
  * completion sentinels, not user answers and never part of a learning task.
  * The caller must bind this snapshot to its own content hash and ID mapping. */
 xkl_engine_t *xkl_engine_blank(uint32_t active_count, const uint8_t *stream16);
+/* One-time migration into an independent collection, never an English-state
+ * update. Copy active_count validated packed cards in the caller's permanent
+ * ID order; preserve every packed value and emit no historical events.
+ * pending_word may name one unfinished, ungraded legacy presentation, or be
+ * XKL_NO_WORD. It becomes a one-card bridge task without changing its due date.
+ * The next normal task uses the unchanged scheduler. A familiar/completed or
+ * out-of-range pending word is rejected. The caller retains the original
+ * archives and records the mapping/provenance before publishing this state. */
+xkl_engine_t *xkl_engine_import_cards(uint32_t active_count,
+    const uint32_t *packed_cards, uint32_t day, uint32_t pending_word,
+    const uint8_t *stream16);
 /* Restore preserves presentation state for local atomic-save rollback.
  * On app launch, clock discontinuity, or cross-device handoff call start before
  * learning: it logs a new session and hides the old answer. */

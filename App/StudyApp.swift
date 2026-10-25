@@ -67,6 +67,7 @@ struct RootView: View {
     @State private var selectedTab = 5
     @State private var examPracticing = false
     @State private var professionalPracticing = false
+    @State private var professionalRecalling = false
     @State private var examOverlay = false
     @State private var professionalOverlay = false
     @State private var observedCalendarDay: Date?
@@ -90,11 +91,11 @@ struct RootView: View {
                 .tabItem { Label("题库", systemImage: "list.bullet.clipboard") }
                 .tag(3)
             ProfessionalCoursesView(computer: concepts, power: power, subject: $subject,
-                                    practicing: $professionalPracticing,
+                                    practicing: $professionalPracticing, recalling: $professionalRecalling,
                                     onStart: { began(subject == .computer ? .computer : .power) },
                                     onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() })
                 .disabled(flow.state.activeArea == (subject == .computer ? StudyArea.computer : .power)
-                          && flow.state.isPaused && professionalPracticing)
+                          && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
             MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6)
@@ -114,6 +115,7 @@ struct RootView: View {
         .onChange(of: importing) { _, _ in trackStudyVisibility() }
         .onChange(of: examPracticing) { _, _ in trackStudyVisibility() }
         .onChange(of: professionalPracticing) { _, _ in trackStudyVisibility() }
+        .onChange(of: professionalRecalling) { _, _ in trackStudyVisibility() }
         .onChange(of: subject) { _, _ in trackStudyVisibility() }
         .onChange(of: currentPracticeArea) { _, _ in trackStudyVisibility() }
         .onReceive(clock) { _ in
@@ -190,6 +192,7 @@ struct RootView: View {
     private var currentPracticeArea: StudyArea? {
         if selectedTab == 0, store.sessionStarted, store.currentWord != nil { return .vocabulary }
         if selectedTab == 3, examPracticing, exams.currentQuestion != nil { return .publicQuestions }
+        if selectedTab == 4, professionalRecalling { return subject == .computer ? .computer : .power }
         if selectedTab == 4, professionalPracticing {
             let selected = subject == .computer ? concepts : power
             if selected.engine?.shown != nil { return subject == .computer ? .computer : .power }
@@ -219,10 +222,9 @@ struct RootView: View {
         case .computer, .power:
             let target = area == .computer ? concepts : power
             subject = area == .computer ? .computer : .power
-            guard target.engine != nil, !target.blocked else { selectedTab = 4; return }
-            target.start(newLimit: mode == .fiveMinutes ? 1 : 3)
-            guard target.error == nil else { selectedTab = 4; return }
-            professionalPracticing = true
+            guard target.engine != nil, target.teaching?.studyPlan != nil, !target.blocked else { selectedTab = 4; return }
+            professionalPracticing = false
+            professionalRecalling = true
         }
         flow.begin(area: area, mode: mode)
         guard flow.error == nil, flow.state.activeArea == area else { selectedTab = 5; return }

@@ -1,6 +1,36 @@
 import Foundation
 import StudyCore
 
+/// A content-bound quarantine. Original questions, answers and past attempts stay intact.
+struct ProfessionalQuestionPracticeNote: Codable, Equatable {
+    let questionID: String
+    let sourceQuestionDigest: String
+    let status: String
+    let reason: String
+    let sourceRef: String
+    let replacementQuestionIDs: [String]
+
+    static func validateAll(_ notes: [Self], bank: ConceptBank) throws {
+        let questions = bank.concepts.flatMap(\.questions)
+        let allIDs = Set(questions.map(\.id))
+        guard notes.count <= 5000, Set(notes.map(\.questionID)).count == notes.count else {
+            throw ExamError.invalid("原题校勘提示重复或过多。")
+        }
+        for note in notes {
+            guard let question = questions.first(where: { $0.id == note.questionID }),
+                  question.professionalDigest == note.sourceQuestionDigest,
+                  note.status == "hold", !note.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  note.reason.count <= 2000, !note.sourceRef.isEmpty, note.sourceRef.count <= 2000,
+                  note.replacementQuestionIDs.count <= 12,
+                  Set(note.replacementQuestionIDs).count == note.replacementQuestionIDs.count,
+                  !note.replacementQuestionIDs.contains(note.questionID),
+                  Set(note.replacementQuestionIDs).isSubset(of: allIDs) else {
+                throw ExamError.invalid("原题校勘提示与原题摘要或替代题不一致。")
+            }
+        }
+    }
+}
+
 struct ProfessionalSupplementSelection: Codable, Equatable {
     let groupID: String
     let mainlineCardIDs: [String]

@@ -40,7 +40,7 @@ struct StudyHomeView: View {
                         Button {
                             launch(selectedArea, continueMode)
                         } label: {
-                            Label(hasSavedPosition(selectedArea) ? "接着学" : "开始学习", systemImage: "play.fill")
+                            Label(selectedArea == .computer || selectedArea == .power ? "继续背卡" : (hasSavedPosition(selectedArea) ? "接着学" : "开始学习"), systemImage: "play.fill")
                                 .frame(maxWidth: .infinity, minHeight: 42)
                         }.buttonStyle(.borderedProminent).disabled(!available(selectedArea))
                         Button {
@@ -58,7 +58,7 @@ struct StudyHomeView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("保留原来的学习节奏").font(.headline)
-                        Text("单词每课仍是 25 个新词，允许分段完成；到期复习不设总量上限。专业课短任务最多加入 1 个新考点，已有队列继续原安排。")
+                        Text("单词每课仍是 25 个新词，允许分段完成；到期复习不设总量上限。计算机与电力系统进入必学背卡主线，主卡和必要补卡自动衔接。")
                         Text("暂停只保存断点，不算答对、不推迟到期，也不清空剩余任务。")
                     }.font(.subheadline).foregroundStyle(.secondary)
 
@@ -89,8 +89,8 @@ struct StudyHomeView: View {
         switch area {
         case .vocabulary: return store.deck != nil && store.canLearn
         case .publicQuestions: return exams.bank != nil && !exams.storageBlocked
-        case .computer: return computer.engine != nil && !computer.blocked
-        case .power: return power.engine != nil && !power.blocked
+        case .computer: return computer.engine != nil && computer.teaching?.studyPlan != nil && !computer.blocked
+        case .power: return power.engine != nil && power.teaching?.studyPlan != nil && !power.blocked
         }
     }
 
@@ -98,8 +98,8 @@ struct StudyHomeView: View {
         switch area {
         case .vocabulary: return store.info.has_task != 0
         case .publicQuestions: return exams.currentQuestion != nil || exams.isShowingResult
-        case .computer: return computer.engine?.shown != nil
-        case .power: return power.engine?.shown != nil
+        case .computer: return computer.teaching?.studyPlan != nil
+        case .power: return power.teaching?.studyPlan != nil
         }
     }
 
@@ -116,11 +116,7 @@ struct StudyHomeView: View {
             if exams.isShowingResult { return "继续查看刚才的答案与解析" }
             return exams.currentQuestion != nil ? "继续刚才的题，已选选项保留" : "先复习，再做新题"
         case .computer, .power:
-            let target = area == .computer ? computer : power
-            if let engine = target.engine, let concept = engine.concept {
-                return "\(engine.record.review == nil ? "继续练习" : "继续看解析") · \(concept.title)"
-            }
-            return "到期考点优先，同考点换题"
+            return "继续必学背卡 · 自动保存与续学"
         }
     }
 
@@ -136,11 +132,9 @@ struct StudyHomeView: View {
                 : "今天到期 \(exams.dueTodayCount) 题，开始后优先复习"
         case .computer, .power:
             let target = area == .computer ? computer : power
-            guard let engine = target.engine else { return "" }
-            let count = engine.record.queue.filter {
-                !(engine.record.progress[$0]?.usedQuestionIDs.isEmpty ?? true)
-            }.count
-            return "已排入复习 \(count) 个考点，继续换题练习"
+            guard let plan = target.teaching?.studyPlan else { return "" }
+            let count = plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }
+            return "必学 \(count) 张；进入后显示已学、到期和本轮进度"
         }
     }
 }

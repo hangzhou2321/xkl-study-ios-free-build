@@ -140,6 +140,47 @@ xkl_engine_t *xkl_engine_blank(uint32_t active_count, const uint8_t *stream16) {
     return e;
 }
 
+xkl_engine_t *xkl_engine_import_cards(uint32_t active_count,
+    const uint32_t *packed_cards, uint32_t day, uint32_t pending_word,
+    const uint8_t *stream16) {
+    if (!active_count || active_count > XKL_WORD_COUNT || !packed_cards ||
+        day < 18000u || day > 50000u ||
+        (pending_word != XKL_NO_WORD && pending_word >= active_count)) return NULL;
+    for (uint32_t i = 0; i < active_count; ++i)
+        if (!pocket_word_card_valid(packed_cards[i])) return NULL;
+    if (pending_word != XKL_NO_WORD) {
+        pocket_card_t pending = pocket_unpack_card(packed_cards[pending_word]);
+        if (pending.familiar || (pending.learned && !pending.level)) return NULL;
+    }
+    xkl_engine_t *e = xkl_engine_blank(active_count, stream16);
+    if (!e) return NULL;
+    memcpy(e->cards, packed_cards, active_count * sizeof(*packed_cards));
+    pocket_word_body_t *b = &e->state.body;
+    b->day = b->selection_day = day;
+    if (pending_word != XKL_NO_WORD) {
+        /* This is an explicitly imported checkpoint, not a synthetic answer.
+         * A single outstanding presentation is finished before the ordinary
+         * task builder admits the remaining due cards and next lesson. */
+        pocket_card_t pending = pocket_unpack_card(packed_cards[pending_word]);
+        b->active[0] = (pocket_word_cached_t){packed_cards[pending_word],
+            (uint16_t)pending_word,
+            (packed_cards[pending_word] & POCKET_WORD_PARTIAL_PENDING) ? 2u : 0u, 1};
+        b->queue[0] = (pocket_token_t){0, 0};
+        b->length = 1;
+        if (pending.learned) {
+            b->review_total = b->review_loaded = 1;
+            b->review_cursor = (uint16_t)(pending_word + 1u);
+        } else {
+            b->new_total = b->new_loaded = 1;
+            b->lesson = (uint16_t)(pending_word / POCKET_LESSON_SIZE + 1u);
+            b->new_cursor = b->new_end = (uint16_t)(pending_word + 1u);
+        }
+    }
+    pocket_word_seal(&e->state);
+    if (!state_consistent(e)) { xkl_engine_free(e); return NULL; }
+    return e;
+}
+
 /* Each checkpoint scalar has an explicit wire width; no host padding enters
  * the snapshot. Layout matches v8 so its original CRC is retained verbatim. */
 typedef struct { uint8_t *out; const uint8_t *in; size_t at; } codec_t;

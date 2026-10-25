@@ -12,52 +12,30 @@ struct ProfessionalRecallSelection {
 struct ProfessionalStudyPlanView: View {
     let subject: ConceptSubject; let bank: ConceptBank; let teaching: ConceptTeaching
     var recallBaseDirectory: URL? = nil
+    var practiceStore: ConceptStore? = nil
     var body: some View {
         List {
-            if teaching.cardPriorities != nil {
-                Section { Text("标签表示当前讲义主线的学习优先级，不是真题考频，也不改变复习安排。").font(.footnote).foregroundStyle(.secondary) }
-            }
             if let plan = teaching.studyPlan {
-                section("主线学习", ids: plan.mainlineCardIDs, groups: plan.mainlineSupplementGroupIDs, selection: "mainline", plan: plan)
-                section("拓展与相关基础", ids: plan.relatedCardIDs, groups: plan.relatedSupplementGroupIDs, selection: "related", plan: plan)
-                Section("完整档案") {
-                    NavigationLink("恢复全部旧卡范围") {
-                        RecallStudyView(subject: subject, bank: bank, teaching: teaching, planSelection: ProfessionalRecallSelection(id: selectionIdentifier(plan:plan,scope:"all"), title: "全部旧卡", cardIDs: plan.mainlineCardIDs + plan.relatedCardIDs, deckSHA256: plan.basePrimaryDeckSHA256), baseDirectory: recallBaseDirectory)
-                    }
-                    Text("主线和拓展复用原卡与原成绩。新增补充卡独立记录；源题作答不会替卡片评价为记住。").font(.footnote).foregroundStyle(.secondary)
+                Section("当前必学主线") {
+                    Text("基础、强化一次、强化二次讲义；以能独立完成珞研基础题与强化题为目标。")
+                    Text("\(plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }) 张卡自动衔接，无需按原卡包或补卡包分别学习。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Text("从课程首页的“继续背卡”接着学。拓展卡不会进入必学队列。")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-            } else { Text("本课程尚无主线计划，原完整课程继续保留。") }
-        }.navigationTitle("主线与拓展")
-    }
-    private func section(_ title: String, ids: [String], groups: [String], selection: String, plan: ProfessionalStudyPlan) -> some View {
-        Section(title) {
-            Text("本范围旧卡 \(Set(ids).count) 张 · 补充卡 \(supplementCount(groups:groups, scope:selection, plan:plan)) 张")
-                .font(.subheadline).foregroundStyle(.secondary)
-            if !ids.isEmpty {
-                NavigationLink("\(title) · 原知识卡") {
-                    RecallStudyView(subject: subject, bank: bank, teaching: teaching, planSelection: ProfessionalRecallSelection(id: selectionIdentifier(plan:plan,scope:selection), title: title, cardIDs: ids, deckSHA256: plan.basePrimaryDeckSHA256), baseDirectory: recallBaseDirectory)
-                }
-            }
-            ForEach((teaching.recallGroups ?? []).filter { groups.contains($0.id) }) { group in
-                let selectedCards = supplementIDs(groupID:group.id, scope:selection, plan:plan)
-                if let fullHash = try? RecallDeck.makeSupplement(subject:subject,bank:bank,group:group).hash {
-                    NavigationLink("\(group.title) · 本范围 \(selectedCards.count) / 完整 \(group.recallCards.count) 张") {
-                        RecallStudyView(subject: subject, bank: bank, teaching: teaching, supplementGroup: group,
-                            planSelection:ProfessionalRecallSelection(id:selectionIdentifier(plan:plan,scope:selection,groupID:group.id),title:title+" · "+group.title,cardIDs:selectedCards,deckSHA256:fullHash),baseDirectory:recallBaseDirectory)
+                Section("拓展选学") {
+                    Text("不影响必学进度，按需要再学。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    NavigationLink("进入拓展选学 · \(plan.relatedCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.relatedCardIDs.count }) 张") {
+                        ProfessionalRecallView(subject:subject,bank:bank,teaching:teaching,scope:.related,baseDirectory:recallBaseDirectory,practiceStore:practiceStore)
                     }
                 }
-            }
-        }
-    }
-    private func selectionIdentifier(plan:ProfessionalStudyPlan,scope:String,groupID:String="primary")->String {
-        ProfessionalRecallSelection.identifier(planID:plan.id,scope:scope,groupID:groupID)
-    }
-    private func supplementIDs(groupID:String, scope:String, plan:ProfessionalStudyPlan)->[String] {
-        guard let partition=plan.supplementSelections.first(where: { $0.groupID == groupID }) else { return [] }
-        return scope == "mainline" ? partition.mainlineCardIDs : partition.relatedCardIDs
-    }
-    private func supplementCount(groups:[String],scope:String,plan:ProfessionalStudyPlan)->Int {
-        Set(groups.flatMap { supplementIDs(groupID:$0,scope:scope,plan:plan) }).count
+                Section("记录与学习优先级") {
+                    Text("原卡和题目 ID 保持；旧背卡记录先备份，再迁移到独立的单词同款调度。导出位于背卡页右上角，包含旧档案。")
+                    Text("优先／常规／拓展表示学习优先级，不是真题考频。卡片自评与原题作答分别保存。")
+                }.font(.footnote).foregroundStyle(.secondary)
+            } else { Text("本课程尚无主线计划，请导入最新版课程。原记录保留。") }
+        }.navigationTitle("拓展与学习范围")
     }
 }
 
@@ -334,18 +312,25 @@ struct ProfessionalSourcesView: View {
 struct ProfessionalSourceStartView: View {
     @ObservedObject var store: ConceptStore
     let question: ConceptQuestion
+    var exposedCardID: String? = nil
+    var returnToCards: (() -> Void)? = nil
     @State private var entered = false
     var body: some View {
         Group {
-            if entered { ProfessionalSourcePracticeView(store: store) }
+            if entered { ProfessionalSourcePracticeView(store:store,exposedCardID:exposedCardID,returnToCards:returnToCards) }
             else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         if let error=store.error { Text(error).foregroundStyle(.red) }
                         Text(question.sourceLocation).font(.subheadline).foregroundStyle(.secondary)
                         Text(question.prompt).font(.system(size: 26))
+                        if let note=store.teaching?.questionPracticeNotes?.first(where: { $0.questionID == question.id }) {
+                            ProfessionalQuestionPracticeNoteView(store:store,note:note,exposedCardID:exposedCardID,returnToCards:returnToCards)
+                        }
                         if let reason = store.sourceQuestionAvailability(question.id) {
-                            Text(reason).foregroundStyle(.secondary)
+                            if store.teaching?.questionPracticeNotes?.contains(where: { $0.questionID == question.id }) != true {
+                                Text(reason).foregroundStyle(.secondary)
+                            }
                             if store.engine?.shown != nil { Button("继续当前题") { entered = true } }
                             if let history=try? store.sourceQuestionHistory(question.id), !history.isEmpty {
                                 Text("已保存 \(history.count) 次历史作答，不重复记分。").font(.footnote)
@@ -355,13 +340,43 @@ struct ProfessionalSourceStartView: View {
                             let captured = store.engine?.shown?.id
                             Button("做这道题") {
                                 store.startQuestion(question.id, expectedCurrentToken: captured)
-                                if store.error == nil && store.engine?.question?.id == question.id { entered = true }
+                                guard store.error == nil, store.engine?.question?.id == question.id else { return }
+                                if let exposedCardID, let token=store.engine?.shown?.id {
+                                    guard store.recordRecallCardExposure(cardID:exposedCardID,token:token) else { return }
+                                }
+                                entered = true
                             }.buttonStyle(.borderedProminent).disabled(store.blocked)
                         }
                     }.padding(22)
                 }
             }
         }.navigationTitle("题目详情")
+    }
+}
+
+/// Display-only editorial notes; the ConceptStore independently enforces holds.
+struct ProfessionalQuestionPracticeNoteView:View {
+    @ObservedObject var store:ConceptStore
+    let note:ProfessionalQuestionPracticeNote
+    var exposedCardID:String?=nil
+    var returnToCards:(()->Void)?=nil
+    var body:some View {
+        VStack(alignment:.leading,spacing:10) {
+            Label("此题暂缓判分",systemImage:"text.badge.exclamationmark").font(.headline).foregroundStyle(.orange)
+            Text(note.reason).textSelection(.enabled)
+            Text(note.sourceRef).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            ForEach((store.engine?.bank.concepts.flatMap(\.questions) ?? []).filter { note.replacementQuestionIDs.contains($0.id) }) { replacement in
+                NavigationLink {
+                    ProfessionalSourceStartView(store:store,question:replacement,exposedCardID:exposedCardID,returnToCards:returnToCards)
+                } label: {
+                    VStack(alignment:.leading,spacing:4) {
+                        Text("可改做这道已核验题")
+                        Text(replacement.prompt).font(.subheadline).lineLimit(2)
+                    }
+                }
+            }
+            Text("旧作答与原题内容保留；校勘未完成前不新增本题成绩。").font(.footnote).foregroundStyle(.secondary)
+        }.padding(14).background(Color.orange.opacity(0.08),in:RoundedRectangle(cornerRadius:12))
     }
 }
 
@@ -479,7 +494,13 @@ private struct ProfessionalSourceLeafView: View {
 
 struct ProfessionalSourcePracticeView: View {
     @ObservedObject var store: ConceptStore
+    var exposedCardID:String?=nil
+    var returnToCards: (() -> Void)? = nil
     @State private var imageFailure: String?
+    private var exposurePending:Bool {
+        guard let exposedCardID,store.engine?.record.review == nil,let links=store.currentQuestionLinks else { return false }
+        return (links.primaryCardIDs.contains(exposedCardID) || links.supplementCardIDs.contains(exposedCardID)) && !store.currentQuestionUsedCardHelp
+    }
     var body: some View {
         Group {
             if let engine=store.engine, let question=engine.question, let shown=engine.shown {
@@ -489,13 +510,16 @@ struct ProfessionalSourcePracticeView: View {
                         Text(question.type.title).font(.subheadline).foregroundStyle(.secondary)
                         Text(question.sourceLocation).font(.subheadline).foregroundStyle(.secondary)
                         Text(question.prompt).font(.system(size: 26)).textSelection(.enabled)
+                        if let note=store.teaching?.questionPracticeNotes?.first(where: { $0.questionID == question.id }) {
+                            ProfessionalQuestionPracticeNoteView(store:store,note:note,exposedCardID:exposedCardID,returnToCards:returnToCards)
+                        }
                         if let presentation=store.teaching?.questionPresentations?.first(where: { $0.questionID == question.id }) {
                             ForEach(presentation.beforeAnswer) { visual in ProfessionalVisualView(visual:visual,onFailure:{ imageFailure=$0 }) }
                         }
                         ForEach(shown.order, id: \.self) { id in
                             if let option=question.options.first(where: { $0.id == id }) {
                                 Button {
-                                    guard store.engine?.shown?.id == shown.id, imageFailure == nil, store.currentQuestionPracticeBlockedReason == nil else { return }
+                                    guard store.engine?.shown?.id == shown.id, imageFailure == nil, !exposurePending, store.currentQuestionPracticeBlockedReason == nil else { return }
                                     store.choose(id,token:shown.id)
                                 } label: {
                                     HStack(alignment:.top) {
@@ -503,7 +527,7 @@ struct ProfessionalSourcePracticeView: View {
                                         Text(ExamPresentation.label(id,in:shown.order)).bold()
                                         Text(option.text).frame(maxWidth:.infinity,alignment:.leading)
                                     }.font(.system(size:24)).padding().background(.quaternary,in:RoundedRectangle(cornerRadius:12))
-                                }.buttonStyle(.plain).disabled(engine.record.review != nil || store.blocked || imageFailure != nil || store.currentQuestionPracticeBlockedReason != nil)
+                                }.buttonStyle(.plain).disabled(engine.record.review != nil || store.blocked || imageFailure != nil || exposurePending || store.currentQuestionPracticeBlockedReason != nil)
                             }
                         }
                         if let review=engine.record.review {
@@ -524,12 +548,19 @@ struct ProfessionalSourcePracticeView: View {
                         if let reason=store.currentQuestionPracticeBlockedReason { Text(reason).foregroundStyle(.secondary) }
                     }.padding(22).frame(maxWidth:760).frame(maxWidth:.infinity)
                 }.id(shown.id).onChange(of:shown.id) { _,_ in imageFailure=nil }
+                .task(id:shown.id) {
+                    if let exposedCardID { _ = store.recordRecallCardExposure(cardID:exposedCardID,token:shown.id) }
+                }
                 .safeAreaInset(edge:.bottom) {
                     if engine.record.review != nil {
-                        Button("完成本题，继续队列") { guard store.engine?.shown?.id == shown.id else { return }; store.next(token:shown.id) }.buttonStyle(.borderedProminent).padding().frame(maxWidth:.infinity).background(.bar).disabled(store.blocked)
+                        Button(returnToCards == nil ? "完成本题，继续队列" : "完成检验，返回背卡") {
+                            guard store.engine?.shown?.id == shown.id else { return }
+                            store.next(token:shown.id)
+                            if store.error == nil { returnToCards?() }
+                        }.buttonStyle(.borderedProminent).padding().frame(maxWidth:.infinity).background(.bar).disabled(store.blocked)
                     } else if engine.record.review == nil && question.type == .multiple {
-                        Button("提交答案") { guard store.engine?.shown?.id == shown.id, imageFailure == nil, store.currentQuestionPracticeBlockedReason == nil else { return }; store.submit(token:shown.id) }
-                            .buttonStyle(.borderedProminent).padding().frame(maxWidth:.infinity).background(.bar).disabled(shown.selected.isEmpty || store.blocked || imageFailure != nil || store.currentQuestionPracticeBlockedReason != nil)
+                        Button("提交答案") { guard store.engine?.shown?.id == shown.id, imageFailure == nil, !exposurePending, store.currentQuestionPracticeBlockedReason == nil else { return }; store.submit(token:shown.id) }
+                            .buttonStyle(.borderedProminent).padding().frame(maxWidth:.infinity).background(.bar).disabled(shown.selected.isEmpty || store.blocked || imageFailure != nil || exposurePending || store.currentQuestionPracticeBlockedReason != nil)
                     }
                 }
             } else { ContentUnavailableView("暂无当前题",systemImage:"checkmark.circle",description:Text("回到资料页选择一题完整核验题。")) }
@@ -548,13 +579,18 @@ import UIKit
     let selectedCase: String
     var recallPreviewSelection: ProfessionalRecallSelection?
     var recallPreviewGroup: SupplementRecallGroup?
+    var expectedUnifiedCardID:String?
+    var expectedUnifiedToken:UUID?
+    var expectedUnifiedRevealed=false
+    var expectedUnifiedAttempts=0
     init() {
         let args=ProcessInfo.processInfo.arguments
         func value(_ key:String)->String? { guard let i=args.firstIndex(of:key),i+1<args.count else { return nil }; return args[i+1] }
         subject=value("--professional-subject") == "power" ? .power:.computer
         selectedCase=value("--professional-case") ?? "plan"
-        let groupingPreview=["source-groups","source-groups-learned"].contains(selectedCase)
-        let priorityPreview=["card-priority-front","card-priority-sheet"].contains(selectedCase)
+        let unifiedPreview=selectedCase.hasPrefix("unified-")
+        let groupingPreview=["source-groups","source-groups-learned"].contains(selectedCase) || unifiedPreview
+        let priorityPreview=["card-priority-front","card-priority-sheet"].contains(selectedCase) || unifiedPreview
         root=FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-professional-"+UUID().uuidString,isDirectory:true)
         let target=ConceptStore(subject:subject,baseDirectory:root)
         do {
@@ -657,6 +693,21 @@ import UIKit
                 precondition(!recall.blocked && recall.error == nil && recall.engine?.selectedTotal == selected.count,"Synthetic supplement selection failed")
                 recallPreviewGroup=supplement; recallPreviewSelection=selection
             }
+            if unifiedPreview, selectedCase != "unified-home" {
+                let scope:ProfessionalRecallScope=selectedCase == "unified-related" ? .related:.mainline
+                let unified=ProfessionalRecallStore(subject:subject,bank:bank,teaching:teaching,scope:scope,baseDirectory:root)
+                unified.start()
+                if ["unified-answer","unified-resume"].contains(selectedCase),let token=unified.engine?.record.presentation?.id { unified.reveal(token:token) }
+                if selectedCase == "unified-resume",let token=unified.engine?.record.presentation?.id {
+                    unified.grade(remembered:false,token:token)
+                    if let next=unified.engine?.record.presentation?.id { unified.reveal(token:next) }
+                }
+                precondition(!unified.blocked && unified.error == nil && unified.engine?.currentItem != nil,"Unified synthetic fixture failed")
+                expectedUnifiedCardID=unified.engine?.currentItem?.id
+                expectedUnifiedToken=unified.engine?.record.presentation?.id
+                expectedUnifiedRevealed=unified.engine?.record.presentation?.revealed ?? false
+                expectedUnifiedAttempts=unified.engine?.record.attempts.count ?? 0
+            }
             precondition(!target.blocked && target.error == nil && target.engine != nil && target.teaching != nil,"Synthetic professional fixture failed: \(target.error ?? "missing model")")
         } catch { fatalError("Synthetic professional fixture failed: \(error)") }
         store=target
@@ -670,10 +721,17 @@ struct ProfessionalPriorityPreview: View {
     @State private var zoomHeight=0
     @State private var receiptReported=false
     @State private var priorityCardVisible:String?
+    @State private var unifiedRendered:ProfessionalRecallPreviewObservation?
     var body: some View {
         NavigationStack {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
-                if ["question","question-zoom","answer","guide-only","card-priority-sheet"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
+                if fixture.selectedCase == "unified-home" {
+                    ConceptView(store:fixture.store,practicing:.constant(false),recalling:.constant(false))
+                } else if fixture.selectedCase.hasPrefix("unified-") {
+                    ProfessionalRecallView(subject:fixture.subject,bank:bank,teaching:teaching,
+                        scope:fixture.selectedCase == "unified-related" ? .related:.mainline,
+                        baseDirectory:fixture.root,practiceStore:fixture.store)
+                } else if ["question","question-zoom","answer","guide-only","card-priority-sheet"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
                 else if ["sources","source-groups","source-groups-learned"].contains(fixture.selectedCase) { ProfessionalSourcesView(store:fixture.store,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)) }
                 else if fixture.selectedCase == "source-image",let leaf=teaching.sourceLeaves?.first {
                     ProfessionalSourceLeafView(store:fixture.store,leaf:leaf,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true))
@@ -685,7 +743,9 @@ struct ProfessionalPriorityPreview: View {
             }
         }.environment(\.professionalQuestionZoomPreview,ProfessionalQuestionZoomPreview(autoOpen:fixture.selectedCase == "question-zoom",didAppear:{ width,height in zoomWidth=width; zoomHeight=height; zoomAppeared=true }))
         .environment(\.professionalPriorityPreview,ProfessionalPriorityPreviewState(openCard:fixture.selectedCase == "card-priority-sheet",didRender:{ priorityCardVisible=$0 }))
-        .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
+        .environment(\.professionalRecallPreview,ProfessionalRecallPreviewState(didRender:{ unifiedRendered=$0 }))
+        .onChange(of:unifiedRendered) { _,value in if value != nil { reportWhenReady() } }
+        .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || fixture.selectedCase == "unified-home") { reportWhenReady() } }
         .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
         .onChange(of:zoomAppeared) { _,shown in if shown && fixture.selectedCase == "question-zoom" { reportWhenReady() } }
     }
@@ -702,6 +762,18 @@ struct ProfessionalPriorityPreview: View {
     private func criticalStateReady()->Bool {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
+        case "unified-home": return teaching.studyPlan != nil && engine.shown == nil && engine.record.attempts.isEmpty
+        case "unified-front","unified-answer","unified-related","unified-resume":
+            let scope:ProfessionalRecallScope=fixture.selectedCase == "unified-related" ? .related:.mainline
+            let unified=ProfessionalRecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,scope:scope,baseDirectory:fixture.root)
+            guard !unified.blocked,unified.error == nil,let saved=unified.engine,let p=saved.record.presentation,
+                  let observed=unifiedRendered,observed.scope == scope,observed.cardID == p.cardID,observed.revealed == p.revealed,
+                  p.cardID == fixture.expectedUnifiedCardID,p.id == fixture.expectedUnifiedToken,
+                  p.revealed == fixture.expectedUnifiedRevealed,saved.record.attempts.count == fixture.expectedUnifiedAttempts,
+                  let plan=teaching.studyPlan else { return false }
+            let mainline=Set(plan.mainlineCardIDs+plan.supplementSelections.flatMap(\.mainlineCardIDs))
+            guard (scope == .mainline) == mainline.contains(p.cardID),engine.record.attempts.isEmpty else { return false }
+            return true
         case "question-zoom": return zoomAppeared && zoomWidth == 1200 && zoomHeight == 220 && engine.shown != nil && engine.record.review == nil && !fixture.store.currentQuestionUsedCardHelp
         case "question", "guide-only":
             guard engine.shown != nil,engine.record.review == nil else { return false }

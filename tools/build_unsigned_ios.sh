@@ -6,6 +6,15 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 2
 fi
 python3 tools/generate_xcode_project.py --without-personal-resources
+mkdir -p build/c-tests
+for suite in test_engine test_exam_engine test_midnight_engine test_import; do
+  clang -std=c11 -Wall -Wextra -Werror -O2 -I Sources/CPocket/include -I Sources/CPocket/internal \
+    "Tests/CPocketTests/${suite}.c" Sources/CPocket/xkl_engine.c \
+    Sources/CPocket/internal/pocket_model.c Sources/CPocket/internal/pocket_word_model.c \
+    Sources/CPocket/internal/pocket_word_recording.c Sources/CPocket/internal/pocket_storage.c \
+    Sources/CPocket/internal/pocket_log.c -o "build/c-tests/${suite}"
+  "build/c-tests/${suite}"
+done
 swift test --jobs 2
 xcodebuild -project XKLStudy.xcodeproj -scheme XKLStudy -configuration Release \
   -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \

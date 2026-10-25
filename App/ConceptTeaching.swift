@@ -56,8 +56,9 @@ struct ConceptTeaching: Codable, Equatable {
     var cardCorrections: [ProfessionalCardCorrection]? = nil
     var sourceLeaves: [ProfessionalSourceLeaf]? = nil
     var cardPriorities: [ProfessionalCardPriority]? = nil
+    var questionPracticeNotes: [ProfessionalQuestionPracticeNote]? = nil
 
-    var hasProfessionalExtension: Bool { primaryRecallDeck != nil || studyPlan != nil || questionPresentations != nil || questionLinks != nil || cardCorrections != nil || sourceLeaves != nil || cardPriorities != nil }
+    var hasProfessionalExtension: Bool { primaryRecallDeck != nil || studyPlan != nil || questionPresentations != nil || questionLinks != nil || cardCorrections != nil || sourceLeaves != nil || cardPriorities != nil || questionPracticeNotes != nil }
     var hasCompleteProfessionalExtension: Bool { primaryRecallDeck != nil && studyPlan != nil && questionPresentations != nil && questionLinks != nil && cardCorrections != nil && sourceLeaves != nil }
     func validatePrimaryRecallIdentity(from old: ConceptTeaching, bank: ConceptBank) throws {
         let subject: ConceptSubject = bank.id == ConceptSubject.computer.bankID ? .computer : .power
@@ -150,6 +151,7 @@ struct ConceptTeaching: Codable, Equatable {
             try ProfessionalCardCorrection.validateAll(cardCorrections,deck:primaryRecallDeck,groups:recallGroups ?? [])
             try ProfessionalSourceLeaf.validateAll(sourceLeaves,bank:bank,teaching:self)
             if let cardPriorities { try ProfessionalCardPriority.validateAll(cardPriorities,bank:bank,teaching:self) }
+            if let questionPracticeNotes { try ProfessionalQuestionPracticeNote.validateAll(questionPracticeNotes, bank: bank) }
         }
     }
 }

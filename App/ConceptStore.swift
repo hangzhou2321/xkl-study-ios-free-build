@@ -403,6 +403,9 @@ final class ConceptStore: ObservableObject {
     /// nil means an audited source question can be entered; non-nil is a read-only explanation.
     func sourceQuestionAvailability(_ questionID: String) -> String? {
         guard !blocked, let e = engine else { return "课程记录当前不可写。" }
+        if let note = teaching?.questionPracticeNotes?.first(where: { $0.questionID == questionID }) {
+            return "暂缓判分：" + note.reason
+        }
         guard let concept = e.bank.concepts.first(where: { $0.questions.contains { $0.id == questionID } }),
               let question = concept.questions.first(where: { $0.id == questionID }) else { return "只有原图索引，尚未核验完整题目与答案。" }
         guard let presentation = teaching?.questionPresentations?.first(where: { $0.questionID == questionID }),
@@ -426,6 +429,9 @@ final class ConceptStore: ObservableObject {
     private func validateQuestionPractice(_ candidate: ConceptEngine, questionID: String? = nil) throws {
         guard let teaching, teaching.hasProfessionalExtension,
               let id = questionID ?? candidate.shown?.questionID else { return }
+        if let note = teaching.questionPracticeNotes?.first(where: { $0.questionID == id }) {
+            throw ExamError.invalid("暂缓判分：" + note.reason)
+        }
         guard let presentation = teaching.questionPresentations?.first(where: { $0.questionID == id }) else {
             throw ExamError.invalid("原题尚缺核验后的题级呈现，不能作答评分。")
         }
