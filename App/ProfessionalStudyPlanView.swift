@@ -307,7 +307,7 @@ struct ProfessionalSourceStartView: View {
                     }.padding(22)
                 }
             }
-        }.navigationTitle("已核验练习")
+        }.navigationTitle("题目详情")
     }
 }
 
