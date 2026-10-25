@@ -1,6 +1,6 @@
 # XKLStudy source-only build candidate
 
-Version 1.17.1 (33). Bundle identifier: `local.xkl.study`.
+Version 1.18.0 (34). Bundle identifier: `local.xkl.study`.
 
 This review package contains app source, synthetic unit tests, existing third-party license notices, and an unsigned iOS build workflow. It contains no study content packages or device backups. Tests requiring private fixtures skip when those fixtures are absent.
 

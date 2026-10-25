@@ -683,6 +683,9 @@ import UIKit
             let lectureLeaf=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-lecture",sourceID:"synthetic-source",page:1,label:"讲义原题 · 合成出处1",status:"verified",bankQuestionID:first.id,visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.verified,courseReadiness:.ready,scope:.mainline,reason:"纯合成原题绑定。")
             let lectureAlias=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-lecture-alias",sourceID:"synthetic-source",page:2,label:"同一原题 · 合成出处2",status:"verified",bankQuestionID:first.id,visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.verified,courseReadiness:.ready,scope:.mainline,reason:"纯合成来源别名，不增加练习题数。")
             var teaching=ConceptTeaching(format:"xkl-teaching-v1",bankSHA256:hash,lessons:[lesson],syllabus:syllabus,recallGroups:[supplement],primaryRecallDeck:deck,studyPlan:plan,questionPresentations:presentations,questionLinks:links,cardCorrections:[correction],sourceLeaves:(groupingPreview || priorityPreview) ? [leaf,lectureLeaf,lectureAlias]:[leaf])
+            if selectedCase.hasPrefix("unified-lesson") {
+                teaching.cardLessons=[ProfessionalCardLesson(id:"synthetic-capacity-method",title:"容量怎样连接到持续时间",bindings:(cards+supplementCards).map { .init(cardID:$0.id,sourceCardDigest:$0.professionalDigest) },intuition:"把容量看作水箱里的水量，功率看作放水速度；水箱大不等于放得快。",conditions:["使用题目明确给定的可用容量。","输出功率恒定；额定容量若有限制，需要先换成可用容量。"],workedExample:.init(prompt:"合成例：可用能量12单位，输出3单位每小时，能坚持多久？",steps:["先找总量12和每小时输出3。","12÷3=4，单位是小时。"],answer:"4小时。"),transferCheck:.init(prompt:"改成只允许用一半能量，输出仍为3单位每小时。还能坚持4小时吗？",steps:["先把12乘一半，得到可用6。","6÷3=2，原来的4小时已不适用。"],answer:"不能，只能2小时。"),transferHint:"先改可用总量，再除以原输出速度。",sourceRefs:["纯合成界面测试，无用户题库。"])]
+            }
             if priorityPreview {
                 let mainline=Set(plan.mainlineCardIDs+plan.supplementSelections.flatMap(\.mainlineCardIDs))
                 teaching.cardPriorities=(cards+supplementCards).map { card in
@@ -720,7 +723,7 @@ import UIKit
                 let scope:ProfessionalRecallScope=selectedCase == "unified-related" ? .related:.mainline
                 let unified=ProfessionalRecallStore(subject:subject,bank:bank,teaching:teaching,scope:scope,baseDirectory:root)
                 unified.start()
-                if ["unified-answer","unified-resume","unified-assisted-resume"].contains(selectedCase),let token=unified.engine?.record.presentation?.id { unified.reveal(token:token) }
+                if (["unified-answer","unified-resume","unified-assisted-resume"].contains(selectedCase) || selectedCase.hasPrefix("unified-lesson")),let token=unified.engine?.record.presentation?.id { unified.reveal(token:token) }
                 if selectedCase == "unified-assisted-resume",let p=unified.engine?.record.presentation {
                     exposedRecallCardID=p.cardID
                     expectedSourceToken=target.engine?.shown?.id
@@ -777,7 +780,7 @@ struct ProfessionalPriorityPreview: View {
             }
         }.environment(\.professionalQuestionZoomPreview,ProfessionalQuestionZoomPreview(autoOpen:fixture.selectedCase == "question-zoom",didAppear:{ width,height in zoomWidth=width; zoomHeight=height; zoomAppeared=true }))
         .environment(\.professionalPriorityPreview,ProfessionalPriorityPreviewState(openCard:fixture.selectedCase == "card-priority-sheet",didRender:{ priorityCardVisible=$0 }))
-        .environment(\.professionalRecallPreview,ProfessionalRecallPreviewState(didRender:{ unifiedRendered=$0 }))
+        .environment(\.professionalRecallPreview,ProfessionalRecallPreviewState(didRender:{ unifiedRendered=$0 },lessonExampleExpanded:fixture.selectedCase == "unified-lesson-example",lessonTransferExpanded:fixture.selectedCase.hasPrefix("unified-lesson-transfer"),lessonSolutionVisible:fixture.selectedCase == "unified-lesson-transfer-answer",lessonScrollTarget:fixture.selectedCase == "unified-lesson-example" ? "professional-lesson-worked" : (fixture.selectedCase.hasPrefix("unified-lesson-transfer") ? "professional-lesson-transfer":nil)))
         .onChange(of:unifiedRendered) { _,value in if value != nil { reportWhenReady() } }
         .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || ["unified-home","unified-assisted-resume"].contains(fixture.selectedCase)) { reportWhenReady() } }
         .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }

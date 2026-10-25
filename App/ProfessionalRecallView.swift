@@ -30,6 +30,7 @@ struct ProfessionalRecallView: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroll in
         ScrollView {
             VStack(alignment:.leading,spacing:20) {
                 if let engine=store.engine {
@@ -114,6 +115,15 @@ struct ProfessionalRecallView: View {
             // after the completion screen has been reached.
             if phase == .active, store.engine?.currentItem != nil { store.start() }
         }
+        #if DEBUG
+        .task(id:preview.lessonScrollTarget) {
+            if let target=preview.lessonScrollTarget {
+                try? await Task.sleep(for:.milliseconds(150))
+                scroll.scrollTo(target,anchor:.top)
+            }
+        }
+        #endif
+        }
     }
 
     @ViewBuilder private func progress(_ engine:ProfessionalRecallEngine)->some View {
@@ -174,6 +184,9 @@ struct ProfessionalRecallView: View {
     @ViewBuilder private func answer(_ card:RecallCard)->some View {
         Text(card.answer).font(.system(size:25)).textSelection(.enabled)
             .accessibilityIdentifier("professional-recall-answer")
+        if let lesson=teaching.applicationLesson(for:card) {
+            ProfessionalCardLessonView(lesson:lesson)
+        }
         if let detail=card.detail,!detail.isEmpty {
             DisclosureGroup("解释与来源") { Text(detail).font(.body).textSelection(.enabled).padding(.top,8) }
         }
@@ -184,6 +197,75 @@ struct ProfessionalRecallView: View {
             }
         }
         if let priority=priority(card) { ProfessionalCardPriorityEvidence(value:priority) }
+    }
+}
+
+/// Looking at a teaching example never grades a card or creates an original-question attempt.
+private struct ProfessionalCardLessonView:View {
+    let lesson:ProfessionalCardLesson
+    @State private var showExample=false
+    @State private var showTransfer=false
+    @State private var showHint=false
+    @State private var showSolution=false
+    #if DEBUG
+    @Environment(\.professionalRecallPreview) private var preview
+    #endif
+    var body:some View {
+        VStack(alignment:.leading,spacing:14) {
+            Text("把知识用起来").font(.headline)
+            Text(lesson.title).font(.subheadline).foregroundStyle(.secondary)
+            Text(lesson.intuition).textSelection(.enabled)
+                .accessibilityIdentifier("professional-lesson-intuition")
+            DisclosureGroup("什么时候能这样用") {
+                VStack(alignment:.leading,spacing:8) {
+                    ForEach(Array(lesson.conditions.enumerated()),id:\.offset) { _,condition in Text("• \(condition)") }
+                }.padding(.top,6)
+            }
+            DisclosureGroup("完整例题 · 新编讲解",isExpanded:$showExample) {
+                VStack(alignment:.leading,spacing:10) {
+                    Text(lesson.workedExample.prompt).font(.body.weight(.medium))
+                    steps(lesson.workedExample.steps)
+                    Text("结论：\(lesson.workedExample.answer)").font(.body.weight(.medium))
+                }.textSelection(.enabled).padding(.top,8)
+                    .accessibilityIdentifier("professional-lesson-worked-example")
+            }
+            .id("professional-lesson-worked")
+            DisclosureGroup("换个条件，先自己判断",isExpanded:$showTransfer) {
+                VStack(alignment:.leading,spacing:12) {
+                    Text(lesson.transferCheck.prompt).font(.body.weight(.medium)).textSelection(.enabled)
+                        .accessibilityIdentifier("professional-lesson-transfer-prompt")
+                    if showHint { Text(lesson.transferHint).foregroundStyle(.secondary) }
+                    if !showSolution {
+                        HStack {
+                            Button("给一点提示") { showHint=true }.disabled(showHint)
+                            Spacer()
+                            Button("我想好了，看推理") { showSolution=true }
+                                .accessibilityIdentifier("professional-lesson-reveal-solution")
+                        }.buttonStyle(.bordered)
+                    } else {
+                        steps(lesson.transferCheck.steps)
+                        Text("结论：\(lesson.transferCheck.answer)").font(.body.weight(.medium)).textSelection(.enabled)
+                            .accessibilityIdentifier("professional-lesson-transfer-answer")
+                    }
+                    Text("这段用于理解和自检，不记原题成绩，也不会替本卡评为记住。稍后独立做题才能检验迁移。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.top,8)
+            }
+            .id("professional-lesson-transfer")
+            DisclosureGroup("讲义依据") {
+                ForEach(Array(lesson.sourceRefs.enumerated()),id:\.offset) { _,ref in Text(ref).font(.caption).textSelection(.enabled) }
+            }
+        }.padding(14).background(.quaternary,in:RoundedRectangle(cornerRadius:14))
+        .onAppear {
+            #if DEBUG
+            showExample=preview.lessonExampleExpanded;showTransfer=preview.lessonTransferExpanded;showSolution=preview.lessonSolutionVisible
+            #endif
+        }
+    }
+    private func steps(_ values:[String])->some View {
+        VStack(alignment:.leading,spacing:8) {
+            ForEach(Array(values.enumerated()),id:\.offset) { index,value in Text("\(index+1). \(value)").textSelection(.enabled) }
+        }
     }
 }
 
@@ -263,6 +345,10 @@ struct ProfessionalRecallPreviewObservation:Equatable {
 }
 struct ProfessionalRecallPreviewState {
     var didRender:(ProfessionalRecallPreviewObservation)->Void = { _ in }
+    var lessonExampleExpanded=false
+    var lessonTransferExpanded=false
+    var lessonSolutionVisible=false
+    var lessonScrollTarget:String?=nil
 }
 private struct ProfessionalRecallPreviewKey:EnvironmentKey {
     static let defaultValue=ProfessionalRecallPreviewState()

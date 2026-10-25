@@ -343,6 +343,38 @@ final class ProfessionalRecallStoreTests: XCTestCase {
         XCTAssertEqual(try files(root), protected)
     }
 
+    @MainActor func testAddingApplicationLessonPreservesVisibleAnswerSnapshotAndAllAttempts() throws {
+        let (bank,base)=try fixture();let directory=try root();defer { try? FileManager.default.removeItem(at:directory) }
+        let rawBank=try encode(bank),content=ConceptContent(format:"xkl-concepts-v1",bankBytes:rawBank,bankSHA256:StudySHA256.hex(rawBank))
+        let courseFile=directory.appendingPathComponent("synthetic-course.xklcourse")
+        try encode(ConceptCourse(format:"xkl-course-v5",subject:.computer,bankContent:try encode(content),teaching:base)).write(to:courseFile)
+        let question=ConceptStore(subject:.computer,baseDirectory:directory)
+        question.importContent(courseFile);question.startQuestion("synthetic-q0",expectedCurrentToken:nil)
+        question.choose("A",token:try XCTUnwrap(question.engine?.shown?.id))
+        XCTAssertEqual(question.engine?.record.attempts.count,1)
+        let priorQuestionRecord=try encode(XCTUnwrap(question.engine?.record))
+        let old=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:base,baseDirectory:directory)
+        old.start();let token=try XCTUnwrap(old.engine?.record.presentation?.id);old.reveal(token:token)
+        let saved=try Data(contentsOf:current(directory))
+        var augmented=base
+        augmented.cardLessons=[CardLessonFixture.sample(try XCTUnwrap(base.primaryRecallDeck).cards.map(\.card))]
+        try augmented.validate(bank:bank,hash:base.bankSHA256)
+        try augmented.validateAppendOnlyRecall(from:base,bank:bank)
+        try encode(ConceptCourse(format:"xkl-course-v5",subject:.computer,bankContent:try encode(content),teaching:augmented)).write(to:courseFile)
+        for _ in 0..<2 {
+            question.importContent(courseFile);XCTAssertNil(question.error)
+            XCTAssertEqual(try encode(XCTUnwrap(question.engine?.record)),priorQuestionRecord)
+            XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        }
+        let updated=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:augmented,baseDirectory:directory)
+        updated.start()
+        XCTAssertFalse(updated.blocked);XCTAssertNil(updated.error)
+        XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        XCTAssertEqual(updated.engine?.record.presentation?.id,token)
+        XCTAssertEqual(updated.engine?.record.presentation?.revealed,true)
+        XCTAssertEqual(updated.engine?.record.attempts,old.engine?.record.attempts)
+        XCTAssertEqual(try ProfessionalRecallCatalog.make(subject:.computer,bank:bank,teaching:augmented,scope:.mainline),try ProfessionalRecallCatalog.make(subject:.computer,bank:bank,teaching:base,scope:.mainline))
+    }
     @MainActor func testRepeatedCourseImportPreservesQuestionRecordAndProfessionalSnapshot() throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         let (bank, teaching) = try fixture(), bankBytes = try encode(bank)
