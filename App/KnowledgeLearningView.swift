@@ -107,7 +107,7 @@ struct KnowledgeLearningView:View {
                 let correct=p.selectedID==q.answerID
                 Label(correct ? "这道小题答对了":"先找出卡住的一步",systemImage:correct ? "checkmark.circle.fill":"arrow.uturn.backward.circle")
                     .font(.headline).foregroundStyle(correct ? .green:.orange)
-                if let chosen=q.choices.first(where:{$0.id==p.selectedID}){Text(chosen.feedback).font(.system(size:22))}
+                if let chosen=q.choices.first(where:{$0.id==p.selectedID}),chosen.feedback != q.explanation{Text(chosen.feedback).font(.system(size:22))}
                 Text(q.explanation).font(.system(size:22)).accessibilityIdentifier("knowledge-check-feedback")
                 Text(p.assisted ? "本次按有帮助练习保存，不计无提示复核。":"本次未在该诊断中使用系统提示；只代表这道小题的表现。")
                     .font(.caption).foregroundStyle(.secondary)
