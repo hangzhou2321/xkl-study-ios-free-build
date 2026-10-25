@@ -331,7 +331,12 @@ struct ProfessionalSourceStartView: View {
                             if store.teaching?.questionPracticeNotes?.contains(where: { $0.questionID == question.id }) != true {
                                 Text(reason).foregroundStyle(.secondary)
                             }
-                            if store.engine?.shown != nil { Button("继续当前题") { entered = true } }
+                            if let token=store.engine?.shown?.id {
+                                Button("继续当前题") {
+                                    if let exposedCardID { guard store.recordRecallCardExposure(cardID:exposedCardID,token:token) else { return } }
+                                    entered = true
+                                }
+                            }
                             if let history=try? store.sourceQuestionHistory(question.id), !history.isEmpty {
                                 Text("已保存 \(history.count) 次历史作答，不重复记分。").font(.footnote)
                                 DisclosureGroup("查看原题解析") { Text(question.explanation).font(.system(size:24)).textSelection(.enabled) }
@@ -544,6 +549,9 @@ struct ProfessionalSourcePracticeView: View {
                         if let links=store.teaching?.questionLinks?.first(where: { $0.questionID == question.id }), let teaching=store.teaching {
                             ProfessionalPracticeCardsView(store:store,token:shown.id,primaryIDs:links.primaryCardIDs,supplementIDs:links.supplementCardIDs,guideIDs:links.guideConceptIDs,teaching:teaching,bank:engine.bank)
                         }
+                        if store.currentQuestionUsedCardHelp && engine.record.review == nil {
+                            Text("已记录：本次作答前参考过关联知识卡。").font(.footnote).foregroundStyle(.secondary)
+                        }
                         if let imageFailure { Text(imageFailure+"，本题暂缓作答。").foregroundStyle(.orange) }
                         if let reason=store.currentQuestionPracticeBlockedReason { Text(reason).foregroundStyle(.secondary) }
                     }.padding(22).frame(maxWidth:760).frame(maxWidth:.infinity)
@@ -583,6 +591,8 @@ import UIKit
     var expectedUnifiedToken:UUID?
     var expectedUnifiedRevealed=false
     var expectedUnifiedAttempts=0
+    var expectedSourceToken:UUID?
+    var exposedRecallCardID:String?
     init() {
         let args=ProcessInfo.processInfo.arguments
         func value(_ key:String)->String? { guard let i=args.firstIndex(of:key),i+1<args.count else { return nil }; return args[i+1] }
@@ -672,7 +682,7 @@ import UIKit
             let path=root.appendingPathComponent("synthetic.xklcourse")
             try JSONEncoder().encode(course).write(to:path)
             target.importContent(path)
-            if ["question","question-zoom","answer","guide-only","source-groups-learned","card-priority-sheet"].contains(selectedCase) {
+            if ["question","question-zoom","answer","guide-only","source-groups-learned","card-priority-sheet","unified-assisted-resume"].contains(selectedCase) {
                 target.startQuestion(first.id,expectedCurrentToken:nil)
                 if ["answer","source-groups-learned"].contains(selectedCase),let token=target.engine?.shown?.id { target.choose("yes",token:token) }
             }
@@ -697,7 +707,13 @@ import UIKit
                 let scope:ProfessionalRecallScope=selectedCase == "unified-related" ? .related:.mainline
                 let unified=ProfessionalRecallStore(subject:subject,bank:bank,teaching:teaching,scope:scope,baseDirectory:root)
                 unified.start()
-                if ["unified-answer","unified-resume"].contains(selectedCase),let token=unified.engine?.record.presentation?.id { unified.reveal(token:token) }
+                if ["unified-answer","unified-resume","unified-assisted-resume"].contains(selectedCase),let token=unified.engine?.record.presentation?.id { unified.reveal(token:token) }
+                if selectedCase == "unified-assisted-resume",let p=unified.engine?.record.presentation {
+                    exposedRecallCardID=p.cardID
+                    expectedSourceToken=target.engine?.shown?.id
+                    precondition(!target.currentQuestionUsedCardHelp && target.engine?.record.attempts.isEmpty == true,"Prior question must be unanswered and unassisted before card check")
+                    unified.grade(remembered:true,token:p.id)
+                }
                 if selectedCase == "unified-resume",let token=unified.engine?.record.presentation?.id {
                     unified.grade(remembered:false,token:token)
                     if let next=unified.engine?.record.presentation?.id { unified.reveal(token:next) }
@@ -727,6 +743,8 @@ struct ProfessionalPriorityPreview: View {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
                 if fixture.selectedCase == "unified-home" {
                     ConceptView(store:fixture.store,practicing:.constant(false),recalling:.constant(false))
+                } else if fixture.selectedCase == "unified-assisted-resume" {
+                    ProfessionalSourcePracticeView(store:fixture.store,exposedCardID:fixture.exposedRecallCardID)
                 } else if fixture.selectedCase.hasPrefix("unified-") {
                     ProfessionalRecallView(subject:fixture.subject,bank:bank,teaching:teaching,
                         scope:fixture.selectedCase == "unified-related" ? .related:.mainline,
@@ -745,7 +763,7 @@ struct ProfessionalPriorityPreview: View {
         .environment(\.professionalPriorityPreview,ProfessionalPriorityPreviewState(openCard:fixture.selectedCase == "card-priority-sheet",didRender:{ priorityCardVisible=$0 }))
         .environment(\.professionalRecallPreview,ProfessionalRecallPreviewState(didRender:{ unifiedRendered=$0 }))
         .onChange(of:unifiedRendered) { _,value in if value != nil { reportWhenReady() } }
-        .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || fixture.selectedCase == "unified-home") { reportWhenReady() } }
+        .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || ["unified-home","unified-assisted-resume"].contains(fixture.selectedCase)) { reportWhenReady() } }
         .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
         .onChange(of:zoomAppeared) { _,shown in if shown && fixture.selectedCase == "question-zoom" { reportWhenReady() } }
     }
@@ -763,6 +781,8 @@ struct ProfessionalPriorityPreview: View {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
         case "unified-home": return teaching.studyPlan != nil && engine.shown == nil && engine.record.attempts.isEmpty
+        case "unified-assisted-resume":
+            return engine.shown?.id == fixture.expectedSourceToken && engine.record.review == nil && engine.record.attempts.isEmpty && fixture.store.currentQuestionUsedCardHelp && fixture.exposedRecallCardID != nil
         case "unified-front","unified-answer","unified-related","unified-resume":
             let scope:ProfessionalRecallScope=fixture.selectedCase == "unified-related" ? .related:.mainline
             let unified=ProfessionalRecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,scope:scope,baseDirectory:fixture.root)

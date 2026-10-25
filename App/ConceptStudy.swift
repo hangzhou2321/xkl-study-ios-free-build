@@ -199,6 +199,9 @@ struct ConceptScopeSuspension: Codable, Equatable {
     let presentation: ConceptPresentation?
     let review: ConceptAttempt?
     let undoFamiliar: ConceptAttempt?
+    /// A content hold may remove a queued concept without grading it. Keep the
+    /// complete prior queue so the transition remains inspectable/recoverable.
+    var parkedQueue: [String]? = nil
 }
 
 struct ConceptRecord: Codable {
@@ -310,12 +313,17 @@ struct ConceptRecord: Codable {
             }
             guard !suspension.scopeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   suspension.parkedAt.timeIntervalSince1970.isFinite,
-                  suspension.presentation != nil || suspension.review != nil || suspension.undoFamiliar != nil,
+                  suspension.presentation != nil || suspension.review != nil || suspension.undoFamiliar != nil || suspension.parkedQueue?.isEmpty == false,
                   suspension.presentation == nil || suspension.review == nil else {
                 throw ExamError.invalid("停用题目保存的断点无效，原档案已保留。")
             }
             if let p = suspension.presentation, !validPresentation(p) {
                 throw ExamError.invalid("停用题目的待答断点无法核对。")
+            }
+            if let queue = suspension.parkedQueue {
+                guard Set(queue).count == queue.count, queue.allSatisfy({ concepts[$0] != nil }) else {
+                    throw ExamError.invalid("暂缓题目保存的队列无效。")
+                }
             }
             if let a = suspension.review {
                 guard validAttempt(a), a.mode == "answer", hasAttempt(a) else {
@@ -335,6 +343,7 @@ struct ConceptRecord: Codable {
 struct ConceptEngine {
     let bank: ConceptBank
     var record: ConceptRecord
+    private(set) var heldQuestionIDs: Set<String> = []
     static let gaps = [1, 2, 3, 5, 7, 10, 15, 30, 90, 180]
 
     init(bank: ConceptBank, hash: String, record: ConceptRecord? = nil) throws {
@@ -348,10 +357,10 @@ struct ConceptEngine {
     var concept: StudyConcept? { bank.concepts.first { $0.id == shown?.conceptID } }
     var question: ConceptQuestion? { concept?.questions.first { $0.id == shown?.questionID } }
     var activeConcepts: [StudyConcept] {
-        bank.concepts.filter { !bank.activeQuestions(in: $0).isEmpty }
+        bank.concepts.filter { !conceptQuestions($0.id).isEmpty }
     }
     var activeQuestionCount: Int {
-        activeConcepts.reduce(0) { $0 + bank.activeQuestions(in: $1).count }
+        activeConcepts.reduce(0) { $0 + conceptQuestions($1.id).count }
     }
     var archivedConcepts: [StudyConcept] {
         bank.concepts.filter { bank.activeQuestions(in: $0).isEmpty }
@@ -382,6 +391,31 @@ struct ConceptEngine {
         record.queue = record.queue.filter {
             !(record.progress[$0]?.familiar ?? false) && hasActiveUnusedQuestion($0)
         }
+    }
+
+    /// Editorial holds change selection only. They never consume a question,
+    /// mark a concept familiar, or manufacture a score. The immutable teaching
+    /// hash identifies why a live pointer/queue was parked.
+    mutating func applyQuestionHolds(_ ids: Set<String>, revision: String, now: Date = Date()) throws {
+        guard ids.isSubset(of: Set(bank.concepts.flatMap(\.questions).map(\.id))),
+              !revision.isEmpty, revision.count <= 160, now.timeIntervalSince1970.isFinite else {
+            throw ExamError.invalid("暂缓判分范围或来源无效。")
+        }
+        heldQuestionIDs = ids
+        guard !ids.isEmpty else { return }
+        let pending = record.presentation.flatMap { ids.contains($0.questionID) ? $0 : nil }
+        let result = record.review.flatMap { ids.contains($0.presentation.questionID) ? $0 : nil }
+        let familiar = record.undoFamiliar.flatMap { ids.contains($0.presentation.questionID) ? $0 : nil }
+        let priorQueue = record.queue
+        let nextQueue = priorQueue.filter { !(record.progress[$0]?.familiar ?? false) && hasActiveUnusedQuestion($0) }
+        guard pending != nil || result != nil || familiar != nil || priorQueue != nextQueue else { return }
+        if record.scopeSuspensions == nil { record.scopeSuspensions = [] }
+        record.scopeSuspensions!.append(ConceptScopeSuspension(scopeID: "question-hold-" + revision,
+            parkedAt: now, presentation: pending, review: result, undoFamiliar: familiar, parkedQueue: priorQueue))
+        if pending != nil { record.presentation = nil }
+        if result != nil { record.review = nil }
+        if familiar != nil { record.undoFamiliar = nil }
+        record.queue = nextQueue
     }
 
     mutating func start(day: Int, now: Date = Date(), newLimit: Int = 25) throws {
@@ -416,7 +450,8 @@ struct ConceptEngine {
             return // Same live presentation/result resumes with exact token and selection.
         }
         guard let concept = bank.concepts.first(where: { $0.questions.contains { $0.id == questionID } }),
-              let question = concept.questions.first(where: { $0.id == questionID }), bank.isActive(questionID) else {
+              let question = concept.questions.first(where: { $0.id == questionID }), bank.isActive(questionID),
+              !heldQuestionIDs.contains(questionID) else {
             throw ExamError.invalid("题目不存在或未纳入当前练习范围。")
         }
         let progress = record.progress[concept.id] ?? ConceptProgress()
@@ -453,7 +488,7 @@ struct ConceptEngine {
 
     mutating func toggle(_ id: String, token: UUID) {
         guard var p = record.presentation, p.id == token, record.review == nil,
-              bank.isActive(p.questionID), question?.type == .multiple, p.order.contains(id) else { return }
+              bank.isActive(p.questionID), !heldQuestionIDs.contains(p.questionID), question?.type == .multiple, p.order.contains(id) else { return }
         var selection = Set(p.selected)
         if !selection.insert(id).inserted { selection.remove(id) }
         p.selected = selection.sorted()
@@ -462,7 +497,7 @@ struct ConceptEngine {
 
     mutating func answer(_ choice: String? = nil, token: UUID, day: Int, now: Date = Date()) throws {
         guard var p = record.presentation, p.id == token, record.review == nil, let q = question else { return }
-        guard bank.isActive(q.id) else {
+        guard bank.isActive(q.id), !heldQuestionIDs.contains(q.id) else {
             throw ExamError.invalid("这道题已移出当前练习范围，原断点和学习记录会保留。")
         }
         try refreshDue(day: day, now: now)
@@ -533,7 +568,7 @@ struct ConceptEngine {
 
     mutating func familiar(token: UUID, day: Int, now: Date = Date()) throws {
         guard let p = record.presentation, p.id == token, record.review == nil else { return }
-        guard bank.isActive(p.questionID) else {
+        guard bank.isActive(p.questionID), !heldQuestionIDs.contains(p.questionID) else {
             throw ExamError.invalid("这道题已移出当前练习范围，不能改变原熟悉记录。")
         }
         try refreshDue(day: day, now: now)
@@ -554,7 +589,7 @@ struct ConceptEngine {
 
     mutating func undo(now: Date = Date()) {
         guard let target = record.undoFamiliar, record.review == nil,
-              bank.isActive(target.presentation.questionID) else { return }
+              bank.isActive(target.presentation.questionID), !heldQuestionIDs.contains(target.presentation.questionID) else { return }
         record.progress[target.presentation.conceptID] = target.before
         record.queue.removeAll { $0 == target.presentation.conceptID }
         record.queue.insert(target.presentation.conceptID, at: 0)
@@ -589,7 +624,7 @@ struct ConceptEngine {
 
     private func conceptQuestions(_ id: String) -> [ConceptQuestion] {
         guard let c = bank.concepts.first(where: { $0.id == id }) else { return [] }
-        return bank.activeQuestions(in: c)
+        return bank.activeQuestions(in: c).filter { !heldQuestionIDs.contains($0.id) }
     }
 
     private func hasActiveUnusedQuestion(_ id: String) -> Bool {

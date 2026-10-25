@@ -31,8 +31,9 @@ final class ConceptStore: ObservableObject {
             self.guidance = guidance.record
             if FileManager.default.fileExists(atPath: activeURL.path) {
                 let hash = try JSONDecoder().decode(String.self, from: bounded(activeURL))
-                let loaded = try load(hash).engine
+                var loaded = try load(hash).engine
                 try loadSupport(loaded)
+                try applyPracticeHolds(to: &loaded, persist: true)
                 engine = loaded
             }
         } catch { fail(error) }
@@ -195,7 +196,7 @@ final class ConceptStore: ObservableObject {
                 wrote = true
                 try write(bytes, content)
             }
-            let loaded = try load(pack.bankSHA256).engine
+            var loaded = try load(pack.bankSHA256).engine
             if let importedTeaching {
                 let data = try encode(importedTeaching), hash = StudySHA256.hex(data)
                 let teachingFolder = base.appendingPathComponent("teaching", isDirectory: true)
@@ -213,6 +214,7 @@ final class ConceptStore: ObservableObject {
             wrote = true
             try write(encode(pack.bankSHA256), activeURL)
             try loadSupport(loaded)
+            try applyPracticeHolds(to: &loaded, persist: true)
             engine = loaded
             error = nil
         } catch {
@@ -365,10 +367,21 @@ final class ConceptStore: ObservableObject {
         _ = try load(hash)
     }
 
+    private func applyPracticeHolds(to candidate: inout ConceptEngine, persist: Bool) throws {
+        let before = try encode(candidate.record)
+        let held = Set((teaching?.questionPracticeNotes ?? []).map(\.questionID))
+        try candidate.applyQuestionHolds(held, revision: teachingHash ?? "no-editorial-holds")
+        let after = try encode(candidate.record)
+        if persist, before != after {
+            try write(after, folder(candidate.record.bankSHA256).appendingPathComponent("current.json"))
+        }
+    }
+
     private func change(_ operation: (inout ConceptEngine) throws -> Void) {
         guard !blocked, var candidate = engine else { return }
         var wrote = false
         do {
+            try applyPracticeHolds(to: &candidate, persist: false)
             if let teaching, teaching.hasProfessionalExtension {
                 try ProfessionalQuestionPresentation.validatePracticeContent(teaching.questionPresentations ?? [], bank: candidate.bank)
             }
@@ -572,6 +585,17 @@ final class ConceptStore: ObservableObject {
     }
 
     /// Records actual pre-answer linked-card exposure; never writes Recall grades or question progress.
+    /// An already-saved question can be resumed from the card screen too. Only
+    /// a genuinely linked card marks assistance; re-rendering is idempotent.
+    @discardableResult
+    func recordRecallCardExposure(cardID: String, token: UUID) -> Bool {
+        guard !blocked, let e = engine, let shown = e.shown, shown.id == token else { return false }
+        if e.record.review != nil { return true }
+        guard let links = teaching?.questionLinks?.first(where: { $0.questionID == shown.questionID }) else { return true }
+        guard links.primaryCardIDs.contains(cardID) || links.supplementCardIDs.contains(cardID) else { return true }
+        return openLinkedCardHelp(token: token)
+    }
+
     @discardableResult
     func openLinkedCardHelp(token: UUID) -> Bool {
         guard !blocked, let e = engine, let p = e.record.presentation, p.id == token,
