@@ -627,6 +627,40 @@ final class ConceptStore: ObservableObject {
     /// presentation, so navigating elsewhere cannot turn exposure into a blind test.
     @discardableResult
     func recordSourceExposure(questionID: String) -> Bool {
+        guard let leaf = teaching?.sourceLeaves?.first(where: { $0.bankQuestionID == questionID }) else {
+            error = "源题尚未绑定当前课程，暂不显示可能含答案的资料。"; return false
+        }
+        return recordSourceExposure(sourceQuestionID: leaf.sourceQuestionID)
+    }
+
+    /// A raw source image can contain several questions, and full-screen view
+    /// exposes the whole image. Record every bound question sharing any shown
+    /// image, including when the selected index leaf itself is unbound.
+    @discardableResult
+    func recordSourceExposure(sourceQuestionID: String) -> Bool {
+        guard !blocked else { return false }
+        guard let teaching, let leaves = teaching.sourceLeaves,
+              let selected = leaves.first(where: { $0.sourceQuestionID == sourceQuestionID }) else {
+            error = "来源资料与当前课程不匹配，暂不显示原页。"; return false
+        }
+        func hashes(_ leaf: ProfessionalSourceLeaf) -> Set<String> {
+            Set(leaf.allVisuals.compactMap { $0.sourceFile?.sha256 ?? $0.raster?.sha256 })
+        }
+        let selectedHashes = hashes(selected)
+        let exposed = Set(leaves.filter { leaf in
+            if leaf.sourceQuestionID == selected.sourceQuestionID { return true }
+            let other = hashes(leaf)
+            if !selectedHashes.isDisjoint(with: other) { return true }
+            // Vector-only fixtures/readers have no raw image identity.
+            return selectedHashes.isEmpty && other.isEmpty && leaf.sourceID == selected.sourceID && leaf.page == selected.page
+        }.compactMap(\.bankQuestionID))
+        for id in exposed.sorted() {
+            guard recordSingleSourceExposure(questionID: id) else { return false }
+        }
+        return true
+    }
+
+    private func recordSingleSourceExposure(questionID: String) -> Bool {
         guard !blocked else { return false }
         guard let e = engine, let teaching, let teachingHash,
               teaching.sourceLeaves?.contains(where: { $0.bankQuestionID == questionID }) == true,

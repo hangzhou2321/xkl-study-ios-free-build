@@ -3,7 +3,7 @@ import StudyCore
 @testable import StudyClientModel
 
 final class ProfessionalQuestionHoldTests: XCTestCase {
-    private let hash = String(repeating: "a", count: 64)
+    private let fixtureHash = String(repeating: "a", count: 64)
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private func bank() -> ConceptBank {
         ConceptBank(id: ConceptSubject.computer.bankID, title: "Synthetic hold bank", scope: "Synthetic", notice: "Synthetic only",
@@ -30,7 +30,7 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
 
     func testHeldPendingQuestionParksExactSelectionAndContinuesReplacementWithoutGrade() throws {
         let bank = bank()
-        var engine = try ConceptEngine(bank: bank, hash: hash)
+        var engine = try ConceptEngine(bank: bank, hash: fixtureHash)
         try engine.start(day: 21000, now: now, newLimit: 2)
         let token = try XCTUnwrap(engine.shown?.id)
         engine.toggle("A", token: token)
@@ -46,12 +46,12 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
         XCTAssertEqual(engine.question?.id, "c0q1")
         XCTAssertTrue(engine.shown?.selected.isEmpty == true)
         assertGradesUnchanged(before, engine.record)
-        try engine.record.validate(bank: bank, hash: hash)
+        try engine.record.validate(bank: bank, hash: fixtureHash)
     }
 
     func testNewTaskAndNextFilterHoldsWithoutConsumingQuestionsOrBlockingOtherConcepts() throws {
         let bank = bank()
-        var engine = try ConceptEngine(bank: bank, hash: hash)
+        var engine = try ConceptEngine(bank: bank, hash: fixtureHash)
         try engine.applyQuestionHolds(["c0q0", "c1q0"], revision: "synthetic-note", now: now)
         try engine.start(day: 21000, now: now, newLimit: 2)
         XCTAssertEqual(engine.question?.id, "c0q1")
@@ -63,12 +63,12 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
         XCTAssertEqual(engine.record.attempts.map(\.presentation.questionID), ["c0q1"])
         XCTAssertEqual(engine.record.progress["c0"]?.usedQuestionIDs, ["c0q1"])
         XCTAssertNil(engine.record.progress["c1"])
-        try engine.record.validate(bank: bank, hash: hash)
+        try engine.record.validate(bank: bank, hash: fixtureHash)
     }
 
     func testHeldReviewAndEntireQueuedConceptParkWithoutFamiliarOrCorrectnessChanges() throws {
         let bank = bank()
-        var engine = try ConceptEngine(bank: bank, hash: hash)
+        var engine = try ConceptEngine(bank: bank, hash: fixtureHash)
         try engine.start(day: 21000, now: now, newLimit: 2)
         let token = try XCTUnwrap(engine.shown?.id)
         engine.toggle("A", token: token)
@@ -82,7 +82,7 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
         try engine.startQuestion(questionID: "c0q1", day: 21000, now: now)
         XCTAssertEqual(engine.question?.id, "c0q1")
         XCTAssertThrowsError(try engine.applyQuestionHolds(["missing"], revision: "synthetic-note", now: now))
-        try engine.record.validate(bank: bank, hash: hash)
+        try engine.record.validate(bank: bank, hash: fixtureHash)
     }
 
     #if os(macOS)
@@ -246,6 +246,67 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
         XCTAssertTrue(store.blocked); XCTAssertTrue(store.coachingEvents.isEmpty)
         XCTAssertEqual(try encode(XCTUnwrap(store.engine?.record)), before)
         XCTAssertFalse(store.recordSourceExposure(questionID: "c0q0"))
+    }
+
+    private func sharedSourceCourse() throws -> ConceptCourse {
+        let original = try course()
+        var teaching = original.teaching
+        let asset = ProfessionalSourceFileAsset(sha256: String(repeating: "a", count: 64), mimeType: "image/jpeg",
+            byteCount: 1000, pixelWidth: 320, pixelHeight: 160, crop: .init(x: 0, y: 0, width: 1, height: 1),
+            altText: "Synthetic shared raw page containing two question answers")
+        teaching.sourceLeaves = (0..<3).map { index in
+            ProfessionalSourceLeaf(sourceQuestionID: "shared-leaf-\(index)", sourceID: "s", page: index + 1,
+                label: "Synthetic shared page", status: index == 2 ? "pending" : "verified",
+                bankQuestionID: index == 2 ? nil : "c\(index)q0",
+                visual: .init(id: "shared-visual-\(index)", kind: "sourceFile", sourceFile: asset),
+                primaryCardIDs: index == 2 ? [] : ["c\(index):card"], supplementCardIDs: [],
+                sourceStatus: .verified, courseReadiness: index == 2 ? .awaitingCanonicalBinding : .ready,
+                scope: .mainline, reason: "Synthetic source-page exposure fixture")
+        }
+        try teaching.validate(bank: bank(), hash: teaching.bankSHA256)
+        return ConceptCourse(format: original.format, subject: original.subject, bankContent: original.bankContent, teaching: teaching)
+    }
+
+    @MainActor func testSharedRawPageMarksAllBoundQuestionsIncludingFromUnboundIndex() throws {
+        for opened in ["shared-leaf-0", "shared-leaf-2"] {
+            let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+            let store = ConceptStore(subject: .computer, baseDirectory: root)
+            try importCourse(sharedSourceCourse(), to: store, root: root)
+            let before = try encode(XCTUnwrap(store.engine?.record))
+            XCTAssertTrue(store.recordSourceExposure(sourceQuestionID: opened))
+            XCTAssertEqual(Set(store.coachingEvents.filter { $0.kind == "source-read" }.map(\.questionID)), ["c0q0", "c1q0"])
+            XCTAssertTrue(store.recordSourceExposure(sourceQuestionID: opened))
+            XCTAssertEqual(store.coachingEvents.count, 2)
+            XCTAssertEqual(try encode(XCTUnwrap(store.engine?.record)), before)
+            let reopened = ConceptStore(subject: .computer, baseDirectory: root)
+            XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+            reopened.startQuestion("c1q0", expectedCurrentToken: nil)
+            XCTAssertTrue(reopened.currentQuestionUsedCardHelp, "Another question on the exposed raw image cannot become a blind test")
+            XCTAssertTrue(reopened.engine?.record.attempts.isEmpty == true)
+        }
+    }
+
+    @MainActor func testSharedPageImageGateStaysClosedIfAnyQuestionExposureWriteFails() throws {
+        final class Writer {
+            var writes = 0
+            var fail = false
+            func write(_ bytes: Data, _ path: URL) throws {
+                if fail && path.lastPathComponent == "coaching-current.json" {
+                    writes += 1
+                    if writes == 2 { throw CocoaError(.fileWriteOutOfSpace) }
+                }
+                try bytes.write(to: path, options: .atomic)
+            }
+        }
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let writer = Writer(), store = ConceptStore(subject: .computer, baseDirectory: root, writer: writer.write)
+        try importCourse(sharedSourceCourse(), to: store, root: root)
+        let before = try encode(XCTUnwrap(store.engine?.record))
+        writer.fail = true
+        XCTAssertFalse(store.recordSourceExposure(sourceQuestionID: "shared-leaf-2"))
+        XCTAssertTrue(store.blocked)
+        XCTAssertEqual(store.coachingEvents.count, 1, "Partial observations are retained, but the raw image must remain hidden")
+        XCTAssertEqual(try encode(XCTUnwrap(store.engine?.record)), before)
     }
     #endif
 }

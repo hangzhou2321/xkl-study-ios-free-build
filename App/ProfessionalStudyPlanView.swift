@@ -474,8 +474,8 @@ private struct ProfessionalSourceLeafView: View {
     @ObservedObject var store: ConceptStore
     let leaf: ProfessionalSourceLeaf
     var sourceAssetRoot: URL? = nil
-    @State private var exposureQuestionID:String?
-    private var exposureReady:Bool { leaf.bankQuestionID == nil || exposureQuestionID == leaf.bankQuestionID }
+    @State private var exposureSourceID:String?
+    private var exposureReady:Bool { exposureSourceID == leaf.sourceQuestionID }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -493,7 +493,7 @@ private struct ProfessionalSourceLeafView: View {
                     }
                     if leaf.status == "verified", let id=leaf.bankQuestionID,
                        let question=store.engine?.bank.concepts.flatMap(\.questions).first(where: { $0.id == id }) {
-                        Text("来源页可能包含答案，已记录本题资料查看；随后作答会注明看过资料。").font(.footnote).foregroundStyle(.secondary)
+                        Text("来源页可能包含多题答案，已记录打开同页源资料；同页原题随后作答会注明资料辅助。").font(.footnote).foregroundStyle(.secondary)
                         NavigationLink("查看完整核验题") { ProfessionalSourceStartView(store:store,question:question) }
                     } else { Text("本条仅作资料与知识卡索引，尚未开放练习。").foregroundStyle(.secondary) }
                 } else {
@@ -505,9 +505,8 @@ private struct ProfessionalSourceLeafView: View {
             .task(id:leaf.sourceQuestionID) { prepareExposure() }
     }
     private func prepareExposure() {
-        guard let id=leaf.bankQuestionID else { return }
-        guard store.recordSourceExposure(questionID:id) else { return }
-        exposureQuestionID=id
+        guard store.recordSourceExposure(sourceQuestionID:leaf.sourceQuestionID) else { return }
+        exposureSourceID=leaf.sourceQuestionID
     }
 }
 
