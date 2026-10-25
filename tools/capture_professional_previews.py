@@ -20,7 +20,8 @@ CASES = ("plan", "sources", "question", "answer", "recall", "guide-only",
          "unified-home", "unified-front", "unified-answer", "unified-related", "unified-resume",
          "unified-assisted-resume", "source-exposure", "unified-lesson-example",
          "unified-lesson-transfer", "unified-lesson-transfer-answer",
-         "unified-postponed", "unified-last-card")
+         "unified-postponed", "unified-last-card", "knowledge-home", "knowledge-lesson",
+         "knowledge-example", "knowledge-question", "knowledge-wrong", "knowledge-review", "knowledge-sources", "knowledge-recall")
 CAPTURES = [(subject, case) for subject in SUBJECTS for case in CASES]
 
 
@@ -146,7 +147,7 @@ def main():
             started = time.monotonic()
             # Cold DEBUG fixtures restore real engine archives on shared CI Macs.
             # This is an observation budget, never a product loading-speed pass.
-            readiness_timeout = 90 if case == "question" or case.startswith("unified-") else 45
+            readiness_timeout = 90 if case == "question" or case.startswith(("unified-","knowledge-")) else 45
             log = OUT / f"{subject}-{case}.log"
             marker = f"PROFESSIONAL_PREVIEW_RENDERED subject={subject} case={case}"
             capture_id = str(uuid.uuid4())

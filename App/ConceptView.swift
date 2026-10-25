@@ -53,94 +53,31 @@ struct ConceptView: View {
             Group {
                 if let engine = store.engine {
                     List {
-                        if let teaching = store.teaching, let plan = teaching.studyPlan {
-                            Section {
-                                Text("珞研讲义必学主线").font(.headline)
-                                Text("基础、强化一次、强化二次讲义；主卡和必要补卡自动接续。").font(.subheadline).foregroundStyle(.secondary)
-                                Text("共 \(plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }) 张 · 采用单词同款调度")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                                Button { recalling = true; onStart() } label: {
-                                    Label("继续背卡", systemImage: "rectangle.on.rectangle")
-                                        .font(.headline).frame(maxWidth:.infinity,minHeight:42)
-                                }.buttonStyle(.borderedProminent).disabled(store.blocked)
-                                Text("回忆 → 翻答案 → 自评。中途离开会保存断点；做题检验可按需进行。").font(.footnote).foregroundStyle(.secondary)
+                        if let course=store.teaching?.knowledgeCourse,let teaching=store.teaching {
+                            Section("按知识点重新学习") {
+                                Text("先讲懂，再做小题诊断；卡住时回到这个知识点或前置知识。").font(.subheadline)
+                                Text("\(course.points.count) 张全新知识点卡 · 基础、强化一二讲义合并到同一知识点").font(.footnote).foregroundStyle(.secondary)
+                                Button{recalling=true;onStart()}label:{Label("继续学习",systemImage:"play.fill").font(.headline).frame(maxWidth:.infinity,minHeight:44)}
+                                    .buttonStyle(.borderedProminent).disabled(store.blocked)
+                                Text("旧卡已全部撤下。旧记录原档保留，新诊断没有继承旧自评分数。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Section("辅助复习") {
+                                NavigationLink("复习新知识点卡 · 单词同款调度"){
+                                    ProfessionalRecallView(subject:store.subject,bank:engine.bank,teaching:teaching)
+                                }
+                                Text("每张卡就是一个知识点；记忆自评与小题作答分别保存。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Section("题库对应与原档") {
+                                NavigationLink("查看基础／强化题与知识点的对应关系"){KnowledgeSourcesView(course:course)}
+                                Text("组合题可对应多个知识点。题源疑点、方法缺口与范围边界单独列出，不当作已经会做。").font(.footnote).foregroundStyle(.secondary)
+                                Text("原题库作答、旧背卡快照和日志均保留；本版不清库、不恢复旧备份。").font(.footnote).foregroundStyle(.secondary)
                             }
                         } else {
-                            Section("背卡主线") {
-                                Text("请先导入带主线计划的最新版课程；已有练习记录保留。")
-                                Button("导入课程") { importing = true }
+                            Section("旧版卡组已撤下") {
+                                Text("请导入新版知识点课程。原卡、原题作答和学习记录保留归档，不会自动转换成新卡成绩。")
+                                Button("导入知识点课程") { importing = true }
                             }
-                        }
-                        Section("做题检验 · 可选") {
-                            NavigationLink("珞研原题与变式检验", destination: ProfessionalSourcesView(store: store))
-                            Text("隔一段时间再独立做题，检查能否组合运用；不要求逐题做完才继续背卡。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            if engine.shown != nil {
-                                NavigationLink("继续已保存的当前题", destination: ProfessionalSourcePracticeView(store:store))
-                            }
-                            NavigationLink("旧练习模式与记录") {
-                                List { legacyPracticeControls(engine) }.navigationTitle("旧练习模式")
-                            }.font(.subheadline)
-                        }
-                        if let teaching = store.teaching {
-                            Section("按需查看") {
-                                if teaching.studyPlan != nil {
-                                    NavigationLink("拓展选学与学习范围", destination: ProfessionalStudyPlanView(subject:store.subject,bank:engine.bank,teaching:teaching,practiceStore:store))
-                                }
-                                Text("原题和变式成绩单独记录；背卡不会自动记作做题正确。").font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                        Section("理解知识") {
-                            NavigationLink {
-                                ConceptKnowledgeMapView(store: store, open: { id in
-                                    showGuidance(id, fromPractice: false)
-                                }, resume: { position in
-                                    store.resumeGuidance(position)
-                                    if store.error == nil && store.guidance?.active != nil {
-                                        guidanceReturnsToPractice = false
-                                        guidancePresented = true
-                                    }
-                                })
-                            } label: { Label("知识地图与分步讲解", systemImage: "map") }
-                            Text("按章节查看知识联系；每次讲清一步，先判断、再解释，最后回忆核对。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                        if !engine.exhausted.isEmpty {
-                            Section("待补充变式（\(engine.exhausted.count)）") {
-                                ForEach(engine.exhausted) { Text($0.title) }
-                                Text("这些考点没有未做过的题，复习暂缓，原进度已保留。")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                        if !engine.archivedConcepts.isEmpty {
-                            Section("已移出主练的考点（\(engine.archivedConcepts.count)）") {
-                                ForEach(engine.archivedConcepts) { concept in
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Text(concept.title).font(.subheadline)
-                                        let reasons = Set(concept.questions.compactMap {
-                                            engine.bank.studyScope?.excludedQuestionReasons[$0.id]
-                                        }).sorted()
-                                        ForEach(reasons, id: \.self) { reason in
-                                            Text(reason).font(.footnote).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                                Text("这些考点保留在档案和导出中；其等级、到期日、已熟悉状态及历史作答均未重置。")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                        Section("范围与来源") {
-                            Text(engine.bank.notice).font(.footnote)
-                            ForEach(engine.bank.sources) { source in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(source.title).font(.subheadline)
-                                    if let url = URL(string: source.reference), url.scheme == "https" {
-                                        Link("查看依据", destination: url).font(.footnote)
-                                    } else {
-                                        Text(source.reference).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
+
                         }
                     }
                 } else {
@@ -156,8 +93,8 @@ struct ConceptView: View {
             .navigationTitle(store.subject.title)
             .navigationDestination(isPresented: $practicing) { practice }
             .navigationDestination(isPresented: $recalling) {
-                if let engine=store.engine, let teaching=store.teaching, teaching.studyPlan != nil {
-                    ProfessionalRecallView(subject:store.subject,bank:engine.bank,teaching:teaching,practiceStore:store)
+                if let course=store.teaching?.knowledgeCourse {
+                    KnowledgeLearningView(course:course)
                 } else {
                     ContentUnavailableView("背卡主线暂不可用",systemImage:"rectangle.on.rectangle",description:Text("返回课程首页，导入带主线计划的最新版课程。"))
                 }

@@ -15,7 +15,12 @@ struct ProfessionalStudyPlanView: View {
     var practiceStore: ConceptStore? = nil
     var body: some View {
         List {
-            if let plan = teaching.studyPlan {
+            if let course=teaching.knowledgeCourse {
+                Section("新知识点主线") {
+                    Text("\(course.points.count) 张知识点卡，先讲懂再诊断；旧卡已撤下，原档案只作历史保留。")
+                    NavigationLink("讲义与基础／强化题对应"){KnowledgeSourcesView(course:course)}
+                }
+            } else if let plan = teaching.studyPlan {
                 Section("当前必学主线") {
                     Text("基础、强化一次、强化二次讲义；以能独立完成珞研基础题与强化题为目标。")
                     Text("\(plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }) 张卡自动衔接，无需按原卡包或补卡包分别学习。")
@@ -145,6 +150,11 @@ struct ProfessionalQuestionCardsView: View {
     @Environment(\.professionalPriorityPreview) private var priorityPreview
     #endif
     private var cards: [RecallCard] {
+        if let course=teaching.knowledgeCourse {
+            let requested=Set(primaryIDs+supplementIDs)
+            let selected=Set(course.points.filter{!Set($0.legacyEvidenceCardIDs).isDisjoint(with:requested)}.map { $0.id+":knowledge-v1" })
+            return course.recallDeck(bankID:bank.id).cards.map(\.card).filter{selected.contains($0.id)}
+        }
         let primary = (try? RecallDeck.make(subject: subject, bank: bank, teaching: teaching).cards.map(\.card)) ?? []
         return primary.filter { primaryIDs.contains($0.id) } + (teaching.recallGroups ?? []).flatMap(\.recallCards).filter { supplementIDs.contains($0.id) }
     }
@@ -152,7 +162,7 @@ struct ProfessionalQuestionCardsView: View {
         VStack(alignment: .leading, spacing: 12) {
             if !cards.isEmpty { Text("查知识卡 · 不记录记住成绩").font(.headline) }
             ForEach(cards) { card in Button(card.prompt) { selection = ProfessionalCardReference(id: card.id, card: card) } }
-            ForEach(guideIDs, id: \.self) { id in
+            ForEach(teaching.knowledgeCourse == nil ? guideIDs:[], id: \.self) { id in
                 if let lesson=teaching.lessons.first(where: { $0.conceptID == id && $0.guide != nil }) {
                     Button("图解与讲解 · " + lesson.title) { guideSelection=ProfessionalGuideReference(id:id,lesson:lesson) }
                 }
@@ -416,9 +426,10 @@ private struct ProfessionalSourceBadges: View {
     }
 }
 
-private struct ProfessionalSourceImageView: View {
+struct ProfessionalSourceImageView: View {
     let visual: ProfessionalQuestionVisual
     var assetRoot: URL? = nil
+    init(visual:ProfessionalQuestionVisual,assetRoot:URL?=nil){self.visual=visual;self.assetRoot=assetRoot}
     @State private var image: CGImage?
     @State private var fullImage: CGImage?
     @State private var failed = false
@@ -606,6 +617,9 @@ import UIKit
     var expectedUnifiedAttempts=0
     var expectedSourceToken:UUID?
     var exposedRecallCardID:String?
+    var expectedKnowledgePointID:String?
+    var expectedKnowledgePhase="lesson"
+    var expectedKnowledgeAnswers=0
     init() {
         let args=ProcessInfo.processInfo.arguments
         func value(_ key:String)->String? { guard let i=args.firstIndex(of:key),i+1<args.count else { return nil }; return args[i+1] }
@@ -693,11 +707,46 @@ import UIKit
                     return ProfessionalCardPriority(cardID:card.id,sourceCardDigest:card.professionalDigest,level:level,classificationBasis:level == "priority" ? "foundation":(level == "regular" ? "local_detail":"extension"),reason:level == "priority" ? "先建立学习框架，再练习应用。":(level == "regular" ? "用于核对具体条件与应用边界。":"作为当前主线之外的进一步学习。"),sourceQuestionIDs:card.id == cards[0].id ? [first.id]:[])
                 }
             }
+            if selectedCase.hasPrefix("knowledge-") {
+                teaching.knowledgeCourse = .synthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))
+            }
             let package=ConceptContent(format:"xkl-concepts-v1",bankBytes:bankBytes,bankSHA256:hash)
-            let course=ConceptCourse(format:"xkl-course-v5",subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)
+            let course=ConceptCourse(format:teaching.knowledgeCourse == nil ? "xkl-course-v5":"xkl-course-v6",subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)
             let path=root.appendingPathComponent("synthetic.xklcourse")
             try JSONEncoder().encode(course).write(to:path)
             target.importContent(path)
+            if selectedCase.hasPrefix("knowledge-"),let knowledge=teaching.knowledgeCourse {
+                if selectedCase == "knowledge-recall" {
+                    let auxiliary=ProfessionalRecallStore(subject:subject,bank:bank,teaching:teaching,baseDirectory:root)
+                    auxiliary.start();expectedUnifiedCardID=auxiliary.engine?.currentItem?.id
+                    precondition(!auxiliary.blocked && auxiliary.engine?.record.cardIDs.allSatisfy({$0.hasPrefix("kp-")})==true,"New recall cannot contain legacy cards")
+                } else if !["knowledge-home","knowledge-sources"].contains(selectedCase) {
+                    let learning=KnowledgeLearningStore(course:knowledge,baseDirectory:root);learning.start()
+                    if selectedCase == "knowledge-review" {
+                        let yesterday=Calendar.current.date(byAdding:.day,value:-1,to:Date())!
+                        var practice=try KnowledgeLearningEngine.fresh(knowledge);try practice.start(now:yesterday)
+                        while let p=practice.current,p.phase=="lesson" {try practice.readNext(token:p.id,now:yesterday)}
+                        let p=practice.current!;try practice.answer(practice.check!.answerID,token:p.id,now:yesterday);try practice.finish(token:p.id,now:yesterday)
+                        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+                        try encoder.encode(practice.record).write(to:root.appendingPathComponent("KnowledgeLearning/"+subject.rawValue+"/current.json"),options:.atomic)
+                        expectedKnowledgeAnswers=1;expectedKnowledgePhase="question"
+                    } else {
+                        if selectedCase == "knowledge-example" {
+                            for _ in 0..<2 {if let p=learning.engine?.current{learning.readNext(p.id)}}
+                        }
+                        if ["knowledge-question","knowledge-wrong"].contains(selectedCase) {
+                            var count=0
+                            while let p=learning.engine?.current,p.phase=="lesson",count<12 {learning.readNext(p.id);count+=1}
+                            expectedKnowledgePhase="question"
+                        }
+                        if selectedCase == "knowledge-wrong",let p=learning.engine?.current,let q=learning.engine?.check,let wrong=q.choices.first(where:{$0.id != q.answerID}) {
+                            learning.answer(wrong.id,token:p.id);expectedKnowledgePhase="feedback";expectedKnowledgeAnswers=1
+                        }
+                        precondition(!learning.blocked,"Knowledge fixture must save its real model")
+                    }
+                    expectedKnowledgePointID=knowledge.points[0].id
+                }
+            }
             if ["question","question-zoom","answer","guide-only","source-groups-learned","card-priority-sheet","unified-assisted-resume"].contains(selectedCase) {
                 target.startQuestion(first.id,expectedCurrentToken:nil)
                 if ["answer","source-groups-learned"].contains(selectedCase),let token=target.engine?.shown?.id { target.choose("yes",token:token) }
@@ -765,10 +814,19 @@ struct ProfessionalPriorityPreview: View {
     @State private var receiptReported=false
     @State private var priorityCardVisible:String?
     @State private var unifiedRendered:ProfessionalRecallPreviewObservation?
+    @State private var knowledgeRendered:String?
     var body: some View {
         NavigationStack {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
-                if fixture.selectedCase == "unified-home" {
+                if fixture.selectedCase == "knowledge-home" {
+                    ConceptView(store:fixture.store,practicing:.constant(false),recalling:.constant(false))
+                } else if fixture.selectedCase == "knowledge-sources",let course=teaching.knowledgeCourse {
+                    KnowledgeSourcesView(course:course)
+                } else if fixture.selectedCase == "knowledge-recall" {
+                    ProfessionalRecallView(subject:fixture.subject,bank:bank,teaching:teaching,baseDirectory:fixture.root)
+                } else if fixture.selectedCase.hasPrefix("knowledge-"),let course=teaching.knowledgeCourse {
+                    KnowledgeLearningView(course:course,baseDirectory:fixture.root)
+                } else if fixture.selectedCase == "unified-home" {
                     ConceptView(store:fixture.store,practicing:.constant(false),recalling:.constant(false))
                 } else if fixture.selectedCase == "unified-assisted-resume" {
                     ProfessionalSourcePracticeView(store:fixture.store,exposedCardID:fixture.exposedRecallCardID)
@@ -792,6 +850,8 @@ struct ProfessionalPriorityPreview: View {
         }.environment(\.professionalQuestionZoomPreview,ProfessionalQuestionZoomPreview(autoOpen:fixture.selectedCase == "question-zoom",didAppear:{ width,height in zoomWidth=width; zoomHeight=height; zoomAppeared=true }))
         .environment(\.professionalPriorityPreview,ProfessionalPriorityPreviewState(openCard:fixture.selectedCase == "card-priority-sheet",didRender:{ priorityCardVisible=$0 }))
         .environment(\.professionalRecallPreview,ProfessionalRecallPreviewState(didRender:{ unifiedRendered=$0 },lessonExampleExpanded:fixture.selectedCase == "unified-lesson-example",lessonTransferExpanded:fixture.selectedCase.hasPrefix("unified-lesson-transfer"),lessonSolutionVisible:fixture.selectedCase == "unified-lesson-transfer-answer",lessonScrollTarget:fixture.selectedCase == "unified-lesson-example" ? "professional-lesson-worked" : (fixture.selectedCase.hasPrefix("unified-lesson-transfer") ? "professional-lesson-transfer":nil)))
+        .environment(\.knowledgePreview,KnowledgePreviewState(didRender:{id,phase in knowledgeRendered=id+"|"+phase}))
+        .onChange(of:knowledgeRendered){_,value in if value != nil{reportWhenReady()}}
         .onChange(of:unifiedRendered) { _,value in if value != nil { reportWhenReady() } }
         .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || ["unified-home","unified-assisted-resume"].contains(fixture.selectedCase)) { reportWhenReady() } }
         .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
@@ -810,6 +870,17 @@ struct ProfessionalPriorityPreview: View {
     private func criticalStateReady()->Bool {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
+        case "knowledge-home","knowledge-sources":return teaching.knowledgeCourse?.retiredLegacyCards==true && engine.record.attempts.isEmpty
+        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review":
+            guard let course=teaching.knowledgeCourse,let expected=fixture.expectedKnowledgePointID,
+                  knowledgeRendered==expected+"|"+fixture.expectedKnowledgePhase else{return false}
+            let stored=KnowledgeLearningStore(course:course,baseDirectory:fixture.root)
+            guard !stored.blocked,let e=stored.engine,e.current?.pointID==expected,e.current?.phase==fixture.expectedKnowledgePhase,
+                  e.record.events.filter({$0.kind=="answer"}).count==fixture.expectedKnowledgeAnswers,engine.record.attempts.isEmpty else{return false}
+            return true
+        case "knowledge-recall":
+            let stored=ProfessionalRecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,baseDirectory:fixture.root)
+            return !stored.blocked && stored.engine?.currentItem?.id==fixture.expectedUnifiedCardID && unifiedRendered?.cardID==fixture.expectedUnifiedCardID && stored.engine?.record.attempts.isEmpty==true && stored.engine?.record.cardIDs.allSatisfy({$0.hasPrefix("kp-")})==true
         case "unified-home": return teaching.studyPlan != nil && engine.shown == nil && engine.record.attempts.isEmpty
         case "unified-assisted-resume":
             return engine.shown?.id == fixture.expectedSourceToken && engine.record.review == nil && engine.record.attempts.isEmpty && fixture.store.currentQuestionUsedCardHelp && fixture.exposedRecallCardID != nil

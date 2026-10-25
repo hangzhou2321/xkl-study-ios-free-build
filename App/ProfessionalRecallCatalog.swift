@@ -9,6 +9,12 @@ enum ProfessionalRecallScope: String, Codable, CaseIterable {
 enum ProfessionalRecallCatalog {
     static func make(subject: ConceptSubject, bank: ConceptBank, teaching: ConceptTeaching,
                      scope: ProfessionalRecallScope, allowEmpty: Bool = false) throws -> RecallDeck {
+        if let course=teaching.knowledgeCourse {
+            try course.validate(bank:bank,teaching:teaching)
+            let deck=scope == .mainline ? course.recallDeck(bankID:bank.id) : RecallDeck(subject:subject,bankID:bank.id,cards:[])
+            if !deck.cards.isEmpty || !allowEmpty { try deck.validate() }
+            return deck
+        }
         guard let plan = teaching.studyPlan, teaching.hasCompleteProfessionalExtension else {
             throw ExamError.invalid("请先导入带主线计划的最新版课程；原记录保留。")
         }

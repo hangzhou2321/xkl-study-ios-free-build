@@ -3,14 +3,14 @@ import PackageDescription
 
 var modelSources = ["PocketEngine.swift", "StudyModels.swift", "StudyHistory.swift", "ContentImportTransaction.swift",
     "ExamModels.swift", "ExamLearningEngine.swift", "ConceptStudy.swift", "ConceptTeaching.swift",
-    "ConceptGuidance.swift", "ConceptGuidanceStore.swift", "ConceptDiagram.swift", "ConceptSyllabus.swift", "RecallStudy.swift", "MathPractice.swift", "MathExperience.swift", "MathGuide.swift", "ProfessionalStudyPlan.swift", "ProfessionalQuestionPresentation.swift", "ProfessionalSourceSections.swift", "ProfessionalCardPriority.swift", "ProfessionalCardLesson.swift", "ProfessionalRecallCatalog.swift", "ProfessionalRecallEngine.swift"]
+    "ConceptGuidance.swift", "ConceptGuidanceStore.swift", "ConceptDiagram.swift", "ConceptSyllabus.swift", "RecallStudy.swift", "MathPractice.swift", "MathExperience.swift", "MathGuide.swift", "ProfessionalStudyPlan.swift", "ProfessionalQuestionPresentation.swift", "ProfessionalSourceSections.swift", "ProfessionalCardPriority.swift", "ProfessionalCardLesson.swift", "ProfessionalRecallCatalog.swift", "ProfessionalRecallEngine.swift", "KnowledgeCourse.swift", "KnowledgeLearning.swift", "KnowledgeSyntheticFixture.swift"]
 var modelExcludes = ["StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
     "Info.plist", "Assets.xcassets", "ExamStore.swift", "ExamView.swift", "ConceptStore.swift", "ConceptView.swift",
-    "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift", "MathExperienceStore.swift", "MathExperienceView.swift", "MathRichTextView.swift", "MathRenderer", "ProfessionalStudyPlanView.swift", "ProfessionalRecallStore.swift", "ProfessionalRecallView.swift"]
+    "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift", "MathExperienceStore.swift", "MathExperienceView.swift", "MathRichTextView.swift", "MathRenderer", "ProfessionalStudyPlanView.swift", "ProfessionalRecallStore.swift", "ProfessionalRecallView.swift", "KnowledgeLearningStore.swift", "KnowledgeLearningView.swift"]
 #if os(macOS)
 // Exercise real import/persistence against temporary directories on the build host.
-modelSources += ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift", "MathExperienceStore.swift", "ProfessionalRecallStore.swift"]
-modelExcludes.removeAll { ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift", "MathExperienceStore.swift", "ProfessionalRecallStore.swift"].contains($0) }
+modelSources += ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift", "MathExperienceStore.swift", "ProfessionalRecallStore.swift", "KnowledgeLearningStore.swift"]
+modelExcludes.removeAll { ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift", "MathExperienceStore.swift", "ProfessionalRecallStore.swift", "KnowledgeLearningStore.swift"].contains($0) }
 #endif
 
 let package = Package(

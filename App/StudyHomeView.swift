@@ -40,7 +40,7 @@ struct StudyHomeView: View {
                         Button {
                             launch(selectedArea, continueMode)
                         } label: {
-                            Label(selectedArea == .computer || selectedArea == .power ? "继续背卡" : (hasSavedPosition(selectedArea) ? "接着学" : "开始学习"), systemImage: "play.fill")
+                            Label(selectedArea == .computer || selectedArea == .power ? (knowledgeMode(selectedArea) ? "继续学习":"继续背卡") : (hasSavedPosition(selectedArea) ? "接着学" : "开始学习"), systemImage: "play.fill")
                                 .frame(maxWidth: .infinity, minHeight: 42)
                         }.buttonStyle(.borderedProminent).disabled(!available(selectedArea))
                         Button {
@@ -89,8 +89,8 @@ struct StudyHomeView: View {
         switch area {
         case .vocabulary: return store.deck != nil && store.canLearn
         case .publicQuestions: return exams.bank != nil && !exams.storageBlocked
-        case .computer: return computer.engine != nil && computer.teaching?.studyPlan != nil && !computer.blocked
-        case .power: return power.engine != nil && power.teaching?.studyPlan != nil && !power.blocked
+        case .computer: return computer.engine != nil && computer.teaching?.knowledgeCourse != nil && !computer.blocked
+        case .power: return power.engine != nil && power.teaching?.knowledgeCourse != nil && !power.blocked
         }
     }
 
@@ -116,7 +116,7 @@ struct StudyHomeView: View {
             if exams.isShowingResult { return "继续查看刚才的答案与解析" }
             return exams.currentQuestion != nil ? "继续刚才的题，已选选项保留" : "先复习，再做新题"
         case .computer, .power:
-            return "继续必学背卡 · 自动保存与续学"
+            return knowledgeMode(area) ? "按知识点学习 · 先讲懂，再诊断":"继续必学背卡 · 自动保存与续学"
         }
     }
 
@@ -132,9 +132,13 @@ struct StudyHomeView: View {
                 : "今天到期 \(exams.dueTodayCount) 题，开始后优先复习"
         case .computer, .power:
             let target = area == .computer ? computer : power
+            if let course=target.teaching?.knowledgeCourse {return "\(course.points.count) 个知识点；新诊断与记忆复习分别记录，旧卡已归档"}
             guard let plan = target.teaching?.studyPlan else { return "" }
             let count = plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }
             return "必学 \(count) 张；进入后显示已学、到期和本轮进度"
         }
+    }
+    private func knowledgeMode(_ area:StudyArea)->Bool {
+        (area == .computer && computer.teaching?.knowledgeCourse != nil) || (area == .power && power.teaching?.knowledgeCourse != nil)
     }
 }

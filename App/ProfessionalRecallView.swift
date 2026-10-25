@@ -92,7 +92,7 @@ struct ProfessionalRecallView: View {
                 if let error=store.error { Text(error).foregroundStyle(.red) }
             }.padding(22).frame(maxWidth:700,alignment:.leading).frame(maxWidth:.infinity)
         }
-        .navigationTitle(scope == .mainline ? "必学背卡" : "拓展选学")
+        .navigationTitle(teaching.knowledgeCourse != nil ? "知识点卡复习" : (scope == .mainline ? "必学背卡" : "拓展选学"))
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge:.bottom) { actions }
         .toolbar {

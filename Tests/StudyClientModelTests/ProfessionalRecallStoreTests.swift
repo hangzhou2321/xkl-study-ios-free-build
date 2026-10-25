@@ -343,6 +343,37 @@ final class ProfessionalRecallStoreTests: XCTestCase {
         XCTAssertEqual(try files(root), protected)
     }
 
+    @MainActor func testKnowledgeReplacementRetiresAllLegacyCardsAndKeepsTheirArchiveBytes() throws {
+        let (bank,base)=try fixture(),directory=try root();defer{try? FileManager.default.removeItem(at:directory)}
+        let old=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:base,baseDirectory:directory)
+        old.start();let token=try XCTUnwrap(old.engine?.record.presentation?.id);old.reveal(token:token);old.grade(remembered:false,token:token)
+        let oldBytes=try Data(contentsOf:current(directory)),oldIDs=try XCTUnwrap(old.engine?.record.cardIDs)
+        var teaching=base
+        let evidence=(base.primaryRecallDeck?.cards.map(\.id) ?? [])+(base.recallGroups ?? []).flatMap{$0.recallCards.map(\.id)}
+        teaching.knowledgeCourse = .synthetic(subject:.computer,hash:base.bankSHA256,legacyIDs:evidence)
+        try teaching.validate(bank:bank,hash:base.bankSHA256)
+        try teaching.validateAppendOnlyRecall(from:base,bank:bank)
+        let new=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        new.start();XCTAssertFalse(new.blocked);XCTAssertNil(new.error)
+        XCTAssertTrue(Set(try XCTUnwrap(new.engine?.record.cardIDs)).isDisjoint(with:Set(oldIDs)))
+        XCTAssertEqual(new.engine?.record.cardIDs.count,2)
+        XCTAssertTrue(try XCTUnwrap(new.engine?.record.attempts).isEmpty)
+        XCTAssertTrue(try XCTUnwrap(new.engine?.record.migration.sourceRecords).isEmpty)
+        XCTAssertEqual(try Data(contentsOf:current(directory)),oldBytes)
+        let pack=ConceptContent(format:"xkl-concepts-v1",bankBytes:try encode(bank),bankSHA256:base.bankSHA256)
+        let data=try encode(ConceptCourse(format:"xkl-course-v6",subject:.computer,bankContent:try encode(pack),teaching:teaching))
+        _=try ConceptCourse.load(data,subject:.computer)
+        let mislabelled=try encode(ConceptCourse(format:"xkl-course-v5",subject:.computer,bankContent:try encode(pack),teaching:teaching))
+        XCTAssertThrowsError(try ConceptCourse.load(mislabelled,subject:.computer))
+        let input=directory.appendingPathComponent("new-knowledge.xklcourse");try data.write(to:input)
+        let actual=ConceptStore(subject:.computer,baseDirectory:directory)
+        actual.importContent(input);XCTAssertNil(actual.error)
+        let first=try encode(XCTUnwrap(actual.engine?.record))
+        actual.importContent(input);XCTAssertNil(actual.error)
+        XCTAssertEqual(try encode(XCTUnwrap(actual.engine?.record)),first)
+        XCTAssertEqual(try Data(contentsOf:current(directory)),oldBytes)
+    }
+
     @MainActor func testPostponePersistsWithoutChangingQuestionsLegacyOrOtherSubjects() throws {
         let (bank,teaching)=try fixture(), directory=try root();defer { try? FileManager.default.removeItem(at:directory) }
         let content=ConceptContent(format:"xkl-concepts-v1",bankBytes:try encode(bank),bankSHA256:teaching.bankSHA256)

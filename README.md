@@ -1,6 +1,10 @@
 # XKLStudy source-only build candidate
 
-Version 1.18.1 (35). Bundle identifier: `local.xkl.study`.
+Version 1.19.0 (36). Bundle identifier: `local.xkl.study`.
+
+Professional v6 courses use knowledge points as the teaching unit. The primary path is explanation, worked example, a small diagnostic, and later unassisted review. Foundation/reinforcement workbook occurrences link to the same point; composite problems may link to several points. Source problems and missing methods remain explicit.
+
+Legacy professional cards are retired from learning UI. Their course bytes and archived state remain evidence; no old grade is converted to new knowledge-point proficiency. New teaching lives in `KnowledgeLearning`, new optional word-engine card review in `KnowledgeRecall`. Existing English/public-exam/math state and scheduling are unchanged. v6 must be imported by a compatible app; it is not silently treated as a v5 card pack.
 
 Professional recall offers an explicit “暂时不学 · 本轮稍后” action. It moves all unfinished tokens of the current card behind other queued cards, preserving every scheduling value and emitting metadata rather than a grade. A sole remaining card stays as a saved breakpoint. Vocabulary, public-exam and math flows never call this API.
 

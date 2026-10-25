@@ -42,6 +42,7 @@ final class ProfessionalRecallStore: ObservableObject {
     private var baselineSHA256 = ""
     private var durableSHA256 = ""
     private var subjectDisk: ProfessionalRecallSubjectDisk?
+    private let knowledgeMode: Bool
     private var currentURL: URL { directory.appendingPathComponent("current.json") }
     private var initialURL: URL { directory.appendingPathComponent("initial.json") }
     private var baselineURL: URL { directory.appendingPathComponent("legacy-baseline.json") }
@@ -51,8 +52,9 @@ final class ProfessionalRecallStore: ObservableObject {
          scope: ProfessionalRecallScope = .mainline, baseDirectory: URL? = nil,
          writer: @escaping (Data, URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.scope = scope; self.writer = writer
+        self.knowledgeMode = teaching.knowledgeCourse != nil
         self.base = baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        self.directory = base.appendingPathComponent("ProfessionalRecall", isDirectory: true)
+        self.directory = base.appendingPathComponent(knowledgeMode ? "KnowledgeRecall" : "ProfessionalRecall", isDirectory: true)
             .appendingPathComponent(subject.rawValue, isDirectory: true)
         do {
             var catalogs: [String: RecallDeck] = [:]
@@ -303,6 +305,7 @@ final class ProfessionalRecallStore: ObservableObject {
         return try Data(contentsOf: url)
     }
     private func scanLegacy() throws -> [ProfessionalRecallLegacyFile] {
+        if knowledgeMode { return [] } // New knowledge points never inherit old-card self-assessments.
         let parent = base.appendingPathComponent("RecallCards", isDirectory: true).appendingPathComponent(subject.rawValue, isDirectory: true)
         guard FileManager.default.fileExists(atPath: parent.path) else { return [] }
         let rootInfo = try parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])

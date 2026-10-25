@@ -58,8 +58,9 @@ struct ConceptTeaching: Codable, Equatable {
     var cardPriorities: [ProfessionalCardPriority]? = nil
     var questionPracticeNotes: [ProfessionalQuestionPracticeNote]? = nil
     var cardLessons: [ProfessionalCardLesson]? = nil
+    var knowledgeCourse: KnowledgeCourse? = nil
 
-    var hasProfessionalExtension: Bool { primaryRecallDeck != nil || studyPlan != nil || questionPresentations != nil || questionLinks != nil || cardCorrections != nil || sourceLeaves != nil || cardPriorities != nil || questionPracticeNotes != nil || cardLessons != nil }
+    var hasProfessionalExtension: Bool { primaryRecallDeck != nil || studyPlan != nil || questionPresentations != nil || questionLinks != nil || cardCorrections != nil || sourceLeaves != nil || cardPriorities != nil || questionPracticeNotes != nil || cardLessons != nil || knowledgeCourse != nil }
     var hasCompleteProfessionalExtension: Bool { primaryRecallDeck != nil && studyPlan != nil && questionPresentations != nil && questionLinks != nil && cardCorrections != nil && sourceLeaves != nil }
     func validatePrimaryRecallIdentity(from old: ConceptTeaching, bank: ConceptBank) throws {
         let subject: ConceptSubject = bank.id == ConceptSubject.computer.bankID ? .computer : .power
@@ -154,6 +155,7 @@ struct ConceptTeaching: Codable, Equatable {
             if let cardPriorities { try ProfessionalCardPriority.validateAll(cardPriorities,bank:bank,teaching:self) }
             if let questionPracticeNotes { try ProfessionalQuestionPracticeNote.validateAll(questionPracticeNotes, bank: bank) }
             if let cardLessons { try ProfessionalCardLesson.validateAll(cardLessons, deck: primaryRecallDeck, groups: recallGroups ?? []) }
+            if let knowledgeCourse { try knowledgeCourse.validate(bank:bank,teaching:self) }
         }
     }
 }
@@ -167,10 +169,11 @@ struct ConceptCourse: Codable {
     static func load(_ data: Data, subject: ConceptSubject) throws -> (ConceptCourse, ConceptBank) {
         guard data.count <= 50 * 1_024 * 1_024 else { throw ExamError.invalid("课程包过大。") }
         let course = try JSONDecoder().decode(Self.self, from: data)
-        guard ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5"].contains(course.format), course.subject == subject else {
+        guard ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5", "xkl-course-v6"].contains(course.format), course.subject == subject else {
             throw ExamError.invalid("请在对应科目中导入课程包。")
         }
-        guard (course.format == "xkl-course-v5") == course.teaching.hasProfessionalExtension else { throw ExamError.invalid("专业课扩展必须显式使用完整v5课程格式。") }
+        guard ["xkl-course-v5","xkl-course-v6"].contains(course.format) == course.teaching.hasProfessionalExtension,
+              (course.format == "xkl-course-v6") == (course.teaching.knowledgeCourse != nil) else { throw ExamError.invalid("知识点重做课程需使用v6格式；旧课程与原记录保留。") }
         let (pack, bank) = try ConceptContent.load(course.bankContent)
         guard bank.id == subject.bankID else { throw ExamError.invalid("课程科目标识不一致。") }
         try course.teaching.validate(bank: bank, hash: pack.bankSHA256)
