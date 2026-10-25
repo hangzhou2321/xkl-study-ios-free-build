@@ -57,6 +57,30 @@ xkl_engine_t *xkl_engine_blank(uint32_t active_count, const uint8_t *stream16);
 xkl_engine_t *xkl_engine_import_cards(uint32_t active_count,
     const uint32_t *packed_cards, uint32_t day, uint32_t pending_word,
     const uint8_t *stream16);
+/* Professional collection membership only; never call for vocabulary. Numeric
+ * IDs are permanent and new IDs append. enabled has new_count bytes (0 or 1).
+ * For every retained non-inert old card, activated_cards must equal its current
+ * packed value. Newly enabled/inert slots use the supplied validated value.
+ * Disabled cards become inert; the host must archive their original values,
+ * mapping and pre-change snapshot before committing the result to disk.
+ * Filters only disabled queue tokens, retaining the other stages/order and
+ * current revealed head. Emits START/PRESENT/REVEAL metadata, never grades.
+ * Pending undo is closed at this content boundary. Optional stage/failed arrays
+ * preserve unfinished work when activating an inert/new slot; both arrays must
+ * be present or both NULL. Stage bit 0 is an ordinary presentation, 1..7 are W
+ * stages. Retained active cards ignore incoming arrays. Capacity exhaustion
+ * fails atomically: the host must retain/defer transferred obligations, never
+ * discard them or turn them into a made-up grade. Incoming obligations after
+ * a completed task open a new task (like start, with no ordinary new-card
+ * selection first); its prior counts remain in the archived boundary. */
+bool xkl_engine_reconcile_collection(xkl_engine_t *engine,
+    uint32_t old_count, uint32_t new_count, const uint8_t *enabled,
+    const uint32_t *activated_cards, int64_t uptime_us,
+    const uint8_t *pending_stages, const uint8_t *failed_rounds);
+/* Read-only stage mask (bits 0..7), zero if the word has no live obligation.
+ * failed_round receives 0/1/2 when non-NULL. */
+uint32_t xkl_engine_pending_stages(const xkl_engine_t *engine, uint32_t word,
+    uint32_t *failed_round);
 /* Restore preserves presentation state for local atomic-save rollback.
  * On app launch, clock discontinuity, or cross-device handoff call start before
  * learning: it logs a new session and hides the old answer. */

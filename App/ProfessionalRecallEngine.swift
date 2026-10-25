@@ -46,11 +46,35 @@ struct ProfessionalRecallVolume: Codable, Equatable {
     let analysis: StudyAnalysisSettings
 }
 
+struct ProfessionalRecallTransferState: Codable, Equatable {
+    let cardID: String
+    let subject: ConceptSubject
+    let packed: UInt32
+    let stageMask: UInt8
+    let failedRound: UInt8
+    let presentation: ProfessionalRecallPresentation?
+    let sourceScope: String
+    let sourceSnapshotSHA256: String
+    let sourceSequence: UInt32
+}
+
+struct ProfessionalRecallContentBoundary: Codable, Equatable {
+    let at: Date
+    let beforeSnapshot: Data
+    let beforeSnapshotSHA256: String
+    let beforeCardIDs: [String]
+    let beforeActiveCardIDs: [String]
+    let beforeItems: [RecallDeck.Item]
+    let parked: [ProfessionalRecallTransferState]
+    let imported: [ProfessionalRecallTransferState]
+    let afterActiveCardIDs: [String]
+}
+
 struct ProfessionalRecallRecord: Codable, Equatable {
     var format = "xkl-professional-pocket-recall-v1"
     let subject: ConceptSubject
     /// This is the durable numeric-ID mapping. Content text and labels are not identity.
-    let cardIDs: [String]
+    var cardIDs: [String]
     var snapshot: Data
     var snapshotSHA256: String
     var analysis: StudyAnalysisSettings
@@ -58,6 +82,11 @@ struct ProfessionalRecallRecord: Codable, Equatable {
     var attempts: [ProfessionalRecallAttempt]
     var volumes: [ProfessionalRecallVolume]
     let migration: ProfessionalRecallMigration
+    var retainedItems: [RecallDeck.Item]? = nil
+    var activeCardIDs: [String]? = nil
+    var parkedCards: [String: ProfessionalRecallTransferState]? = nil
+    var deferredCards: [String: ProfessionalRecallTransferState]? = nil
+    var contentChanges: [ProfessionalRecallContentBoundary]? = nil
 }
 
 struct ProfessionalRecallStats: Equatable {
@@ -70,7 +99,7 @@ struct ProfessionalRecallStats: Equatable {
 /// The host must persist the complete record atomically before publishing a mutation.
 @MainActor
 final class ProfessionalRecallEngine {
-    let deck: RecallDeck
+    private(set) var deck: RecallDeck
     private(set) var record: ProfessionalRecallRecord
     private var engine: PocketEngine
     private var started = false
@@ -82,6 +111,8 @@ final class ProfessionalRecallEngine {
     }
     var volumeRecords: UInt32 { engine.volumeRecords }
     var logBase: UInt32 { engine.logBase }
+    var activeCardIDs: [String] { record.activeCardIDs ?? record.cardIDs }
+    private static let inert: UInt32 = 0x50ffff
 
     /// An in-process transaction copy retains the monotonic-clock session.
     /// Restoring from disk still uses init and rebases at the first start.
@@ -89,6 +120,12 @@ final class ProfessionalRecallEngine {
         let copy = try ProfessionalRecallEngine(deck: deck, record: record)
         copy.started = started
         return copy
+    }
+
+    static func restore(record: ProfessionalRecallRecord, fallback: RecallDeck) throws -> ProfessionalRecallEngine {
+        let items = record.retainedItems ?? fallback.cards
+        let registry = RecallDeck(subject: record.subject, bankID: record.subject.bankID, cards: items)
+        return try Self(deck: registry, record: record)
     }
 
     init(deck: RecallDeck, record: ProfessionalRecallRecord) throws {
@@ -105,7 +142,36 @@ final class ProfessionalRecallEngine {
         self.deck = deck
         self.record = record
         engine = try PocketEngine(snapshot: record.snapshot)
+        let active = record.activeCardIDs ?? record.cardIDs
+        guard Set(active).count == active.count, Set(active).isSubset(of: Set(record.cardIDs)),
+              record.retainedItems == nil || record.retainedItems?.map(\.id) == record.cardIDs,
+              Set((record.parkedCards ?? [:]).keys).isSubset(of: Set(record.cardIDs)),
+              Set((record.deferredCards ?? [:]).keys).isSubset(of: Set(active)) else {
+            throw ExamError.invalid("专业背卡活动范围或保留映射损坏。")
+        }
         let info = try engine.info
+        for (id, saved) in (record.parkedCards ?? [:]).merging(record.deferredCards ?? [:], uniquingKeysWith: { _, current in current }) {
+            guard saved.cardID == id, saved.subject == deck.subject, saved.failedRound <= 2,
+                  saved.sourceSnapshotSHA256.count == 64, saved.sourceSnapshotSHA256.allSatisfy(\.isHexDigit),
+                  saved.presentation == nil || saved.presentation?.cardID == id else { throw ExamError.invalid("保留的专业卡迁移凭据不一致。") }
+        }
+        let activeSet = Set(active), packedValues = try cardValues()
+        for (index, id) in record.cardIDs.enumerated() {
+            let parkedInEngine = !activeSet.contains(id) || record.deferredCards?[id] != nil
+            guard (packedValues[index] == Self.inert) == parkedInEngine else {
+                throw ExamError.invalid("专业卡保留状态与引擎停用槽不一致。")
+            }
+        }
+        for change in record.contentChanges ?? [] {
+            guard change.beforeSnapshotSHA256 == StudySHA256.hex(change.beforeSnapshot),
+                  change.beforeItems.map(\.id) == change.beforeCardIDs,
+                  Array(record.cardIDs.prefix(change.beforeCardIDs.count)) == change.beforeCardIDs,
+                  Set(change.beforeActiveCardIDs).isSubset(of: Set(change.beforeCardIDs)),
+                  Set(change.afterActiveCardIDs).isSubset(of: Set(record.cardIDs)) else {
+                throw ExamError.invalid("课程范围变更的保留快照或ID链不一致。")
+            }
+            _ = try PocketEngine(snapshot: change.beforeSnapshot)
+        }
         try record.analysis.validate(streamID: engine.streamID, logCount: info.log_records)
         var boundary: UInt32 = 0
         for volume in record.volumes {
@@ -127,6 +193,11 @@ final class ProfessionalRecallEngine {
                 throw ExamError.invalid("专业背卡断点与单词引擎不一致。")
             }
         } else if record.presentation != nil { throw ExamError.invalid("专业背卡存在无任务断点。") }
+        if let shown = record.presentation {
+            guard active.contains(shown.cardID), record.deferredCards?[shown.cardID] == nil else {
+                throw ExamError.invalid("专业背卡当前卡不属于活动队列。")
+            }
+        }
         let events = try allEvents()
         let graded = events.filter { $0.kind == 5 || $0.kind == 6 }
         guard graded.count == record.attempts.count,
@@ -146,17 +217,40 @@ final class ProfessionalRecallEngine {
 
     /// `legacy` must already have passed RecallEngine replay validation against
     /// each original deck. No legacy answer is replayed as a new Pocket answer.
-    static func fresh(deck: RecallDeck, legacy: [RecallRecord] = [], now: Date = Date()) throws -> ProfessionalRecallEngine {
+    static func fresh(deck: RecallDeck, legacy: [RecallRecord] = [], now: Date = Date(), initiallyActive: Bool = true) throws -> ProfessionalRecallEngine {
         try deck.validate()
         let day = UInt32(try ConceptCalendar.studyDay(now))
         let ids = deck.cards.map(\.id), allowed = Set(ids)
         guard ids.count <= Int(XKL_WORD_COUNT) else { throw ExamError.invalid("专业卡数量超出单词引擎容量。") }
-        var progress: [String: (RecallProgress, Date)] = [:]
-        let sources = legacy.sorted {
+        var progress: [String: (RecallProgress, RecallRecord)] = [:]
+        // Event-chain continuation outranks wall-clock timestamps. A device
+        // clock adjustment must not resurrect a shorter already-graded prefix.
+        var effective: [RecallRecord] = []
+        for candidate in legacy {
+            let superseded = legacy.contains { other in
+                other.deckSHA256 == candidate.deckSHA256 && other.events.count > candidate.events.count &&
+                    Array(other.events.prefix(candidate.events.count)) == candidate.events
+            }
+            if !superseded && !effective.contains(candidate) { effective.append(candidate) }
+        }
+        let sources = effective.sorted {
             let a = $0.events.last?.at ?? .distantPast, b = $1.events.last?.at ?? .distantPast
             if a != b { return a < b }
             if $0.events.count != $1.events.count { return $0.events.count < $1.events.count }
             return $0.deckSHA256 < $1.deckSHA256
+        }
+        func evidenceIDs(_ source: RecallRecord) -> Set<String> {
+            Set(Array(source.state.progress.keys) + source.state.queue + (source.state.parkedQueue ?? []) +
+                [source.state.shown?.cardID, source.state.result?.presentation.cardID].compactMap { $0 })
+        }
+        for index in sources.indices {
+            for previous in sources.prefix(index) where !evidenceIDs(previous).isDisjoint(with: evidenceIDs(sources[index])) {
+                let current = sources[index]
+                let chain = previous.deckSHA256 == current.deckSHA256 &&
+                    (Array(previous.events.prefix(current.events.count)) == current.events ||
+                     Array(current.events.prefix(previous.events.count)) == previous.events)
+                guard chain else { throw ExamError.invalid("同一卡片有非同一事件链的旧断点，不能用另一张卡的活动覆盖。") }
+            }
         }
         var latestEvidence: [String: Int] = [:]
         for (index, source) in sources.enumerated() {
@@ -169,15 +263,21 @@ final class ProfessionalRecallEngine {
             guard old.format == "xkl-recall-record-v1", old.state.day <= Int(day) else {
                 throw ExamError.invalid("旧背卡档案格式或日期异常，拒绝迁移。")
             }
-            let timestamp = old.events.last?.at ?? .distantPast
             for (id, value) in old.state.progress where allowed.contains(id) {
                 guard (0...10).contains(value.level), (18_000...50_180).contains(value.dueDay),
                       value.remembered >= 0, value.forgotten >= 0, let last = value.lastDay,
                       (18_000...Int(day)).contains(last) else { throw ExamError.invalid("旧背卡进度无效，拒绝推测历史。") }
-                if let existing = progress[id], existing.1 == timestamp, existing.0 != value {
-                    throw ExamError.invalid("同一专业卡有冲突的旧进度，原档案保留待核对。")
+                if let existing = progress[id], existing.0 != value {
+                    let previous = existing.1
+                    guard previous.deckSHA256 == old.deckSHA256 else {
+                        throw ExamError.invalid("同一专业卡有不同档案的分叉进度，不能按其他卡的最后操作时间覆盖。")
+                    }
+                    if Array(old.events.prefix(previous.events.count)) == previous.events {
+                        // A proven append-only continuation may replace its prefix state.
+                    } else if Array(previous.events.prefix(old.events.count)) == old.events { continue }
+                    else { throw ExamError.invalid("同一专业卡的旧记录不是同一事件链，停止自动覆盖。") }
                 }
-                progress[id] = (value, timestamp)
+                progress[id] = (value, old)
             }
         }
         // An old shown card must not resurrect a newer already-graded result.
@@ -197,10 +297,11 @@ final class ProfessionalRecallEngine {
             return value
         }
         var stream = UUID().uuid
+        let initialPacked = initiallyActive ? packed : [UInt32](repeating: Self.inert, count: ids.count)
         let pointer = withUnsafeBytes(of: &stream) { streamBytes in
-            packed.withUnsafeBufferPointer { cards in
+            initialPacked.withUnsafeBufferPointer { cards in
                 xkl_engine_import_cards(UInt32(ids.count), cards.baseAddress, day,
-                    shown.flatMap { ids.firstIndex(of: $0.cardID) }.map(UInt32.init) ?? UInt32.max,
+                    initiallyActive ? (shown.flatMap { ids.firstIndex(of: $0.cardID) }.map(UInt32.init) ?? UInt32.max) : UInt32.max,
                     streamBytes.bindMemory(to: UInt8.self).baseAddress)
             }
         }
@@ -214,15 +315,31 @@ final class ProfessionalRecallEngine {
         let temporary = try PocketEngine(snapshot: snapshot)
         let migration = ProfessionalRecallMigration(format: "xkl-recall-to-pocket-import-v1", at: now,
             sourceRecords: legacy, cards: mapped, resumedCardID: shown?.cardID, resumedAnswerVisible: shown?.revealed ?? false)
-        let record = ProfessionalRecallRecord(subject: deck.subject, cardIDs: ids, snapshot: snapshot,
+        var record = ProfessionalRecallRecord(subject: deck.subject, cardIDs: ids, snapshot: snapshot,
             snapshotSHA256: StudySHA256.hex(snapshot),
             analysis: StudyAnalysisSettings(streamID: try temporary.streamID, nextSequence: 1, now: now),
-            presentation: shown.map { ProfessionalRecallPresentation(id: $0.id, cardID: $0.cardID, revealed: false) },
+            presentation: initiallyActive ? shown.map { ProfessionalRecallPresentation(id: $0.id, cardID: $0.cardID, revealed: false) } : nil,
             attempts: [], volumes: [], migration: migration)
+        record.retainedItems = deck.cards
+        record.activeCardIDs = initiallyActive ? ids : []
+        record.parkedCards = [:]; record.deferredCards = [:]; record.contentChanges = []
+        if !initiallyActive {
+            for (index, id) in ids.enumerated() {
+                let p = shown?.cardID == id ? ProfessionalRecallPresentation(id: shown!.id, cardID: id, revealed: shown!.revealed) : nil
+                record.parkedCards?[id] = ProfessionalRecallTransferState(cardID: id, subject: deck.subject,
+                    packed: packed[index], stageMask: p == nil ? 0 : 1,
+                    failedRound: packed[index] & (1 << 23) != 0 ? 2 : 0, presentation: p,
+                    sourceScope: "legacy-import", sourceSnapshotSHA256: record.snapshotSHA256, sourceSequence: 0)
+            }
+        }
         return try Self(deck: deck, record: record)
     }
 
     func start(day: UInt32, now: Date = Date()) throws {
+        guard day >= (try engine.info.day) else { throw ExamError.invalid("手机日期早于上次背卡日期，原记录已保留。") }
+        if try engine.info.has_task == 0, !(record.deferredCards ?? [:]).isEmpty {
+            try transaction { try activateDeferred(now: now) }
+        }
         let before = try engine.info
         guard day >= before.day else { throw ExamError.invalid("手机日期早于上次背卡日期，原记录已保留。") }
         if started, before.has_task != 0, before.day == day, before.selection_day == day { return }
@@ -265,7 +382,87 @@ final class ProfessionalRecallEngine {
         }
     }
 
-    func dueCount(on day: UInt32) -> Int { engine.dueCount(on: day, limit: record.cardIDs.count) }
+    func dueCount(on day: UInt32) -> Int {
+        engine.dueCount(on: day, limit: record.cardIDs.count) + (record.deferredCards ?? [:]).values.filter {
+            $0.packed & (1 << 20) != 0 && $0.packed & (1 << 21) == 0 &&
+            (1...10).contains(($0.packed >> 16) & 15) && ($0.packed & 65_535) <= day
+        }.count
+    }
+
+    func transferState(for cardID: String, sourceScope: String) throws -> ProfessionalRecallTransferState? {
+        guard let index = record.cardIDs.firstIndex(of: cardID) else { return nil }
+        let saved = record.deferredCards?[cardID] ?? (!activeCardIDs.contains(cardID) ? record.parkedCards?[cardID] : nil)
+        if let saved { return saved }
+        let bytes = try engine.snapshot()
+        let pointer = bytes.withUnsafeBytes { xkl_engine_restore($0.bindMemory(to: UInt8.self).baseAddress, $0.count) }
+        guard let pointer else { throw ExamError.invalid("无法核对迁移前的专业卡状态。") }
+        defer { xkl_engine_free(pointer) }
+        var failed: UInt32 = 0
+        let mask = xkl_engine_pending_stages(pointer, UInt32(index), &failed)
+        return ProfessionalRecallTransferState(cardID: cardID, subject: deck.subject,
+            packed: xkl_engine_card(pointer, UInt32(index)), stageMask: UInt8(mask), failedRound: UInt8(failed),
+            presentation: record.presentation?.cardID == cardID ? record.presentation : nil,
+            sourceScope: sourceScope, sourceSnapshotSHA256: StudySHA256.hex(bytes), sourceSequence: try engine.info.log_records)
+    }
+
+    /// Content boundaries preserve every ID and prior snapshot. Removed cards are
+    /// parked, never graded as familiar. Incoming unfinished checks wait for a
+    /// task boundary so the unchanged 25-new / 50-active limits remain valid.
+    func reconcile(to catalog: RecallDeck, importing: [String: ProfessionalRecallTransferState] = [:], now: Date = Date()) throws {
+        guard catalog.subject == deck.subject, catalog.bankID == deck.bankID,
+              Set(catalog.cards.map(\.id)).count == catalog.cards.count else { throw ExamError.invalid("课程更新科目或卡片ID无效。") }
+        if !catalog.cards.isEmpty { try catalog.validate() }
+        let wanted = Set(catalog.cards.map(\.id)), oldActive = Set(activeCardIDs)
+        let desiredByID = Dictionary(uniqueKeysWithValues: catalog.cards.map { ($0.id, $0) })
+        var items = deck.cards.map { desiredByID[$0.id] ?? $0 }
+        let known = Set(record.cardIDs)
+        items += catalog.cards.filter { !known.contains($0.id) }
+        try RecallDeck(subject: deck.subject, bankID: deck.bankID, cards: items).validate()
+        let updatedActive = items.map(\.id).filter { wanted.contains($0) }
+        guard importing.allSatisfy({ id, value in id == value.cardID && wanted.contains(id) && value.subject == deck.subject }) else {
+            throw ExamError.invalid("跨范围迁入卡片身份与课程不一致。")
+        }
+        let applicable = importing.filter { !oldActive.contains($0.key) }
+        if items == deck.cards, updatedActive == activeCardIDs, applicable.isEmpty { return }
+        try transaction {
+            let beforeSnapshot = try engine.snapshot(), beforeIDs = record.cardIDs, beforeItems = deck.cards, beforeActive = activeCardIDs
+            let oldPresentation = record.presentation
+            var parked = record.parkedCards ?? [:], deferred = record.deferredCards ?? [:]
+            var parkedNow: [ProfessionalRecallTransferState] = []
+            for id in beforeActive where !wanted.contains(id) {
+                if let state = try transferState(for: id, sourceScope: "scope-before-update") {
+                    parked[id] = state; parkedNow.append(state)
+                }
+                deferred.removeValue(forKey: id)
+            }
+            let oldValues = try cardValues()
+            var values = oldValues + [UInt32](repeating: 0, count: items.count - oldValues.count)
+            var enabled = [UInt8](repeating: 0, count: items.count)
+            for (index, item) in items.enumerated() where wanted.contains(item.id) {
+                let id = item.id
+                if !oldActive.contains(id) {
+                    if let source = applicable[id] ?? parked[id] {
+                        if source.stageMask != 0 {
+                            deferred[id] = source
+                            values[index] = Self.inert
+                        } else { values[index] = source.packed; deferred.removeValue(forKey: id) }
+                    } else { values[index] = 0 }
+                }
+                enabled[index] = deferred[id] == nil ? 1 : 0
+            }
+            record.parkedCards = parked; record.deferredCards = deferred
+            try applyCollection(oldCount: beforeIDs.count, enabled: enabled, values: values,
+                stages: [UInt8](repeating: 0, count: items.count), failures: [UInt8](repeating: 0, count: items.count))
+            record.cardIDs = items.map(\.id); record.retainedItems = items; record.activeCardIDs = updatedActive
+            deck = RecallDeck(subject: deck.subject, bankID: deck.bankID, cards: items)
+            record.contentChanges = (record.contentChanges ?? []) + [ProfessionalRecallContentBoundary(at: now,
+                beforeSnapshot: beforeSnapshot, beforeSnapshotSHA256: StudySHA256.hex(beforeSnapshot),
+                beforeCardIDs: beforeIDs, beforeActiveCardIDs: beforeActive, beforeItems: beforeItems,
+                parked: parkedNow, imported: applicable.keys.sorted().compactMap { applicable[$0] }, afterActiveCardIDs: updatedActive)]
+            try present(keeping: oldPresentation)
+            if try engine.info.has_task == 0 { try activateDeferred(now: now) }
+        }
+    }
 
     /// Mirrors the user's current vocabulary switch into this independent
     /// stream. The vocabulary archive is never written by this adapter.
@@ -278,14 +475,20 @@ final class ProfessionalRecallEngine {
 
     func packedCard(id: String) throws -> UInt32? {
         guard let index = record.cardIDs.firstIndex(of: id) else { return nil }
+        if let deferred = record.deferredCards?[id] { return deferred.packed }
+        if !activeCardIDs.contains(id), let parked = record.parkedCards?[id] { return parked.packed }
         return try cardValues()[index]
     }
 
     func stats(on day: UInt32) throws -> ProfessionalRecallStats {
-        let values = try cardValues()
+        let raw = try cardValues(), allowed = Set(activeCardIDs)
+        let values = record.cardIDs.enumerated().filter { allowed.contains($0.element) }.map {
+            record.deferredCards?[$0.element]?.packed ?? raw[$0.offset]
+        }
         let introduced = values.filter { $0 != 0 }.count
         return ProfessionalRecallStats(total: values.count, introduced: introduced, unintroduced: values.count - introduced,
-            due: dueCount(on: day), firstKnown: values.filter { $0 & (1 << 20) != 0 && ($0 >> 16) & 15 == 0 && $0 & (1 << 22) == 0 }.count,
+            due: values.filter { $0 & (1 << 20) != 0 && $0 & (1 << 21) == 0 && (1...10).contains(($0 >> 16) & 15) && $0 & 65_535 <= day }.count,
+            firstKnown: values.filter { $0 & (1 << 20) != 0 && ($0 >> 16) & 15 == 0 && $0 & (1 << 22) == 0 }.count,
             scheduled: values.filter { ($0 >> 16) & 15 > 0 }.count,
             recalled: record.attempts.filter(\.remembered).count, forgotten: record.attempts.filter { !$0.remembered }.count,
             legacyRemembered: record.migration.cards.reduce(0) { $0 + $1.prior.remembered },
@@ -323,12 +526,58 @@ final class ProfessionalRecallEngine {
     }
 
     private func cardValues() throws -> [UInt32] {
-        let pointer = record.snapshot.withUnsafeBytes {
+        let snapshot = try engine.snapshot()
+        let pointer = snapshot.withUnsafeBytes {
             xkl_engine_restore($0.bindMemory(to: UInt8.self).baseAddress, $0.count)
         }
         guard let pointer else { throw ExamError.invalid("专业背卡快照无法读取。") }
         defer { xkl_engine_free(pointer) }
         return record.cardIDs.indices.map { xkl_engine_card(pointer, UInt32($0)) }
+    }
+
+    private func applyCollection(oldCount: Int, enabled: [UInt8], values: [UInt32], stages: [UInt8], failures: [UInt8]) throws {
+        let snapshot = try engine.snapshot()
+        let pointer = snapshot.withUnsafeBytes { xkl_engine_restore($0.bindMemory(to: UInt8.self).baseAddress, $0.count) }
+        guard let pointer else { throw ExamError.invalid("课程范围迁移前快照校验失败。") }
+        defer { xkl_engine_free(pointer) }
+        let at = Int64(ProcessInfo.processInfo.systemUptime * 1_000_000)
+        let success = enabled.withUnsafeBufferPointer { flags in values.withUnsafeBufferPointer { cards in
+            stages.withUnsafeBufferPointer { stage in failures.withUnsafeBufferPointer { failure in
+                xkl_engine_reconcile_collection(pointer, UInt32(oldCount), UInt32(values.count),
+                    flags.baseAddress, cards.baseAddress, at, stage.baseAddress, failure.baseAddress)
+            } }
+        } }
+        guard success else { throw ExamError.invalid("课程范围迁移未通过原引擎校验，原状态保持。") }
+        var next = Data(count: xkl_engine_snapshot_size(pointer))
+        let count = next.withUnsafeMutableBytes { xkl_engine_snapshot(pointer, $0.bindMemory(to: UInt8.self).baseAddress, $0.count) }
+        guard count == next.count else { throw ExamError.invalid("课程范围迁移快照不完整。") }
+        engine = try PocketEngine(snapshot: next)
+    }
+
+    private func activateDeferred(now: Date) throws {
+        guard try engine.info.has_task == 0 else { return }
+        var deferred = record.deferredCards ?? [:]
+        guard !deferred.isEmpty else { return }
+        let allowed = Set(activeCardIDs)
+        var values = try cardValues(), enabled = record.cardIDs.map { UInt8(allowed.contains($0) && deferred[$0] == nil ? 1 : 0) }
+        var stages = [UInt8](repeating: 0, count: values.count), failures = stages
+        var selected: [ProfessionalRecallTransferState] = [], newCount = 0
+        for (index, id) in record.cardIDs.enumerated() {
+            guard allowed.contains(id), let state = deferred[id], selected.count < 50 else { continue }
+            let isNew = state.packed & (1 << 20) == 0
+            if isNew && newCount == 25 { continue }
+            if isNew { newCount += 1 }
+            selected.append(state); enabled[index] = 1; values[index] = state.packed
+            stages[index] = state.stageMask; failures[index] = state.failedRound
+        }
+        guard !selected.isEmpty else { return }
+        try applyCollection(oldCount: record.cardIDs.count, enabled: enabled, values: values, stages: stages, failures: failures)
+        for state in selected { deferred.removeValue(forKey: state.cardID) }
+        record.deferredCards = deferred
+        let current = try engine.info
+        let oldShown = Int(current.word) < record.cardIDs.count ? selected.first { $0.cardID == record.cardIDs[Int(current.word)] }?.presentation : nil
+        if oldShown?.revealed == true { try engine.reveal() }
+        try present(keeping: oldShown)
     }
 
     private func rotate() throws {
@@ -346,7 +595,7 @@ final class ProfessionalRecallEngine {
     }
 
     private func transaction(rotateBefore: Bool = true, _ body: () throws -> Void) throws {
-        let before = record, wasStarted = started
+        let before = record, beforeDeck = deck, wasStarted = started
         do {
             if rotateBefore, engine.volumeRecords + 8 >= (try engine.info.log_capacity) { try rotate() }
             try body()
@@ -355,6 +604,7 @@ final class ProfessionalRecallEngine {
         } catch {
             engine = try PocketEngine(snapshot: before.snapshot)
             record = before
+            deck = beforeDeck
             started = wasStarted
             throw error
         }

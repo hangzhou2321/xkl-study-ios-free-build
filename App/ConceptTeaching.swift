@@ -265,6 +265,12 @@ struct ConceptCoachingRecord: Codable, Equatable {
                       !(primary+supplement+guides).isEmpty,
                       [primary,supplement,guides].allSatisfy({ ids in ids.count <= 12 && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.count <= 160 }) }),
                       Set(primary).isDisjoint(with:Set(supplement)), Set(guides).isSubset(of:Set(concepts.keys)) else { throw ExamError.invalid("答前知识卡查询的关联或时间边界无效。") }
+            } else if event.kind == "source-read" {
+                // This is a reader observation, not a synthetic presentation
+                // or a question attempt. A consumed question is recorded as
+                // after-answer so its earlier independent result stays exact.
+                guard event.attemptID == nil, event.reason == nil, event.automatic == nil,
+                      event.teachingSHA256 != nil else { throw ExamError.invalid("源题阅读观察记录无效。") }
             } else { throw ExamError.invalid("未知的教学记录类型。") }
             expected += 1
         }

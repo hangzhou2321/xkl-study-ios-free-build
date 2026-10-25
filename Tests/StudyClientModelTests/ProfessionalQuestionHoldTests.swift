@@ -104,7 +104,14 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
         teaching.questionLinks = bank.concepts.flatMap { concept in concept.questions.map {
             .init(questionID: $0.id, sourceQuestionDigest: $0.professionalDigest, primaryCardIDs: [concept.id + ":card"], supplementCardIDs: [], guideConceptIDs: []) as ProfessionalQuestionLinks
         } }
-        teaching.sourceLeaves = []; teaching.cardCorrections = []
+        let diagram = ConceptDiagram(version: 1, title: "Synthetic source", width: 320, height: 160, description: "Synthetic source only",
+            shapes: [.init(kind: "rect", x: 20, y: 20, width: 200, height: 80, stroke: "ink", fill: "white")], paths: [],
+            labels: [.init(text: "Synthetic source solution", x: 30, y: 30, width: 180, height: 30, size: 18, color: "ink", align: "leading", bold: false)])
+        teaching.sourceLeaves = [.init(sourceQuestionID: "synthetic-source-q", sourceID: "s", page: 1,
+            label: "Synthetic original", status: "verified", bankQuestionID: "c0q0",
+            visual: .init(id: "synthetic-visual", kind: "vector", diagram: diagram), primaryCardIDs: ["c0:card"], supplementCardIDs: [],
+            sourceStatus: .verified, courseReadiness: .ready, scope: .mainline, reason: "Synthetic verified original")]
+        teaching.cardCorrections = []
         if holds {
             let question = bank.concepts[0].questions[0]
             teaching.questionPracticeNotes = [.init(questionID: question.id, sourceQuestionDigest: question.professionalDigest,
@@ -175,6 +182,70 @@ final class ProfessionalQuestionHoldTests: XCTestCase {
         XCTAssertEqual(reopened.engine?.shown?.id, token)
         XCTAssertTrue(reopened.currentQuestionUsedCardHelp)
         XCTAssertEqual(reopened.coachingEvents.count, count)
+    }
+
+    @MainActor func testSourceReadSurvivesNavigationAndRestartButDoesNotContaminateDifferentVariant() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = ConceptStore(subject: .computer, baseDirectory: root)
+        try importCourse(course(), to: store, root: root)
+        let before = try encode(XCTUnwrap(store.engine?.record))
+        XCTAssertTrue(store.recordSourceExposure(questionID: "c0q0"))
+        XCTAssertTrue(store.recordSourceExposure(questionID: "c0q0"))
+        XCTAssertEqual(store.coachingEvents.filter { $0.kind == "source-read" }.count, 1)
+        XCTAssertEqual(try encode(XCTUnwrap(store.engine?.record)), before)
+        let observed = try XCTUnwrap(store.coachingEvents.first)
+        XCTAssertNil(observed.attemptID); XCTAssertTrue(observed.beforeAnswer)
+        let reopened = ConceptStore(subject: .computer, baseDirectory: root)
+        XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+        reopened.startQuestion("c0q0", expectedCurrentToken: nil)
+        XCTAssertTrue(reopened.currentQuestionUsedCardHelp)
+        let token = try XCTUnwrap(reopened.engine?.shown?.id)
+        XCTAssertNotEqual(token, observed.presentationID, "Reader identity is not a fabricated question presentation")
+        reopened.choose("A", token: token); reopened.submit(token: token)
+        XCTAssertTrue(reopened.currentQuestionUsedCardHelp)
+        reopened.next(token: token)
+        reopened.startQuestion("c0q1", expectedCurrentToken: nil)
+        XCTAssertEqual(reopened.engine?.question?.id, "c0q1")
+        XCTAssertFalse(reopened.currentQuestionUsedCardHelp)
+        XCTAssertEqual(reopened.engine?.record.attempts.count, 1)
+    }
+
+    @MainActor func testReadingSourceAfterScoringDoesNotRewriteIndependentResult() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = ConceptStore(subject: .computer, baseDirectory: root)
+        try importCourse(course(), to: store, root: root)
+        store.startQuestion("c0q0", expectedCurrentToken: nil)
+        let token = try XCTUnwrap(store.engine?.shown?.id)
+        store.choose("A", token: token); store.submit(token: token)
+        let before = try encode(XCTUnwrap(store.engine?.record))
+        XCTAssertFalse(store.currentQuestionUsedCardHelp)
+        XCTAssertTrue(store.recordSourceExposure(questionID: "c0q0"))
+        XCTAssertFalse(store.coachingEvents.last?.beforeAnswer ?? true)
+        XCTAssertFalse(store.currentQuestionUsedCardHelp)
+        XCTAssertEqual(try encode(XCTUnwrap(store.engine?.record)), before)
+        let reopened = ConceptStore(subject: .computer, baseDirectory: root)
+        XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+        XCTAssertFalse(reopened.currentQuestionUsedCardHelp)
+        XCTAssertEqual(try encode(XCTUnwrap(reopened.engine?.record)), before)
+    }
+
+    @MainActor func testSourceReadWriteFailureReturnsFalseForTheImageGateAndNeverGrades() throws {
+        final class Writer {
+            var fail = false
+            func write(_ bytes: Data, _ path: URL) throws {
+                if fail && path.lastPathComponent == "coaching-current.json" { throw CocoaError(.fileWriteOutOfSpace) }
+                try bytes.write(to: path, options: .atomic)
+            }
+        }
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let writer = Writer(), store = ConceptStore(subject: .computer, baseDirectory: root, writer: writer.write)
+        try importCourse(course(), to: store, root: root)
+        let before = try encode(XCTUnwrap(store.engine?.record))
+        writer.fail = true
+        XCTAssertFalse(store.recordSourceExposure(questionID: "c0q0"), "The source view must keep its image gate closed")
+        XCTAssertTrue(store.blocked); XCTAssertTrue(store.coachingEvents.isEmpty)
+        XCTAssertEqual(try encode(XCTUnwrap(store.engine?.record)), before)
+        XCTAssertFalse(store.recordSourceExposure(questionID: "c0q0"))
     }
     #endif
 }

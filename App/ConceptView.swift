@@ -290,7 +290,7 @@ struct ConceptView: View {
                             .foregroundStyle(answer.isCorrect == true ? Color.green : Color.red)
                             .font(.headline)
                         if store.teaching?.questionLinks?.contains(where: { $0.questionID == q.id && (!$0.primaryCardIDs.isEmpty || !$0.supplementCardIDs.isEmpty || !$0.guideConceptIDs.isEmpty) }) == true {
-                            Text(store.currentQuestionUsedCardHelp ? "本次作答前参考过本题知识卡。" : "本次作答前未查阅本题知识卡。").font(.footnote).foregroundStyle(.secondary)
+                            Text(store.currentQuestionUsedCardHelp ? "本次作答前参考过关联卡片或原题资料。" : "本 App 未记录关联卡片或原题资料辅助。").font(.footnote).foregroundStyle(.secondary)
                         }
                         Text("正确选项：" + p.order.filter { q.answer.contains($0) }
                             .map { ExamPresentation.label($0, in: p.order) }.joined(separator: "、"))

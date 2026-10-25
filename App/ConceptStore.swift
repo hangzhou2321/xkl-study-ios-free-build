@@ -616,7 +616,30 @@ final class ConceptStore: ObservableObject {
     }
     var currentQuestionUsedCardHelp: Bool {
         guard let p = engine?.shown else { return false }
-        return coachingEvents.contains { $0.kind == "linked-card-help" && $0.beforeAnswer && $0.presentationID == p.id && $0.questionID == p.questionID }
+        return coachingEvents.contains {
+            $0.beforeAnswer && $0.questionID == p.questionID &&
+            ($0.kind == "source-read" || ($0.kind == "linked-card-help" && $0.presentationID == p.id))
+        }
+    }
+
+    /// Source scans may contain the printed solution. Persist a question-bound
+    /// observation before displaying them, even without an active practice
+    /// presentation, so navigating elsewhere cannot turn exposure into a blind test.
+    @discardableResult
+    func recordSourceExposure(questionID: String) -> Bool {
+        guard !blocked else { return false }
+        guard let e = engine, let teaching, let teachingHash,
+              teaching.sourceLeaves?.contains(where: { $0.bankQuestionID == questionID }) == true,
+              let concept = e.bank.concepts.first(where: { $0.questions.contains { $0.id == questionID } }),
+              let question = concept.questions.first(where: { $0.id == questionID }) else {
+            error = "源题尚未绑定当前课程，暂不显示可能含答案的资料。"; return false
+        }
+        if coachingEvents.contains(where: { $0.kind == "source-read" && $0.questionID == questionID }) { return true }
+        let observation = ConceptPresentation(id: UUID(), conceptID: concept.id, questionID: questionID,
+            order: question.options.map(\.id), selected: [], presentedAt: Date())
+        let beforeAnswer = !(e.record.progress[concept.id]?.usedQuestionIDs.contains(questionID) ?? false)
+        return appendCoaching(kind: "source-read", p: observation, attemptID: nil, reason: nil,
+            automatic: nil, teachingHash: teachingHash, beforeAnswerOverride: beforeAnswer)
     }
 
     func setReason(_ reason: ConceptMistakeReason?, attemptID: UUID) {
@@ -629,7 +652,7 @@ final class ConceptStore: ObservableObject {
     @discardableResult
     private func appendCoaching(kind: String, p: ConceptPresentation, attemptID: UUID?,
                                 reason: ConceptMistakeReason?, automatic: Bool?, teachingHash: String?,
-                                links: ProfessionalQuestionLinks? = nil) -> Bool {
+                                links: ProfessionalQuestionLinks? = nil, beforeAnswerOverride: Bool? = nil) -> Bool {
         guard let e = engine, var candidate = coaching else { return false }
         do {
             let base = try folder(e.record.bankSHA256)
@@ -646,7 +669,7 @@ final class ConceptStore: ObservableObject {
             let event = ConceptCoachingEvent(id: UUID(), sequence: candidate.nextSequence, kind: kind,
                 conceptID: p.conceptID, questionID: p.questionID, presentationID: p.id,
                 attemptID: attemptID, reason: reason, automatic: automatic,
-                beforeAnswer: e.record.review == nil, teachingSHA256: teachingHash, recordedAt: Date(),
+                beforeAnswer: beforeAnswerOverride ?? (e.record.review == nil), teachingSHA256: teachingHash, recordedAt: Date(),
                 linkedPrimaryCardIDs: links?.primaryCardIDs, linkedSupplementCardIDs: links?.supplementCardIDs,
                 linkedGuideConceptIDs: links?.guideConceptIDs)
             candidate.events.append(event)
@@ -805,7 +828,16 @@ final class ConceptStore: ObservableObject {
                     throw ExamError.invalid("题内知识卡辅助记录与当时关联不一致。")
                 }
             }
-            if event.kind == "reason" || !event.beforeAnswer {
+            if event.kind == "source-read" {
+                guard let hash = event.teachingSHA256, let bytes = files["teaching/\(hash).json"] else {
+                    throw ExamError.invalid("源题阅读观察缺少当时的教学快照。")
+                }
+                let snapshot = try JSONDecoder().decode(ConceptTeaching.self, from: bytes)
+                guard snapshot.sourceLeaves?.contains(where: { $0.bankQuestionID == event.questionID }) == true else {
+                    throw ExamError.invalid("源题阅读观察与当时题级绑定不一致。")
+                }
+            }
+            if event.kind != "source-read" && (event.kind == "reason" || !event.beforeAnswer) {
                 guard let id = event.attemptID, let answer = byID[id], answer.mode == "answer",
                       answer.presentation.id == event.presentationID,
                       answer.presentation.conceptID == event.conceptID,

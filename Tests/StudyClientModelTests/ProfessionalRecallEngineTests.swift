@@ -152,9 +152,10 @@ final class ProfessionalRecallEngineTests: XCTestCase {
         var old = try RecallEngine(deck: source)
         try old.act("start", day: Int(day), newLimit: 4, now: date(day))
         let shown = try XCTUnwrap(old.record.state.shown)
-        try old.act("reveal", day: Int(day), token: shown.id, now: date(day))
+        try old.act("reveal", day: Int(day), token: shown.id, now: date(day).addingTimeInterval(30))
         let stale = old.record
-        try old.act("grade", day: Int(day), token: shown.id, remembered: true, now: date(day))
+        // A same-day wall-clock correction cannot make the shorter prefix win.
+        try old.act("grade", day: Int(day), token: shown.id, remembered: true, now: date(day).addingTimeInterval(10))
         let migrated = try ProfessionalRecallEngine.fresh(deck: source, legacy: [old.record, stale], now: date(day))
         XCTAssertNil(migrated.record.migration.resumedCardID)
         XCTAssertTrue(migrated.record.attempts.isEmpty)
@@ -284,5 +285,68 @@ final class ProfessionalRecallEngineTests: XCTestCase {
         let enabled = reopened.record
         try reopened.setConservativeEnabled(true, now: date(day))
         XCTAssertEqual(reopened.record, enabled)
+    }
+
+    @MainActor func testPromotionAndAppendInOneBoundaryPreserveLiveHeadAndDeferredSevenStages() async throws {
+        let all = deck(60)
+        let donorDeck = RecallDeck(subject: all.subject, bankID: all.bankID, cards: Array(all.cards.prefix(2)))
+        let receiverDeck = RecallDeck(subject: all.subject, bankID: all.bankID, cards: Array(all.cards.dropFirst(2).prefix(30)))
+        let donor = try ProfessionalRecallEngine.fresh(deck: donorDeck, now: date(day))
+        let receiver = try ProfessionalRecallEngine.fresh(deck: receiverDeck, now: date(day))
+        try donor.start(day: day, now: date(day)); try receiver.start(day: day, now: date(day))
+        let bad = try XCTUnwrap(donor.record.presentation?.id)
+        try donor.reveal(token: bad, now: date(day)); try donor.grade(remembered: false, token: bad, now: date(day))
+        let moveID = donorDeck.cards[0].id, before = receiver.record
+        let transfer = try XCTUnwrap(donor.transferState(for: moveID, sourceScope: "related"))
+        XCTAssertEqual(transfer.stageMask, 254)
+        let head = try XCTUnwrap(receiver.record.presentation?.id)
+        try receiver.reveal(token: head, now: date(day))
+        let updated = RecallDeck(subject: all.subject, bankID: all.bankID,
+            cards: receiverDeck.cards + [donorDeck.cards[0], all.cards[55]])
+        try receiver.reconcile(to: updated, importing: [moveID: transfer], now: date(day))
+        XCTAssertEqual(Array(receiver.record.cardIDs.prefix(before.cardIDs.count)), before.cardIDs)
+        XCTAssertEqual(receiver.record.presentation?.id, head)
+        XCTAssertEqual(receiver.record.presentation?.revealed, true)
+        XCTAssertEqual(try receiver.packedCard(id: moveID), transfer.packed)
+        XCTAssertEqual(receiver.record.deferredCards?[moveID]?.stageMask, 254)
+        XCTAssertTrue(receiver.record.attempts.isEmpty)
+        let stable = receiver.record
+        try receiver.reconcile(to: updated, now: date(day))
+        XCTAssertEqual(receiver.record, stable)
+        var resumed = try ProfessionalRecallEngine.restore(record: receiver.record, fallback: updated)
+        try resumed.start(day: day, now: date(day))
+        while try resumed.info.has_task != 0 {
+            let token = try XCTUnwrap(resumed.record.presentation?.id)
+            try resumed.reveal(token: token, now: date(day))
+            try resumed.grade(remembered: true, token: token, now: date(day))
+        }
+        try resumed.start(day: day, now: date(day))
+        XCTAssertEqual(resumed.currentItem?.id, moveID)
+        XCTAssertEqual(try resumed.info.stage, 1)
+        XCTAssertNil(resumed.record.deferredCards?[moveID])
+        resumed = try ProfessionalRecallEngine.restore(record: resumed.record, fallback: updated)
+        try resumed.start(day: day, now: date(day))
+        var stages: [UInt32] = []
+        while resumed.currentItem?.id == moveID {
+            stages.append(try resumed.info.stage)
+            let token = try XCTUnwrap(resumed.record.presentation?.id)
+            try resumed.reveal(token: token, now: date(day))
+            try resumed.grade(remembered: true, token: token, now: date(day))
+        }
+        XCTAssertEqual(stages, [1, 2, 3, 4, 5, 6, 7])
+    }
+
+    @MainActor func testNonlinearLegacySameScoreCannotDiscardAnotherArchivesVisibleAnswer() async throws {
+        let original = deck(4)
+        var modifiedCards = original.cards
+        modifiedCards[3] = RecallDeck.Item(conceptID: modifiedCards[3].conceptID, conceptTitle: "Different original deck",
+            card: modifiedCards[3].card)
+        let modified = RecallDeck(subject: original.subject, bankID: original.bankID, cards: modifiedCards)
+        var a = try RecallEngine(deck: original), b = try RecallEngine(deck: modified)
+        try a.act("start", day: Int(day), newLimit: 4, now: date(day))
+        try a.act("reveal", day: Int(day), token: a.record.state.shown!.id, now: date(day))
+        try b.act("start", day: Int(day), newLimit: 4, now: date(day).addingTimeInterval(10))
+        XCTAssertEqual(a.record.state.progress, b.record.state.progress)
+        XCTAssertThrowsError(try ProfessionalRecallEngine.fresh(deck: original, legacy: [a.record, b.record], now: date(day)))
     }
 }

@@ -262,10 +262,10 @@ struct ProfessionalSourcesView: View {
                         ForEach(questions(sections.extensionQuestionIDs)) { question in questionLink(question) }
                     }
                 } else {
-                    Section("讲义原题 · 共 \(sections.lectureQuestionIDs.count) 道 · 可开始 \(availableCount(sections.lectureQuestionIDs)) 道") {
-                        Text("先练本部分讲义原题，再用同考点变式核对能否运用。已学题保留查阅，原记录不变。").font(.footnote).foregroundStyle(.secondary)
+                    Section("珞研原题 · 共 \(sections.lectureQuestionIDs.count) 道 · 可开始 \(availableCount(sections.lectureQuestionIDs)) 道") {
+                        Text("包含讲义内题和已核对的基础／强化题册题，具体来源见题目。先独立回忆，再用变式检验运用；已作答题保留查阅。").font(.footnote).foregroundStyle(.secondary)
                         ForEach(questions(sections.lectureQuestionIDs)) { question in questionLink(question) }
-                        if sections.lectureQuestionIDs.isEmpty { Text("本范围暂无已绑定的讲义原题，可查看下方变式、拓展及完整来源资料。").foregroundStyle(.secondary) }
+                        if sections.lectureQuestionIDs.isEmpty { Text("本范围暂无已绑定的珞研原题，可查看下方变式、拓展及完整来源资料。").foregroundStyle(.secondary) }
                     }
                     Section("其他练习入口") {
                         NavigationLink("同考点变式 · \(sections.variantQuestionIDs.count) 道") {
@@ -289,7 +289,7 @@ struct ProfessionalSourcesView: View {
                     Text("来源图和待补条目均保留，只读索引不作为已完成练习或成绩。").font(.footnote).foregroundStyle(.secondary)
                 }
             }
-        }.navigationTitle("讲义练习与资料")
+        }.navigationTitle("珞研检验与资料")
     }
     private func questionLink(_ question:ConceptQuestion)->some View {
         NavigationLink { ProfessionalSourceStartView(store:store,question:question) } label: {
@@ -474,26 +474,40 @@ private struct ProfessionalSourceLeafView: View {
     @ObservedObject var store: ConceptStore
     let leaf: ProfessionalSourceLeaf
     var sourceAssetRoot: URL? = nil
+    @State private var exposureQuestionID:String?
+    private var exposureReady:Bool { leaf.bankQuestionID == nil || exposureQuestionID == leaf.bankQuestionID }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(leaf.label).font(.title2.bold())
-                Text("起始页：\(leaf.page) · 见下列原图与上下文").font(.subheadline)
-                ProfessionalSourceBadges(leaf:leaf)
-                if !leaf.reason.isEmpty { Text(leaf.reason).font(.subheadline).foregroundStyle(.secondary) }
-                ForEach(leaf.allVisuals) { visual in
-                    Text(visual.sourceFile?.altText ?? visual.raster?.altText ?? visual.diagram?.description ?? "来源图与上下文").font(.subheadline).foregroundStyle(.secondary)
-                    ProfessionalSourceImageView(visual:visual,assetRoot:sourceAssetRoot)
+                if exposureReady {
+                    Text(leaf.label).font(.title2.bold())
+                    Text("起始页：\(leaf.page) · 见下列原图与上下文").font(.subheadline)
+                    ProfessionalSourceBadges(leaf:leaf)
+                    if !leaf.reason.isEmpty { Text(leaf.reason).font(.subheadline).foregroundStyle(.secondary) }
+                    ForEach(leaf.allVisuals) { visual in
+                        Text(visual.sourceFile?.altText ?? visual.raster?.altText ?? visual.diagram?.description ?? "来源图与上下文").font(.subheadline).foregroundStyle(.secondary)
+                        ProfessionalSourceImageView(visual:visual,assetRoot:sourceAssetRoot)
+                    }
+                    if let teaching=store.teaching, let bank=store.engine?.bank {
+                        ProfessionalQuestionCardsView(primaryIDs:leaf.primaryCardIDs,supplementIDs:leaf.supplementCardIDs,teaching:teaching,bank:bank,subject:store.subject)
+                    }
+                    if leaf.status == "verified", let id=leaf.bankQuestionID,
+                       let question=store.engine?.bank.concepts.flatMap(\.questions).first(where: { $0.id == id }) {
+                        Text("来源页可能包含答案，已记录本题资料查看；随后作答会注明看过资料。").font(.footnote).foregroundStyle(.secondary)
+                        NavigationLink("查看完整核验题") { ProfessionalSourceStartView(store:store,question:question) }
+                    } else { Text("本条仅作资料与知识卡索引，尚未开放练习。").foregroundStyle(.secondary) }
+                } else {
+                    Text(store.error ?? "正在保存资料查看记录…").foregroundStyle(store.error == nil ? Color.secondary:Color.red)
+                    if store.error != nil { Button("重试打开资料") { prepareExposure() } }
                 }
-                if let teaching=store.teaching, let bank=store.engine?.bank {
-                    ProfessionalQuestionCardsView(primaryIDs:leaf.primaryCardIDs,supplementIDs:leaf.supplementCardIDs,teaching:teaching,bank:bank,subject:store.subject)
-                }
-                if leaf.status == "verified", let id=leaf.bankQuestionID,
-                   let question=store.engine?.bank.concepts.flatMap(\.questions).first(where: { $0.id == id }) {
-                    NavigationLink("查看完整核验题") { ProfessionalSourceStartView(store:store,question:question) }
-                } else { Text("本条仅作资料与知识卡索引，尚未开放练习。").foregroundStyle(.secondary) }
             }.padding(22)
         }.navigationTitle("来源资料")
+            .task(id:leaf.sourceQuestionID) { prepareExposure() }
+    }
+    private func prepareExposure() {
+        guard let id=leaf.bankQuestionID else { return }
+        guard store.recordSourceExposure(questionID:id) else { return }
+        exposureQuestionID=id
     }
 }
 
@@ -543,14 +557,14 @@ struct ProfessionalSourcePracticeView: View {
                             if let presentation=store.teaching?.questionPresentations?.first(where: { $0.questionID == question.id }) {
                                 ForEach(presentation.afterAnswer) { visual in ProfessionalVisualView(visual:visual) }
                             }
-                            Text(store.currentQuestionUsedCardHelp ? "本次作答前参考过本题知识卡。" : "本次作答前未查阅本题知识卡。").font(.footnote).foregroundStyle(.secondary)
+                            Text(store.currentQuestionUsedCardHelp ? "本次作答前参考过关联卡片或原题资料。" : "本 App 未记录关联卡片或原题资料辅助。").font(.footnote).foregroundStyle(.secondary)
                             Text("本次客观作答已保存；知识卡记住成绩不受影响。").font(.footnote).foregroundStyle(.secondary)
                         }
                         if let links=store.teaching?.questionLinks?.first(where: { $0.questionID == question.id }), let teaching=store.teaching {
                             ProfessionalPracticeCardsView(store:store,token:shown.id,primaryIDs:links.primaryCardIDs,supplementIDs:links.supplementCardIDs,guideIDs:links.guideConceptIDs,teaching:teaching,bank:engine.bank)
                         }
                         if store.currentQuestionUsedCardHelp && engine.record.review == nil {
-                            Text("已记录：本次作答前参考过关联知识卡。").font(.footnote).foregroundStyle(.secondary)
+                            Text("已记录：本次作答前参考过关联卡片或原题资料。").font(.footnote).foregroundStyle(.secondary)
                         }
                         if let imageFailure { Text(imageFailure+"，本题暂缓作答。").foregroundStyle(.orange) }
                         if let reason=store.currentQuestionPracticeBlockedReason { Text(reason).foregroundStyle(.secondary) }
@@ -599,7 +613,7 @@ import UIKit
         subject=value("--professional-subject") == "power" ? .power:.computer
         selectedCase=value("--professional-case") ?? "plan"
         let unifiedPreview=selectedCase.hasPrefix("unified-")
-        let groupingPreview=["source-groups","source-groups-learned"].contains(selectedCase) || unifiedPreview
+        let groupingPreview=["source-groups","source-groups-learned","source-exposure"].contains(selectedCase) || unifiedPreview
         let priorityPreview=["card-priority-front","card-priority-sheet"].contains(selectedCase) || unifiedPreview
         root=FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-professional-"+UUID().uuidString,isDirectory:true)
         let target=ConceptStore(subject:subject,baseDirectory:root)
@@ -751,6 +765,9 @@ struct ProfessionalPriorityPreview: View {
                         baseDirectory:fixture.root,practiceStore:fixture.store)
                 } else if ["question","question-zoom","answer","guide-only","card-priority-sheet"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
                 else if ["sources","source-groups","source-groups-learned"].contains(fixture.selectedCase) { ProfessionalSourcesView(store:fixture.store,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)) }
+                else if fixture.selectedCase == "source-exposure",let leaf=teaching.sourceLeaves?.first(where: { $0.bankQuestionID != nil }) {
+                    ProfessionalSourceLeafView(store:fixture.store,leaf:leaf,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true))
+                }
                 else if fixture.selectedCase == "source-image",let leaf=teaching.sourceLeaves?.first {
                     ProfessionalSourceLeafView(store:fixture.store,leaf:leaf,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true))
                 } else if ["supplement-mainline","supplement-related"].contains(fixture.selectedCase),let group=fixture.recallPreviewGroup,let selection=fixture.recallPreviewSelection {
@@ -804,6 +821,9 @@ struct ProfessionalPriorityPreview: View {
             let recall=RecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,baseDirectory:fixture.root)
             return !recall.blocked && recall.engine?.item?.id == visible && recall.engine?.record.state.shown?.revealed == false && !(recall.engine?.record.events.contains { $0.kind == "grade" } ?? true)
         case "answer": return engine.record.review != nil
+        case "source-exposure":
+            guard let leaf=teaching.sourceLeaves?.first(where: { $0.bankQuestionID != nil }),let id=leaf.bankQuestionID else { return false }
+            return fixture.store.coachingEvents.filter { $0.kind == "source-read" && $0.questionID == id }.count == 1 && engine.record.attempts.isEmpty && engine.shown == nil
         case "source-image":
             guard let leaf=teaching.sourceLeaves?.first else { return false }
             for visual in leaf.allVisuals {

@@ -545,6 +545,159 @@ xkl_engine_t *xkl_engine_restore(const uint8_t *blob, size_t length) {
 error:
     xkl_engine_free(e); return NULL;
 }
+uint32_t xkl_engine_pending_stages(const xkl_engine_t *e, uint32_t word,
+    uint32_t *failed_round) {
+    if (failed_round) *failed_round = 0;
+    if (!live_ready(e) || word >= XKL_WORD_COUNT) return 0;
+    for (unsigned slot = 0; slot < POCKET_ACTIVE_MAX; ++slot) {
+        const pocket_cached_t *active = &e->state.body.active[slot];
+        if (!active->used || active->word != word) continue;
+        uint32_t mask = 0;
+        for (unsigned i = 0; i < e->state.body.length; ++i)
+            if (e->state.body.queue[i].slot == slot) mask |= 1u << e->state.body.queue[i].stage;
+        if (failed_round) *failed_round = active->failed_round;
+        return mask;
+    }
+    return 0;
+}
+
+bool xkl_engine_reconcile_collection(xkl_engine_t *e,
+    uint32_t old_count, uint32_t new_count, const uint8_t *enabled,
+    const uint32_t *activated_cards, int64_t at,
+    const uint8_t *pending_stages, const uint8_t *failed_rounds) {
+    const uint32_t inert = pocket_pack_card((pocket_card_t){.due_day = UINT32_MAX, .learned = 1}) | POCKET_IMPORTED_KNOWN;
+    if (!live_ready(e) || !old_count || old_count > new_count || new_count > XKL_WORD_COUNT ||
+        !enabled || !activated_cards || at < 0 || (pending_stages == NULL) != (failed_rounds == NULL) ||
+        !state_consistent(e) || !log_state_consistent(e)) return false;
+    bool changed = old_count != new_count, incoming_pending = false;
+    for (uint32_t i = 0; i < new_count; ++i) {
+        if (enabled[i] > 1u || !pocket_word_card_valid(activated_cards[i])) return false;
+        if (i < old_count && enabled[i] && e->cards[i] != inert && activated_cards[i] != e->cards[i]) return false;
+        if (enabled[i] && (i >= old_count || e->cards[i] == inert) && pending_stages) {
+            uint8_t stages = pending_stages[i], failed = failed_rounds[i];
+            pocket_card_t card = pocket_unpack_card(activated_cards[i]);
+            if (failed > 2u || (!stages && failed) ||
+                (stages && (card.familiar || (card.learned && !card.level))) ||
+                ((stages & 1u) && stages != 1u) ||
+                (stages && !failed && stages != 1u) ||
+                (failed == 1u && ((stages & 1u) || card.level != 1u || (activated_cards[i] & POCKET_WORD_PARTIAL_PENDING))) ||
+                (failed == 2u && (stages != 1u || !(activated_cards[i] & POCKET_WORD_PARTIAL_PENDING)))) return false;
+            if (stages) incoming_pending = true;
+        }
+        uint32_t desired = enabled[i] ? activated_cards[i] : inert;
+        if (e->cards[i] != desired) changed = true;
+    }
+    for (uint32_t i = old_count; i < XKL_WORD_COUNT; ++i)
+        if (e->cards[i] != inert) return false; /* Reject an incorrect old mapping boundary. */
+    if (!changed) return true;
+    if (!room(e, 7u) || e->state.revision >= UINT32_MAX - 1u) return false;
+    size_t size = xkl_engine_snapshot_size(e);
+    uint8_t *bytes = malloc(size);
+    if (!bytes) return false;
+    if (xkl_engine_snapshot(e, bytes, size) != size) { free(bytes); return false; }
+    xkl_engine_t *candidate = xkl_engine_restore(bytes, size);
+    free(bytes);
+    if (!candidate) return false;
+    const uint16_t old_head = pocket_word_current_word(&e->state);
+    const bool was_revealed = e->recording.revealed;
+    if (!clock_ok(candidate, at)) {
+        /* Rebase only the recording session. Running the ordinary task picker
+         * here would consume the new-card quota before deferred obligations
+         * are restored. The metadata START below seals/presents this state. */
+        pocket_word_recording_init(&candidate->recording, &candidate->log);
+        if (!pocket_word_recording_boot(&candidate->recording, &candidate->state, at)) goto error;
+        candidate->booted = true; candidate->last_at = at;
+    }
+
+    pocket_word_state_t next = candidate->state;
+    pocket_word_body_t *b = &next.body;
+    if (!b->length && incoming_pending) {
+        /* Completed tasks retain done counters until a new task starts. This
+         * is that explicit boundary, with transferred work admitted before
+         * ordinary fresh selection. The old state stays in the log/snapshot. */
+        uint32_t day = b->day, selection_day = b->selection_day;
+        memset(b, 0, sizeof(*b)); b->day = day; b->selection_day = selection_day;
+    }
+    next.can_undo = 0; next.changed_word = POCKET_NO_WORD; next.changed_card = 0;
+    for (uint32_t i = 0; i < new_count; ++i) candidate->cards[i] = enabled[i] ? activated_cards[i] : inert;
+    for (uint32_t i = new_count; i < XKL_WORD_COUNT; ++i) candidate->cards[i] = inert;
+    unsigned kept = 0;
+    for (unsigned i = 0; i < b->length; ++i) {
+        pocket_token_t token = b->queue[i];
+        const pocket_cached_t *active = &b->active[token.slot];
+        if (active->word < new_count && enabled[active->word]) b->queue[kept++] = token;
+    }
+    memset(b->queue + kept, 0, (b->length - kept) * sizeof(b->queue[0]));
+    b->length = (uint16_t)kept;
+    for (unsigned slot = 0; slot < POCKET_ACTIVE_MAX; ++slot) {
+        pocket_cached_t *active = &b->active[slot];
+        if (!active->used) continue;
+        if (active->word >= new_count || !enabled[active->word]) {
+            memset(active, 0, sizeof(*active)); continue;
+        }
+    }
+    if (pending_stages) for (uint32_t i = 0; i < new_count; ++i) {
+        if (!enabled[i] || !pending_stages[i] || (i < old_count && e->cards[i] != inert)) continue;
+        unsigned slot = 0;
+        while (slot < POCKET_ACTIVE_MAX && b->active[slot].used) ++slot;
+        if (slot == POCKET_ACTIVE_MAX) goto error;
+        b->active[slot] = (pocket_word_cached_t){activated_cards[i], (uint16_t)i, failed_rounds[i], 1};
+        for (unsigned stage = 0; stage < 8; ++stage) if (pending_stages[i] & (1u << stage)) {
+            if (b->length == POCKET_QUEUE_MAX) goto error;
+            b->queue[b->length++] = (pocket_token_t){(uint8_t)slot, (uint8_t)stage};
+        }
+    }
+    unsigned active_new = 0, active_review = 0;
+    for (unsigned slot = 0; slot < POCKET_ACTIVE_MAX; ++slot) {
+        const pocket_cached_t *active = &b->active[slot];
+        if (!active->used) continue;
+        if (pocket_unpack_card(active->packed).learned) ++active_review;
+        else {
+            ++active_new;
+            if (!b->lesson) {
+                b->lesson = (uint16_t)(active->word / POCKET_LESSON_SIZE + 1u);
+                b->new_cursor = b->new_end = (uint16_t)(active->word + 1u);
+            }
+        }
+    }
+    unsigned waiting_review = 0, waiting_new = 0;
+    if (b->length) {
+        for (uint32_t i = 0; i < new_count; ++i) {
+            if (!enabled[i]) continue;
+            bool active = false;
+            for (unsigned slot = 0; slot < POCKET_ACTIVE_MAX; ++slot)
+                if (b->active[slot].used && b->active[slot].word == i) { active = true; break; }
+            if (active) continue;
+            pocket_card_t card = pocket_unpack_card(candidate->cards[i]);
+            if (!card.familiar && card.learned && card.level && card.due_day <= b->selection_day) ++waiting_review;
+            if (!card.familiar && !card.learned && i >= b->new_cursor && i < b->new_end) ++waiting_new;
+        }
+    }
+    uint32_t new_loaded = (uint32_t)b->new_done + active_new;
+    uint32_t review_loaded = (uint32_t)b->review_done + active_review;
+    uint32_t new_total = new_loaded + waiting_new, review_total = review_loaded + waiting_review;
+    if (new_total > POCKET_LESSON_SIZE || review_total > UINT16_MAX || new_total + review_total > XKL_WORD_COUNT) goto error;
+    b->new_loaded = (uint16_t)new_loaded; b->new_total = (uint16_t)new_total;
+    b->review_loaded = (uint16_t)review_loaded; b->review_total = (uint16_t)review_total; b->review_cursor = 0;
+    if (!new_total) b->lesson = b->new_cursor = b->new_end = 0;
+    if (!pocket_word_recording_commit(&candidate->recording, &candidate->state, &next,
+            POCKET_EVENT_START, at, card_read, state_store, candidate) ||
+        !pocket_word_recording_present(&candidate->recording, &candidate->state, at)) goto error;
+    candidate->last_at = at;
+    if (was_revealed && old_head != POCKET_NO_WORD && old_head == pocket_word_current_word(&candidate->state) &&
+        !xkl_engine_reveal(candidate, at)) goto error;
+    if (!state_consistent(candidate) || !log_state_consistent(candidate)) goto error;
+    /* The only publication point. Rebind internal callbacks after moving the
+     * complete verified candidate; errors above never touch the live object. */
+    uint8_t *old_log_bytes = e->log_bytes;
+    *e = *candidate;
+    e->log.io.context = e; e->recording.log = &e->log;
+    free(old_log_bytes); free(candidate);
+    return true;
+error:
+    xkl_engine_free(candidate); return false;
+}
+
 bool xkl_engine_info(const xkl_engine_t *e, xkl_info_t *info) {
     if (!live_ready(e) || !info) return false;
     memset(info, 0, sizeof(*info));

@@ -8,7 +8,7 @@ enum ProfessionalRecallScope: String, Codable, CaseIterable {
 /// A view of existing IDs. Neither course identity nor the legacy decks change.
 enum ProfessionalRecallCatalog {
     static func make(subject: ConceptSubject, bank: ConceptBank, teaching: ConceptTeaching,
-                     scope: ProfessionalRecallScope) throws -> RecallDeck {
+                     scope: ProfessionalRecallScope, allowEmpty: Bool = false) throws -> RecallDeck {
         guard let plan = teaching.studyPlan, teaching.hasCompleteProfessionalExtension else {
             throw ExamError.invalid("请先导入带主线计划的最新版课程；原记录保留。")
         }
@@ -40,7 +40,7 @@ enum ProfessionalRecallCatalog {
             return a == b ? $0.offset < $1.offset : a < b
         }.map(\.element)
         let deck = RecallDeck(subject: subject, bankID: bank.id, cards: items)
-        try deck.validate()
+        if !items.isEmpty || !allowEmpty { try deck.validate() }
         return deck
     }
 
