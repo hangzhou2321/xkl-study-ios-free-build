@@ -143,7 +143,9 @@ def main():
         container = Path(sim("get_app_container", device, BUNDLE, "data").strip()).resolve()
         for subject, case in captures:
             started = time.monotonic()
-            readiness_timeout = 90 if case == "question" else 45
+            # Cold DEBUG fixtures restore real engine archives on shared CI Macs.
+            # This is an observation budget, never a product loading-speed pass.
+            readiness_timeout = 90 if case == "question" or case.startswith("unified-") else 45
             log = OUT / f"{subject}-{case}.log"
             marker = f"PROFESSIONAL_PREVIEW_RENDERED subject={subject} case={case}"
             capture_id = str(uuid.uuid4())
