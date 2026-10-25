@@ -31,17 +31,18 @@ struct KnowledgeLearningEngine {
     }
     static func digest(_ point:KnowledgeCourse.Point)throws->String {
         let value:[String:Any]=["id":point.id,"checks":point.checks.map { q in
-            ["id":q.id,"prompt":q.prompt,"answer":q.answerID,"choices":q.choices.map { ["id":$0.id,"text":$0.text] }] as [String:Any]
+            ["id":q.id,"prompt":q.prompt,"answer":q.answerID,"choices":q.choices.sorted{$0.id<$1.id}.map { ["id":$0.id,"text":$0.text] }] as [String:Any]
         }]
         return StudySHA256.hex(try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]))
     }
     static func appending(_ record:KnowledgeLearningRecord,to course:KnowledgeCourse)throws->KnowledgeLearningRecord {
         guard !course.points.isEmpty,Set(course.points.map(\.id)).count==course.points.count else{throw ExamError.invalid("知识点身份为空或重复。")}
         let ids=course.points.map(\.id),digests=try Dictionary(uniqueKeysWithValues:course.points.map { ($0.id,try digest($0)) })
-        guard Array(ids.prefix(record.pointIDs.count))==record.pointIDs,record.pointDigests.allSatisfy({digests[$0.key]==$0.value}),record.courseID==course.id else {
+        guard Set(record.pointIDs).isSubset(of:Set(ids)),Set(record.pointIDs).count==record.pointIDs.count,record.pointDigests.allSatisfy({digests[$0.key]==$0.value}),record.courseID==course.id else {
             throw ExamError.invalid("已作答诊断的题干或答案发生变化，旧记录保留；不能套用旧成绩。")
         }
-        return .init(format:record.format,subject:record.subject,courseID:record.courseID,pointIDs:ids,pointDigests:digests,
+        let stable=record.pointIDs+ids.filter{!record.pointIDs.contains($0)}
+        return .init(format:record.format,subject:record.subject,courseID:record.courseID,pointIDs:stable,pointDigests:digests,
             currentID:record.currentID,bookmarks:record.bookmarks,events:record.events,deferredIDs:record.deferredIDs)
     }
     static func fresh(_ course:KnowledgeCourse)throws->Self {
@@ -53,7 +54,7 @@ struct KnowledgeLearningEngine {
     init(course:KnowledgeCourse,record:KnowledgeLearningRecord)throws {
         guard !course.points.isEmpty,Set(course.points.map(\.id)).count==course.points.count else{throw ExamError.invalid("知识点身份为空或重复。")}
         guard record.format=="knowledge-learning-v1",record.subject==course.subject,record.courseID==course.id,
-              record.pointIDs==course.points.map(\.id),record.pointDigests==Dictionary(uniqueKeysWithValues:try course.points.map { ($0.id,try Self.digest($0)) }),
+              Set(record.pointIDs)==Set(course.points.map(\.id)),Set(record.pointIDs).count==record.pointIDs.count,record.pointDigests==Dictionary(uniqueKeysWithValues:try course.points.map { ($0.id,try Self.digest($0)) }),
               record.currentID==nil || record.bookmarks[record.currentID!] != nil,
               Set(record.bookmarks.keys).isSubset(of:Set(record.pointIDs)),Set(record.deferredIDs).isSubset(of:Set(record.pointIDs)) else {
             throw ExamError.invalid("新知识点课程与学习档案不一致，原记录保留；不会新建空进度。")

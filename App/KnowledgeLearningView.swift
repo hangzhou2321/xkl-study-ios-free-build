@@ -173,7 +173,7 @@ struct KnowledgeSourcesView:View {
         }.navigationTitle("讲义与题库对应")
     }
     private func status(_ s:String)->String {
-        switch s{case "supported":return "已对应知识与方法（不是个人成绩）";case "source_pending":return "题源或答案待校勘，不能当可靠诊断";case "out_of_scope":return "不列入本轮国网主线";default:return "知识或方法对应仍有缺口"}
+        switch s{case "supported":return "新知识卡的解法支持已核对（不是个人成绩）";case "mapped":return "知识点关联已建立，尚未按新版逐题复核解法";case "source_pending":return "题源或答案待校勘，不能当可靠诊断";case "out_of_scope":return "不列入本轮国网主线";default:return "知识或方法对应仍有缺口"}
     }
 }
 private struct KnowledgeSourcePageView:View {

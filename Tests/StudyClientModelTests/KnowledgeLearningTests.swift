@@ -74,6 +74,17 @@ final class KnowledgeLearningTests:XCTestCase {
         let corrupt=try JSONDecoder().decode(KnowledgeLearningRecord.self,from:JSONSerialization.data(withJSONObject:object))
         XCTAssertThrowsError(try KnowledgeLearningEngine(course:course(),record:corrupt))
     }
+    func testReorderingTeachingMetadataKeepsStableIDsAnswersAndBreakpoint()throws {
+        var engine=try KnowledgeLearningEngine.fresh(course());try train(&engine,now:date(day))
+        var object=try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(course())) as? [String:Any])
+        let points=try XCTUnwrap(object["points"] as? [[String:Any]]);object["points"]=Array(points.reversed())
+        let reordered=try JSONDecoder().decode(KnowledgeCourse.self,from:JSONSerialization.data(withJSONObject:object))
+        let kept=try KnowledgeLearningEngine.appending(engine.record,to:reordered)
+        XCTAssertEqual(kept,engine.record)
+        let restored=try KnowledgeLearningEngine(course:reordered,record:kept)
+        XCTAssertEqual(restored.current,engine.current)
+        XCTAssertEqual(restored.record.events,engine.record.events)
+    }
 }
 
 #if os(macOS)

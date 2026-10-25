@@ -37,9 +37,10 @@ struct KnowledgeCourse: Codable, Equatable {
               Set(points.map(\.id)).count==points.count else { throw ExamError.invalid("知识点课程身份不一致；旧记录保留。") }
         let old=Set((teaching.primaryRecallDeck?.cards.map(\.id) ?? [])+(teaching.recallGroups ?? []).flatMap { $0.recallCards.map(\.id) })
         var earlier=Set<String>(),checkIDs=Set<String>()
+        let pointIDs=Set(points.map(\.id))
         for p in points {
             guard valid(p.id,120),valid(p.title,120),valid(p.goal,600),
-                  Set(p.prerequisites).count==p.prerequisites.count,Set(p.prerequisites).isSubset(of:earlier),
+                  Set(p.prerequisites).count==p.prerequisites.count,Set(p.prerequisites).isSubset(of:pointIDs),!p.prerequisites.contains(p.id),
                   (2...8).contains(p.sections.count),p.sections.allSatisfy({ valid($0.title,120) && valid($0.body,1800) }),
                   (1...24).contains(p.keyFacts.count),p.keyFacts.allSatisfy({valid($0,1500)}),
                   valid(p.example.prompt,1600),(2...10).contains(p.example.steps.count),p.example.steps.allSatisfy({valid($0,1600)}),valid(p.example.answer,1600),
@@ -53,11 +54,19 @@ struct KnowledgeCourse: Codable, Equatable {
             }
             earlier.insert(p.id)
         }
+        var visiting=Set<String>(),visited=Set<String>()
+        func visit(_ id:String)throws {
+            if visited.contains(id){return}
+            guard visiting.insert(id).inserted else{throw ExamError.invalid("知识点前置关系存在循环。")}
+            for parent in point(id)!.prerequisites{try visit(parent)}
+            visiting.remove(id);visited.insert(id)
+        }
+        for p in points{try visit(p.id)}
         guard questionMappings.count<=2500,Set(questionMappings.map(\.id)).count==questionMappings.count else { throw ExamError.invalid("题库知识点对应重复。") }
         for m in questionMappings {
             guard valid(m.id,180),valid(m.documentID,30),valid(m.book,80),m.page>0,valid(m.method,2500),
-                  ["supported","method_gap","source_pending","out_of_scope"].contains(m.status),
-                  Set(m.knowledgeIDs).isSubset(of:earlier),m.status != "supported" || !m.knowledgeIDs.isEmpty else {
+                  ["supported","mapped","method_gap","source_pending","out_of_scope"].contains(m.status),
+                  Set(m.knowledgeIDs).isSubset(of:earlier),!["supported","mapped"].contains(m.status) || !m.knowledgeIDs.isEmpty else {
                 throw ExamError.invalid("题库与知识点对应关系不完整。")
             }
         }
