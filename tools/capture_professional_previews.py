@@ -15,7 +15,8 @@ OUT = ROOT / "build/professional-previews"
 BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
 CASES = ("plan", "sources", "question", "answer", "recall", "guide-only",
-         "source-image", "supplement-mainline", "supplement-related", "question-zoom")
+         "source-image", "supplement-mainline", "supplement-related", "question-zoom",
+         "source-groups", "source-groups-learned")
 CAPTURES = [(subject, case) for subject in SUBJECTS for case in CASES]
 
 

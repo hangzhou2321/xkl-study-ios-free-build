@@ -204,32 +204,76 @@ struct ProfessionalPracticeCardsView: View {
 struct ProfessionalSourcesView: View {
     @ObservedObject var store: ConceptStore
     var sourceAssetRoot: URL? = nil
-    private var availableCount: Int {
-        let used=Set(store.engine?.record.progress.values.flatMap(\.usedQuestionIDs) ?? [])
-        return (store.teaching?.questionPresentations ?? []).filter { !used.contains($0.questionID) && store.sourceQuestionAvailability($0.questionID) == nil }.count
+    private var sections: ProfessionalSourceSections {
+        ProfessionalSourceSections.make(practiceQuestionIDs:(store.engine?.bank.concepts.flatMap(\.questions) ?? []).map(\.id),
+            sourceBankQuestionIDs:(store.teaching?.sourceLeaves ?? []).compactMap(\.bankQuestionID),
+            selectedPlanQuestionIDs:store.teaching?.studyPlan?.sourceQuestionIDs)
+    }
+    private var usedQuestionIDs: Set<String> { Set(store.engine?.record.progress.values.flatMap(\.usedQuestionIDs) ?? []) }
+    private func questions(_ ids:[String])->[ConceptQuestion] {
+        let bank=store.engine?.bank.concepts.flatMap(\.questions) ?? []
+        let byID=Dictionary(uniqueKeysWithValues:bank.map { ($0.id,$0) })
+        return ids.compactMap { byID[$0] }
+    }
+    private func availableCount(_ ids:[String])->Int {
+        ids.filter { !usedQuestionIDs.contains($0) && store.sourceQuestionAvailability($0) == nil }.count
     }
     var body: some View {
         List {
-            if let teaching = store.teaching {
-                Section("完整练习题 · 当前可开始 \(availableCount) 道") {
-                    ForEach((teaching.questionPresentations ?? []).compactMap { presentation in
-                        store.engine?.bank.concepts.flatMap(\.questions).first { $0.id == presentation.questionID }
-                    }) { question in
-                        NavigationLink { ProfessionalSourceStartView(store: store, question: question) } label: {
-                            VStack(alignment: .leading) { Text(question.prompt).lineLimit(2); Text("已核验练习 · " + question.sourceLocation).font(.caption).foregroundStyle(.secondary) }
+            if let teaching=store.teaching {
+                if store.engine?.shown != nil {
+                    Section { NavigationLink("继续上次题目") { ProfessionalSourcePracticeView(store:store) } }
+                }
+                if sections.usesLegacyFallback {
+                    Section("全部课程练习 · \(sections.extensionQuestionIDs.count) 道") {
+                        Text("当前课程没有讲义主线计划，保留全部练习入口；已作答的题仍可查阅。").font(.footnote).foregroundStyle(.secondary)
+                        ForEach(questions(sections.extensionQuestionIDs)) { question in questionLink(question) }
+                    }
+                } else {
+                    Section("讲义原题 · 共 \(sections.lectureQuestionIDs.count) 道 · 可开始 \(availableCount(sections.lectureQuestionIDs)) 道") {
+                        Text("先练本部分讲义原题，再用同考点变式核对能否运用。已学题保留查阅，原记录不变。").font(.footnote).foregroundStyle(.secondary)
+                        ForEach(questions(sections.lectureQuestionIDs)) { question in questionLink(question) }
+                        if sections.lectureQuestionIDs.isEmpty { Text("本范围暂无已绑定的讲义原题，可查看下方变式、拓展及完整来源资料。").foregroundStyle(.secondary) }
+                    }
+                    Section("其他练习入口") {
+                        NavigationLink("同考点变式 · \(sections.variantQuestionIDs.count) 道") {
+                            practiceList(title:"同考点变式",ids:sections.variantQuestionIDs,notice:"用于核对同一知识能否迁移；这是已整理的变式练习，不代表真实未见题盲测。")
+                        }
+                        NavigationLink("拓展与旧题库 · \(sections.extensionQuestionIDs.count) 道") {
+                            practiceList(title:"拓展与旧题库",ids:sections.extensionQuestionIDs,notice:"这些练习完整保留，作为拓展和查漏入口；不计入本次默认讲义主线。")
                         }
                     }
                 }
-                Section("来源图与索引 · 不作为答题") {
-                    ForEach(teaching.sourceLeaves ?? [], id: \.sourceQuestionID) { leaf in
-                        NavigationLink { ProfessionalSourceLeafView(store: store, leaf: leaf, sourceAssetRoot: sourceAssetRoot) } label: {
-                            VStack(alignment: .leading) { Text(leaf.label); ProfessionalSourceBadges(leaf:leaf) }
-                        }
+                Section("完整来源资料") {
+                    NavigationLink("来源图与索引 · \((teaching.sourceLeaves ?? []).count) 条") {
+                        List {
+                            ForEach(teaching.sourceLeaves ?? [],id: \.sourceQuestionID) { leaf in
+                                NavigationLink { ProfessionalSourceLeafView(store:store,leaf:leaf,sourceAssetRoot:sourceAssetRoot) } label: {
+                                    VStack(alignment:.leading) { Text(leaf.label); ProfessionalSourceBadges(leaf:leaf) }
+                                }
+                            }
+                        }.navigationTitle("完整来源资料")
                     }
-                    Text("摘要与原图是资料索引。只有条件、图示和答案已核验的完整题才进入作答。").font(.footnote).foregroundStyle(.secondary)
+                    Text("来源图和待补条目均保留，只读索引不作为已完成练习或成绩。").font(.footnote).foregroundStyle(.secondary)
                 }
             }
-        }.navigationTitle("源题与资料")
+        }.navigationTitle("讲义练习与资料")
+    }
+    private func questionLink(_ question:ConceptQuestion)->some View {
+        NavigationLink { ProfessionalSourceStartView(store:store,question:question) } label: {
+            VStack(alignment:.leading,spacing:5) {
+                Text(question.prompt).lineLimit(2)
+                Text(question.sourceLocation).font(.caption).foregroundStyle(.secondary)
+                if usedQuestionIDs.contains(question.id) { Text("已作答 · 可查看记录与解析").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+    }
+    private func practiceList(title:String,ids:[String],notice:String)->some View {
+        List {
+            Section { Text(notice).font(.footnote).foregroundStyle(.secondary); Text("共 \(ids.count) 道 · 当前可开始 \(availableCount(ids)) 道").font(.subheadline) }
+            ForEach(questions(ids)) { question in questionLink(question) }
+            if ids.isEmpty { Text("此范围暂无已核验练习。") }
+        }.navigationTitle(title)
     }
 }
 
@@ -455,14 +499,17 @@ import UIKit
         func value(_ key:String)->String? { guard let i=args.firstIndex(of:key),i+1<args.count else { return nil }; return args[i+1] }
         subject=value("--professional-subject") == "power" ? .power:.computer
         selectedCase=value("--professional-case") ?? "plan"
+        let groupingPreview=["source-groups","source-groups-learned"].contains(selectedCase)
         root=FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-professional-"+UUID().uuidString,isDirectory:true)
         let target=ConceptStore(subject:subject,baseDirectory:root)
         do {
             try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
             let subjectID=subject.bankID
-            let first=ConceptQuestion(id:"synthetic-question-1",type:.single,prompt:"某设备只在开关接通时工作。已知开关闭合，输入为1，输出应为哪项？",options:[ExamOption(id:"yes",text:"输出1"),ExamOption(id:"no",text:"输出0")],answer:["yes"],explanation:"输出为1。\n闭合开关可传递输入；断开时不满足工作条件。",sourceIDs:["synthetic-source"],sourceLocation:"纯合成示例第1题",verification:"合成fixture核验")
-            let second=ConceptQuestion(id:"synthetic-question-2",type:.single,prompt:"同一设备在开关断开时，是否满足工作条件？",options:[ExamOption(id:"yes",text:"满足"),ExamOption(id:"no",text:"不满足")],answer:["no"],explanation:"不满足。\n先核对开关状态，再判断条件。",sourceIDs:["synthetic-source"],sourceLocation:"纯合成示例第2题",verification:"合成fixture核验")
-            let concept=StudyConcept(id:"synthetic-concept",title:"条件与状态",section:"合成基础",method:"先核对给定条件，再判断状态。",questions:[first,second])
+            let first=ConceptQuestion(id:"synthetic-question-1",type:.single,prompt:"某设备只在开关接通时工作。已知开关闭合，输入为1，输出应为哪项？",options:[ExamOption(id:"yes",text:"输出1"),ExamOption(id:"no",text:"输出0")],answer:["yes"],explanation:"输出为1。\n闭合开关可传递输入；断开时不满足工作条件。",sourceIDs:["synthetic-source"],sourceLocation:groupingPreview ? "讲义原题 · 纯合成示例1":"纯合成示例第1题",verification:"合成fixture核验")
+            let second=ConceptQuestion(id:"synthetic-question-2",type:.single,prompt:"同一设备在开关断开时，是否满足工作条件？",options:[ExamOption(id:"yes",text:"满足"),ExamOption(id:"no",text:"不满足")],answer:["no"],explanation:"不满足。\n先核对开关状态，再判断条件。",sourceIDs:["synthetic-source"],sourceLocation:groupingPreview ? "同考点变式 · 纯合成示例2":"纯合成示例第2题",verification:"合成fixture核验")
+            let extensionQuestion=ConceptQuestion(id:"synthetic-question-3",type:.single,prompt:"拓展例：给定工作条件尚未确认，可以先认定设备工作吗？",options:[ExamOption(id:"yes",text:"可以"),ExamOption(id:"no",text:"不可以")],answer:["no"],explanation:"不能省略必要条件。",sourceIDs:["synthetic-source"],sourceLocation:"拓展旧题库 · 纯合成示例3",verification:"合成fixture核验")
+            let questions=groupingPreview ? [first,second,extensionQuestion]:[first,second]
+            let concept=StudyConcept(id:"synthetic-concept",title:"条件与状态",section:"合成基础",method:"先核对给定条件，再判断状态。",questions:questions)
             let bank=ConceptBank(id:subjectID,title:"合成专业课预览",scope:"仅测试界面",notice:"新写合成内容，不是真实题库。",sources:[ConceptSource(id:"synthetic-source",title:"合成题源",reference:"Synthetic fixture")],concepts:[concept])
             let cards=[RecallCard(id:"synthetic-concept:condition",prompt:"判断设备是否工作，先核对什么？",answer:"先核对题目给出的开关状态与必要工作条件。",detail:"不能只看输入，还要检查条件是否满足。"),RecallCard(id:"synthetic-concept:boundary",prompt:"条件不满足时，能直接沿用正常工作结论吗？",answer:"不能，应先重新核对适用边界。")]
             let diagram=ConceptDiagram(version:1,title:"合成闭合开关",width:320,height:160,description:"合成示意：两个接点由连线相接，表示闭合状态。",shapes:[.init(kind:"ellipse",x:126,y:76,width:8,height:8,stroke:"ink",fill:"white"),.init(kind:"ellipse",x:186,y:76,width:8,height:8,stroke:"ink",fill:"white")],paths:[.init(points:[.init(x:20,y:80),.init(x:130,y:80)],color:"ink",dashed:false,arrow:false),.init(points:[.init(x:130,y:80),.init(x:190,y:80),.init(x:300,y:80)],color:"ink",dashed:false,arrow:false)],labels:[.init(text:"闭合状态",x:70,y:110,width:180,height:30,size:18,color:"ink",align:"center",bold:true)])
@@ -499,9 +546,9 @@ import UIKit
             let syllabus=ConceptSyllabusTree(version:1,title:"合成考纲树",outlineSource:"2027 合成预览",frequencyNote:"仅测试，不代表考试频率。",sources:[.init(id:"synthetic-source",title:"合成资料",kind:"book",edition:"2027 合成",sha256:StudySHA256.hex(Data("synthetic-source-metadata".utf8)),fileName:"synthetic-professional.pdf")],branches:[.init(id:"synthetic-branch",title:"合成基础",syllabusText:"只测试专业课界面。",scope:"mainline")],topics:[.init(id:"synthetic-topic",branchID:"synthetic-branch",title:"合成条件",conceptIDs:[concept.id])],leaves:[])
             let partition=ProfessionalSupplementSelection(groupID:supplement.id,mainlineCardIDs:Array(supplementCards.prefix(3)).map(\.id),relatedCardIDs:Array(supplementCards.dropFirst(3)).map(\.id))
             let plan=ProfessionalStudyPlan(format:"xkl-professional-plan-v1",id:"synthetic-plan",subject:subject,basePrimaryDeckSHA256:try deck.hash,mainlineCardIDs:[cards[0].id],relatedCardIDs:[cards[1].id],mainlineSupplementGroupIDs:[supplement.id],relatedSupplementGroupIDs:[supplement.id],supplementSelections:[partition],priorityConceptIDs:[concept.id],sourceQuestionIDs:[first.id,second.id])
-            let presentations=[first,second].map { ProfessionalQuestionPresentation(questionID:$0.id,sourceQuestionDigest:$0.professionalDigest,requiredDiagram:$0.id == first.id,beforeAnswer:$0.id == first.id ? [visual]:[],afterAnswer:[]) }
+            let presentations=questions.map { ProfessionalQuestionPresentation(questionID:$0.id,sourceQuestionDigest:$0.professionalDigest,requiredDiagram:$0.id == first.id,beforeAnswer:$0.id == first.id ? [visual]:[],afterAnswer:[]) }
             let guideOnly=selectedCase == "guide-only"
-            let links=[first,second].map { ProfessionalQuestionLinks(questionID:$0.id,sourceQuestionDigest:$0.professionalDigest,primaryCardIDs:guideOnly ? [] : [cards[0].id],supplementCardIDs:[],guideConceptIDs:[concept.id]) }
+            let links=questions.map { ProfessionalQuestionLinks(questionID:$0.id,sourceQuestionDigest:$0.professionalDigest,primaryCardIDs:guideOnly ? [] : [cards[0].id],supplementCardIDs:[],guideConceptIDs:[concept.id]) }
             let correction=ProfessionalCardCorrection(cardID:cards[0].id,sourceCardDigest:cards[0].professionalDigest,note:"合成校勘例：条件必须完整核对。",sourceRef:"合成说明")
             let sourceAssetDirectory=root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)
             try FileManager.default.createDirectory(at:sourceAssetDirectory,withIntermediateDirectories:true)
@@ -519,15 +566,17 @@ import UIKit
             let continuationAsset=ProfessionalSourceFileAsset(sha256:continuationHash,mimeType:"image/png",byteCount:continuationBytes.count,pixelWidth:continuationPixels.width,pixelHeight:continuationPixels.height,crop:ProfessionalNormalizedCrop(x:0,y:0,width:1,height:1),altText:"合成续页上下文，第2页")
             let continuationVisual=ProfessionalQuestionVisual(id:"synthetic-continuation",kind:"sourceFile",sourceFile:continuationAsset)
             let leaf=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-leaf",sourceID:"synthetic-source",page:1,label:"待核源图示例",status:"pending",visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.unverified,courseReadiness:.awaitingCanonicalBinding,scope:.mainline,reason:"合成来源图尚未完成逐题绑定，只作资料与知识卡索引。",additionalVisuals:[continuationVisual])
-            let teaching=ConceptTeaching(format:"xkl-teaching-v1",bankSHA256:hash,lessons:[lesson],syllabus:syllabus,recallGroups:[supplement],primaryRecallDeck:deck,studyPlan:plan,questionPresentations:presentations,questionLinks:links,cardCorrections:[correction],sourceLeaves:[leaf])
+            let lectureLeaf=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-lecture",sourceID:"synthetic-source",page:1,label:"讲义原题 · 合成出处1",status:"verified",bankQuestionID:first.id,visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.verified,courseReadiness:.ready,scope:.mainline,reason:"纯合成原题绑定。")
+            let lectureAlias=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-lecture-alias",sourceID:"synthetic-source",page:2,label:"同一原题 · 合成出处2",status:"verified",bankQuestionID:first.id,visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.verified,courseReadiness:.ready,scope:.mainline,reason:"纯合成来源别名，不增加练习题数。")
+            let teaching=ConceptTeaching(format:"xkl-teaching-v1",bankSHA256:hash,lessons:[lesson],syllabus:syllabus,recallGroups:[supplement],primaryRecallDeck:deck,studyPlan:plan,questionPresentations:presentations,questionLinks:links,cardCorrections:[correction],sourceLeaves:groupingPreview ? [leaf,lectureLeaf,lectureAlias]:[leaf])
             let package=ConceptContent(format:"xkl-concepts-v1",bankBytes:bankBytes,bankSHA256:hash)
             let course=ConceptCourse(format:"xkl-course-v5",subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)
             let path=root.appendingPathComponent("synthetic.xklcourse")
             try JSONEncoder().encode(course).write(to:path)
             target.importContent(path)
-            if ["question","question-zoom","answer","guide-only"].contains(selectedCase) {
+            if ["question","question-zoom","answer","guide-only","source-groups-learned"].contains(selectedCase) {
                 target.startQuestion(first.id,expectedCurrentToken:nil)
-                if selectedCase == "answer",let token=target.engine?.shown?.id { target.choose("yes",token:token) }
+                if ["answer","source-groups-learned"].contains(selectedCase),let token=target.engine?.shown?.id { target.choose("yes",token:token) }
             }
             if ["supplement-mainline","supplement-related"].contains(selectedCase) {
                 let mainline=selectedCase == "supplement-mainline"
@@ -556,7 +605,7 @@ struct ProfessionalPriorityPreview: View {
         NavigationStack {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
                 if ["question","question-zoom","answer","guide-only"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
-                else if fixture.selectedCase == "sources" { ProfessionalSourcesView(store:fixture.store,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)) }
+                else if ["sources","source-groups","source-groups-learned"].contains(fixture.selectedCase) { ProfessionalSourcesView(store:fixture.store,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)) }
                 else if fixture.selectedCase == "source-image",let leaf=teaching.sourceLeaves?.first {
                     ProfessionalSourceLeafView(store:fixture.store,leaf:leaf,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true))
                 } else if ["supplement-mainline","supplement-related"].contains(fixture.selectedCase),let group=fixture.recallPreviewGroup,let selection=fixture.recallPreviewSelection {
@@ -598,6 +647,10 @@ struct ProfessionalPriorityPreview: View {
             let recall=RecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,baseDirectory:fixture.root,supplementGroup:fixture.recallPreviewGroup)
             guard !recall.blocked,recall.error == nil,let saved=recall.engine else { return false }
             if let requested=fixture.recallPreviewSelection { return saved.record.state.selection?.id == requested.id && saved.record.state.selection?.cardIDs == requested.cardIDs && (try? saved.deck.hash) == requested.deckSHA256 }
+        case "source-groups", "source-groups-learned":
+            let grouped=ProfessionalSourceSections.make(practiceQuestionIDs:engine.bank.concepts.flatMap(\.questions).map(\.id),sourceBankQuestionIDs:(teaching.sourceLeaves ?? []).compactMap(\.bankQuestionID),selectedPlanQuestionIDs:teaching.studyPlan?.sourceQuestionIDs)
+            guard grouped.lectureQuestionIDs == ["synthetic-question-1"],grouped.variantQuestionIDs == ["synthetic-question-2"],grouped.extensionQuestionIDs == ["synthetic-question-3"] else { return false }
+            if fixture.selectedCase == "source-groups-learned" { return engine.record.progress.values.contains { $0.usedQuestionIDs.contains("synthetic-question-1") } && engine.shown?.questionID == "synthetic-question-1" && engine.record.review != nil }
         case "plan", "sources": break
         default: return false
         }
