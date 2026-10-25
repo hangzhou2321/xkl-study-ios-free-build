@@ -14,6 +14,9 @@ struct ProfessionalStudyPlanView: View {
     var recallBaseDirectory: URL? = nil
     var body: some View {
         List {
+            if teaching.cardPriorities != nil {
+                Section { Text("标签表示当前讲义主线的学习优先级，不是真题考频，也不改变复习安排。").font(.footnote).foregroundStyle(.secondary) }
+            }
             if let plan = teaching.studyPlan {
                 section("主线学习", ids: plan.mainlineCardIDs, groups: plan.mainlineSupplementGroupIDs, selection: "mainline", plan: plan)
                 section("拓展与相关基础", ids: plan.relatedCardIDs, groups: plan.relatedSupplementGroupIDs, selection: "related", plan: plan)
@@ -113,12 +116,56 @@ struct ProfessionalVisualView: View {
     }
 }
 
+#if DEBUG
+private struct ProfessionalPriorityPreviewState {
+    var openCard=false
+    var didRender:(String)->Void = { _ in }
+}
+private struct ProfessionalPriorityPreviewKey:EnvironmentKey { static let defaultValue=ProfessionalPriorityPreviewState() }
+private extension EnvironmentValues {
+    var professionalPriorityPreview:ProfessionalPriorityPreviewState {
+        get { self[ProfessionalPriorityPreviewKey.self] }
+        set { self[ProfessionalPriorityPreviewKey.self]=newValue }
+    }
+}
+#endif
+
+struct ProfessionalCardPriorityLabel: View {
+    let value: ProfessionalCardPriority
+    #if DEBUG
+    @Environment(\.professionalPriorityPreview) private var preview
+    #endif
+    var body: some View {
+        Text(value.title).font(.caption.weight(.semibold)).padding(.horizontal,10).padding(.vertical,5)
+            .background(Color.accentColor.opacity(0.12),in:Capsule()).accessibilityLabel("学习优先级："+value.title)
+            #if DEBUG
+            .onAppear { preview.didRender(value.cardID) }
+            #endif
+    }
+}
+struct ProfessionalCardPriorityEvidence: View {
+    let value: ProfessionalCardPriority
+    var body: some View {
+        DisclosureGroup("学习优先级依据") {
+            VStack(alignment:.leading,spacing:8) {
+                Text(value.basisTitle).font(.subheadline)
+                Text(value.reason).font(.body)
+                Text("当前资料关联 \(Set(value.sourceQuestionIDs).count) 道主线原题，不是真题考频或考试出现次数。").font(.footnote).foregroundStyle(.secondary)
+                if value.level == "extension" { Text("拓展选学不表示不会考，也不表示这项知识普遍不重要。").font(.footnote).foregroundStyle(.secondary) }
+            }.padding(.top,8)
+        }
+    }
+}
+
 private struct ProfessionalCardReference: Identifiable { let id: String; let card: RecallCard }
 private struct ProfessionalGuideReference: Identifiable { let id: String; let lesson: ConceptLesson }
 struct ProfessionalQuestionCardsView: View {
     let primaryIDs: [String]; let supplementIDs: [String]; var guideIDs: [String] = []; let teaching: ConceptTeaching; let bank: ConceptBank; let subject: ConceptSubject
     @State private var selection: ProfessionalCardReference?
     @State private var guideSelection: ProfessionalGuideReference?
+    #if DEBUG
+    @Environment(\.professionalPriorityPreview) private var priorityPreview
+    #endif
     private var cards: [RecallCard] {
         let primary = (try? RecallDeck.make(subject: subject, bank: bank, teaching: teaching).cards.map(\.card)) ?? []
         return primary.filter { primaryIDs.contains($0.id) } + (teaching.recallGroups ?? []).flatMap(\.recallCards).filter { supplementIDs.contains($0.id) }
@@ -133,10 +180,17 @@ struct ProfessionalQuestionCardsView: View {
                 }
             }
         }
+        #if DEBUG
+        .onAppear { if priorityPreview.openCard,selection == nil,let card=cards.first { selection=ProfessionalCardReference(id:card.id,card:card) } }
+        #endif
         .sheet(item: $selection) { item in
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
+                        if let priority=teaching.cardPriorities?.first(where: { $0.cardID == item.card.id && $0.sourceCardDigest == item.card.professionalDigest }) {
+                            ProfessionalCardPriorityLabel(value:priority)
+                            ProfessionalCardPriorityEvidence(value:priority)
+                        }
                         Text(item.card.prompt).font(.system(size: 26).weight(.semibold))
                         Text(item.card.answer).font(.system(size: 25))
                         if let detail = item.card.detail { DisclosureGroup("详细说明") { Text(detail).font(.system(size: 22)) } }
@@ -500,6 +554,7 @@ import UIKit
         subject=value("--professional-subject") == "power" ? .power:.computer
         selectedCase=value("--professional-case") ?? "plan"
         let groupingPreview=["source-groups","source-groups-learned"].contains(selectedCase)
+        let priorityPreview=["card-priority-front","card-priority-sheet"].contains(selectedCase)
         root=FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-professional-"+UUID().uuidString,isDirectory:true)
         let target=ConceptStore(subject:subject,baseDirectory:root)
         do {
@@ -568,15 +623,28 @@ import UIKit
             let leaf=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-leaf",sourceID:"synthetic-source",page:1,label:"待核源图示例",status:"pending",visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.unverified,courseReadiness:.awaitingCanonicalBinding,scope:.mainline,reason:"合成来源图尚未完成逐题绑定，只作资料与知识卡索引。",additionalVisuals:[continuationVisual])
             let lectureLeaf=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-lecture",sourceID:"synthetic-source",page:1,label:"讲义原题 · 合成出处1",status:"verified",bankQuestionID:first.id,visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.verified,courseReadiness:.ready,scope:.mainline,reason:"纯合成原题绑定。")
             let lectureAlias=ProfessionalSourceLeaf(sourceQuestionID:"synthetic-lecture-alias",sourceID:"synthetic-source",page:2,label:"同一原题 · 合成出处2",status:"verified",bankQuestionID:first.id,visual:sourceVisual,primaryCardIDs:[cards[0].id],supplementCardIDs:[],sourceStatus:.verified,courseReadiness:.ready,scope:.mainline,reason:"纯合成来源别名，不增加练习题数。")
-            let teaching=ConceptTeaching(format:"xkl-teaching-v1",bankSHA256:hash,lessons:[lesson],syllabus:syllabus,recallGroups:[supplement],primaryRecallDeck:deck,studyPlan:plan,questionPresentations:presentations,questionLinks:links,cardCorrections:[correction],sourceLeaves:groupingPreview ? [leaf,lectureLeaf,lectureAlias]:[leaf])
+            var teaching=ConceptTeaching(format:"xkl-teaching-v1",bankSHA256:hash,lessons:[lesson],syllabus:syllabus,recallGroups:[supplement],primaryRecallDeck:deck,studyPlan:plan,questionPresentations:presentations,questionLinks:links,cardCorrections:[correction],sourceLeaves:(groupingPreview || priorityPreview) ? [leaf,lectureLeaf,lectureAlias]:[leaf])
+            if priorityPreview {
+                let mainline=Set(plan.mainlineCardIDs+plan.supplementSelections.flatMap(\.mainlineCardIDs))
+                teaching.cardPriorities=(cards+supplementCards).map { card in
+                    let level=card.id == cards[0].id ? "priority":(mainline.contains(card.id) ? "regular":"extension")
+                    return ProfessionalCardPriority(cardID:card.id,sourceCardDigest:card.professionalDigest,level:level,classificationBasis:level == "priority" ? "foundation":(level == "regular" ? "local_detail":"extension"),reason:level == "priority" ? "先建立学习框架，再练习应用。":(level == "regular" ? "用于核对具体条件与应用边界。":"作为当前主线之外的进一步学习。"),sourceQuestionIDs:card.id == cards[0].id ? [first.id]:[])
+                }
+            }
             let package=ConceptContent(format:"xkl-concepts-v1",bankBytes:bankBytes,bankSHA256:hash)
             let course=ConceptCourse(format:"xkl-course-v5",subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)
             let path=root.appendingPathComponent("synthetic.xklcourse")
             try JSONEncoder().encode(course).write(to:path)
             target.importContent(path)
-            if ["question","question-zoom","answer","guide-only","source-groups-learned"].contains(selectedCase) {
+            if ["question","question-zoom","answer","guide-only","source-groups-learned","card-priority-sheet"].contains(selectedCase) {
                 target.startQuestion(first.id,expectedCurrentToken:nil)
                 if ["answer","source-groups-learned"].contains(selectedCase),let token=target.engine?.shown?.id { target.choose("yes",token:token) }
+            }
+            if selectedCase == "card-priority-sheet",let token=target.engine?.shown?.id { precondition(target.openLinkedCardHelp(token:token),"Synthetic card help must persist") }
+            if selectedCase == "card-priority-front" {
+                let recall=RecallStore(subject:subject,bank:bank,teaching:teaching,baseDirectory:root)
+                recall.act("start",newLimit:1)
+                precondition(!recall.blocked && recall.error == nil && recall.engine?.record.state.shown?.revealed == false,"Synthetic recall front must persist")
             }
             if ["supplement-mainline","supplement-related"].contains(selectedCase) {
                 let mainline=selectedCase == "supplement-mainline"
@@ -601,21 +669,24 @@ struct ProfessionalPriorityPreview: View {
     @State private var zoomWidth=0
     @State private var zoomHeight=0
     @State private var receiptReported=false
+    @State private var priorityCardVisible:String?
     var body: some View {
         NavigationStack {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
-                if ["question","question-zoom","answer","guide-only"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
+                if ["question","question-zoom","answer","guide-only","card-priority-sheet"].contains(fixture.selectedCase) { ProfessionalSourcePracticeView(store:fixture.store) }
                 else if ["sources","source-groups","source-groups-learned"].contains(fixture.selectedCase) { ProfessionalSourcesView(store:fixture.store,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true)) }
                 else if fixture.selectedCase == "source-image",let leaf=teaching.sourceLeaves?.first {
                     ProfessionalSourceLeafView(store:fixture.store,leaf:leaf,sourceAssetRoot:fixture.root.appendingPathComponent("ProfessionalSourceAssets",isDirectory:true))
                 } else if ["supplement-mainline","supplement-related"].contains(fixture.selectedCase),let group=fixture.recallPreviewGroup,let selection=fixture.recallPreviewSelection {
                     RecallStudyView(subject:fixture.subject,bank:bank,teaching:teaching,supplementGroup:group,planSelection:selection,baseDirectory:fixture.root)
-                } else if fixture.selectedCase == "recall" {
+                } else if ["recall","card-priority-front"].contains(fixture.selectedCase) {
                     RecallStudyView(subject:fixture.subject,bank:bank,teaching:teaching,baseDirectory:fixture.root)
                 } else { ProfessionalStudyPlanView(subject:fixture.subject,bank:bank,teaching:teaching,recallBaseDirectory:fixture.root) }
             }
         }.environment(\.professionalQuestionZoomPreview,ProfessionalQuestionZoomPreview(autoOpen:fixture.selectedCase == "question-zoom",didAppear:{ width,height in zoomWidth=width; zoomHeight=height; zoomAppeared=true }))
-        .onAppear { if fixture.selectedCase != "question-zoom" { reportWhenReady() } }
+        .environment(\.professionalPriorityPreview,ProfessionalPriorityPreviewState(openCard:fixture.selectedCase == "card-priority-sheet",didRender:{ priorityCardVisible=$0 }))
+        .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
+        .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
         .onChange(of:zoomAppeared) { _,shown in if shown && fixture.selectedCase == "question-zoom" { reportWhenReady() } }
     }
     private func reportWhenReady() {
@@ -635,6 +706,11 @@ struct ProfessionalPriorityPreview: View {
         case "question", "guide-only":
             guard engine.shown != nil,engine.record.review == nil else { return false }
             if fixture.selectedCase == "guide-only" { return fixture.store.currentQuestionLinks?.primaryCardIDs.isEmpty == true && fixture.store.currentQuestionLinks?.supplementCardIDs.isEmpty == true && fixture.store.currentQuestionLinks?.guideConceptIDs.isEmpty == false }
+        case "card-priority-front", "card-priority-sheet":
+            guard let visible=priorityCardVisible,let label=teaching.cardPriorities?.first(where: { $0.cardID == visible }),label.level == "priority",Set(label.sourceQuestionIDs).count == 1 else { return false }
+            if fixture.selectedCase == "card-priority-sheet" { return engine.shown != nil && engine.record.review == nil && fixture.store.currentQuestionUsedCardHelp }
+            let recall=RecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,baseDirectory:fixture.root)
+            return !recall.blocked && recall.engine?.item?.id == visible && recall.engine?.record.state.shown?.revealed == false && !(recall.engine?.record.events.contains { $0.kind == "grade" } ?? true)
         case "answer": return engine.record.review != nil
         case "source-image":
             guard let leaf=teaching.sourceLeaves?.first else { return false }

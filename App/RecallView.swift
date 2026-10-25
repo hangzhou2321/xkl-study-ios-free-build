@@ -37,6 +37,7 @@ struct RecallStudyView: View {
                     Group {
                     if let item = engine.item {
                         Text(item.conceptTitle).font(.subheadline).foregroundStyle(.secondary)
+                        if let priority=teaching.cardPriorities?.first(where: { $0.cardID == item.card.id && $0.sourceCardDigest == item.card.professionalDigest }) { ProfessionalCardPriorityLabel(value:priority) }
                         Text(item.card.prompt).font(.title2.weight(.semibold)).textSelection(.enabled)
                         if let result = engine.record.state.result {
                             answer(item.card)
@@ -136,6 +137,7 @@ struct RecallStudyView: View {
     }
     @ViewBuilder private func answer(_ card: RecallCard) -> some View {
         Text(card.answer).font(.system(size: 25)).textSelection(.enabled)
+        if let priority=teaching.cardPriorities?.first(where: { $0.cardID == card.id && $0.sourceCardDigest == card.professionalDigest }) { ProfessionalCardPriorityEvidence(value:priority) }
         ForEach((teaching.cardCorrections ?? []).filter { $0.cardID == card.id && $0.sourceCardDigest == card.professionalDigest }, id: \.cardID) { correction in
             VStack(alignment: .leading, spacing: 8) { Text("校勘说明").font(.headline); Text(correction.note); Text(correction.sourceRef).font(.caption).foregroundStyle(.secondary) }.padding().background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         }

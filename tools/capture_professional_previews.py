@@ -16,7 +16,7 @@ BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
 CASES = ("plan", "sources", "question", "answer", "recall", "guide-only",
          "source-image", "supplement-mainline", "supplement-related", "question-zoom",
-         "source-groups", "source-groups-learned")
+         "source-groups", "source-groups-learned", "card-priority-front", "card-priority-sheet")
 CAPTURES = [(subject, case) for subject in SUBJECTS for case in CASES]
 
 
