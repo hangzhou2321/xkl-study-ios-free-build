@@ -118,8 +118,11 @@ final class ProfessionalRecallStoreTests: XCTestCase {
         return teaching
     }
     private func files(_ root: URL) throws -> [String: Data] {
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return [:] }
-        let rootComponents = root.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        guard let enumerator = FileManager.default.enumerator(at: canonicalRoot, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        let rootComponents = canonicalRoot.pathComponents
         var result: [String: Data] = [:]
         for case let url as URL in enumerator {
             guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
