@@ -343,6 +343,60 @@ final class ProfessionalRecallStoreTests: XCTestCase {
         XCTAssertEqual(try files(root), protected)
     }
 
+    @MainActor func testPostponePersistsWithoutChangingQuestionsLegacyOrOtherSubjects() throws {
+        let (bank,teaching)=try fixture(), directory=try root();defer { try? FileManager.default.removeItem(at:directory) }
+        let content=ConceptContent(format:"xkl-concepts-v1",bankBytes:try encode(bank),bankSHA256:teaching.bankSHA256)
+        let file=directory.appendingPathComponent("synthetic-course.xklcourse")
+        try encode(ConceptCourse(format:"xkl-course-v5",subject:.computer,bankContent:try encode(content),teaching:teaching)).write(to:file)
+        let questions=ConceptStore(subject:.computer,baseDirectory:directory)
+        questions.importContent(file);questions.startQuestion("synthetic-q0",expectedCurrentToken:nil)
+        questions.choose("A",token:try XCTUnwrap(questions.engine?.shown?.id))
+        let questionBefore=try encode(XCTUnwrap(questions.engine?.record))
+        let protectedPaths=["Study/event-log.bin","MathPractice/synthetic-record.json","QuestionBank/synthetic-record.json"]
+        for path in protectedPaths {
+            let url=directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at:url.deletingLastPathComponent(),withIntermediateDirectories:true)
+            try Data("synthetic preserved history".utf8).write(to:url)
+        }
+        let store=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        store.start();let old=try XCTUnwrap(store.engine?.record.presentation)
+        let baselineBytes=try Data(contentsOf:baseline(directory))
+        store.postpone(token:old.id);XCTAssertFalse(store.blocked);XCTAssertNil(store.error)
+        XCTAssertEqual(store.engine?.record.postponements?.count,1)
+        XCTAssertTrue(try XCTUnwrap(store.engine?.record.attempts).isEmpty)
+        let saved=try Data(contentsOf:current(directory)), head=store.engine?.record.presentation
+        store.postpone(token:old.id);XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        questions.importContent(file)
+        XCTAssertEqual(try encode(XCTUnwrap(questions.engine?.record)),questionBefore)
+        XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        XCTAssertEqual(try Data(contentsOf:baseline(directory)),baselineBytes)
+        for path in protectedPaths { XCTAssertEqual(try Data(contentsOf:directory.appendingPathComponent(path)),Data("synthetic preserved history".utf8)) }
+        let reopened=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        XCTAssertFalse(reopened.blocked);XCTAssertEqual(reopened.engine?.record.presentation,head)
+        XCTAssertEqual(reopened.engine?.record.postponements,store.engine?.record.postponements)
+        let exported=try reopened.export();XCTAssertFalse(exported.isEmpty)
+    }
+
+    @MainActor func testPostponeWriteFailureAndStalePagePreserveDurableRecords() throws {
+        let (bank,teaching)=try fixture(), directory=try root();defer { try? FileManager.default.removeItem(at:directory) }
+        var reject=false
+        let store=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory,writer:{ data,url in
+            if reject { throw CocoaError(.fileWriteNoPermission) }
+            try DurableFile.write(data,to:url)
+        })
+        store.start();let old=try XCTUnwrap(store.engine?.record.presentation)
+        let saved=try Data(contentsOf:current(directory));reject=true
+        store.postpone(token:old.id)
+        XCTAssertTrue(store.blocked);XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        XCTAssertEqual(store.engine?.record.presentation,old)
+        let first=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        let stale=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        first.start();first.postpone(token:try XCTUnwrap(first.engine?.record.presentation?.id))
+        let latest=try Data(contentsOf:current(directory))
+        stale.postpone(token:try XCTUnwrap(stale.engine?.record.presentation?.id))
+        XCTAssertTrue(stale.blocked);XCTAssertEqual(try Data(contentsOf:current(directory)),latest)
+    }
+
     @MainActor func testAddingApplicationLessonPreservesVisibleAnswerSnapshotAndAllAttempts() throws {
         let (bank,base)=try fixture();let directory=try root();defer { try? FileManager.default.removeItem(at:directory) }
         let rawBank=try encode(bank),content=ConceptContent(format:"xkl-concepts-v1",bankBytes:rawBank,bankSHA256:StudySHA256.hex(rawBank))

@@ -121,6 +121,13 @@ final class PocketEngine {
     }
 
     var currentRepeats: UInt32 { xkl_engine_current_repeats(handle) }
+    /// Explicit professional UI action; English/exam/math never use this API.
+    var canPostponeProfessionalCard: Bool { xkl_engine_can_postpone_professional(handle) }
+    func postponeProfessionalCard() throws {
+        guard xkl_engine_postpone_professional(handle, now) else {
+            throw StudyError.engine("暂缓未保存，当前卡和原记录已保留。")
+        }
+    }
     var currentIsNew: Bool { xkl_engine_current_is_new(handle) }
 
     var streamID: String {

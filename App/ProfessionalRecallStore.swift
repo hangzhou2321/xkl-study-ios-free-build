@@ -165,6 +165,7 @@ final class ProfessionalRecallStore: ObservableObject {
     }
     func reveal(token: UUID) { change { try $0.reveal(token: token) } }
     func grade(remembered: Bool, token: UUID) { change { try $0.grade(remembered: remembered, token: token) } }
+    func postpone(token: UUID) { change { _ = try $0.postpone(token: token) } }
 
     private func vocabularyPolicyEnabled() throws -> Bool {
         let path = base.appendingPathComponent("Study", isDirectory: true).appendingPathComponent("study-state-v1.json")
@@ -283,6 +284,7 @@ final class ProfessionalRecallStore: ObservableObject {
             guard let current = disk.records[key],
                   Array(current.cardIDs.prefix(old.cardIDs.count)) == old.cardIDs,
                   Array(current.attempts.prefix(old.attempts.count)) == old.attempts,
+                  Array((current.postponements ?? []).prefix((old.postponements ?? []).count)) == (old.postponements ?? []),
                   current.migration == old.migration else {
                 throw ExamError.invalid("专业背卡历史ID、自评或旧档迁移来源缺失，停止写入。")
             }

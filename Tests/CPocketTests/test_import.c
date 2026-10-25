@@ -356,7 +356,62 @@ static void test_cold_completed_task_admits_deferred_before_ordinary_new_lesson(
     xkl_engine_free(e);
     puts("PASS cold completed task: clock-only rebase restores all 25 deferred W7 cards before the ordinary next 25, with no fabricated grades");
 }
+static void test_professional_postpone_is_only_a_stable_queue_partition(void) {
+    uint32_t inert = 0x50ffff, initial[4] = {inert, inert, inert, inert};
+    xkl_engine_t *e = xkl_engine_import_cards(4, initial, 20750, XKL_NO_WORD, stream); assert(e);
+    uint8_t enabled[4] = {1,1,1,1}, stages[4] = {254,254,254,254}, failures[4] = {1,1,1,1};
+    uint32_t pending[4] = {20751u | (1u << 16),20751u | (1u << 16),20751u | (1u << 16),20751u | (1u << 16)};
+    int64_t clock = 1;
+    assert(xkl_engine_reconcile_collection(e, 4, 4, enabled, pending, clock, stages, failures));
+    assert(info(e).word == 0 && info(e).stage == 1);
+    assert(xkl_engine_reveal(e, ++clock));
+    pocket_state_t old = checkpoint(e); xkl_info_t before = info(e);
+    size_t prefix_size = xkl_engine_log_size(e); uint8_t *prefix = malloc(prefix_size); assert(prefix);
+    assert(xkl_engine_log(e, prefix, prefix_size) == prefix_size);
+    uint32_t cards[4], failed; for (unsigned i = 0; i < 4; ++i) cards[i] = xkl_engine_card(e, i);
+    uint32_t mask = xkl_engine_pending_stages(e, 0, &failed); assert(mask == 254 && failed == 1);
+    size_t size; uint8_t *bytes = snapshot_bytes(e, &size);
+    assert(!xkl_engine_postpone_professional(e, -1)); assert_snapshot_equal(e, bytes, size); free(bytes);
+    assert(xkl_engine_can_postpone_professional(e)); assert(xkl_engine_postpone_professional(e, ++clock));
+    pocket_state_t next = checkpoint(e); xkl_info_t after = info(e);
+    assert(after.word == 1 && !after.revealed && after.completed == before.completed);
+    assert(after.total_remaining == before.total_remaining && after.new_remaining == before.new_remaining);
+    assert(after.review_remaining == before.review_remaining && after.day == before.day && after.lesson == before.lesson);
+    assert(!memcmp(old.body.active, next.body.active, sizeof(old.body.active)));
+    unsigned index = 0;
+    for (unsigned pass = 0; pass < 2; ++pass) for (unsigned i = 0; i < old.body.length; ++i) {
+        pocket_token_t token = old.body.queue[i];
+        if ((old.body.active[token.slot].word == 0) != (pass == 1)) continue;
+        assert(!memcmp(&token, &next.body.queue[index++], sizeof(token)));
+    }
+    assert(index == old.body.length && next.body.length == old.body.length);
+    for (unsigned i = 0; i < 4; ++i) assert(xkl_engine_card(e, i) == cards[i]);
+    assert_metadata_only_since(e, before.log_records);
+    size_t full_size = xkl_engine_log_size(e); uint8_t *full = malloc(full_size); assert(full);
+    assert(xkl_engine_log(e, full, full_size) == full_size && !memcmp(prefix, full, prefix_size));
+    free(full); free(prefix);
+    xkl_engine_t *copy = restored(e); xkl_engine_free(e); e = copy;
+    assert(xkl_engine_start(e, 20751, ++clock));
+    unsigned guard = 0;
+    while (info(e).word != 0) {
+        assert(++guard < 30); assert(xkl_engine_reveal(e, ++clock)); assert(xkl_engine_answer(e, 0, ++clock));
+    }
+    assert(info(e).stage == 1 && !info(e).revealed && xkl_engine_card(e, 0) == cards[0]);
+    assert(xkl_engine_pending_stages(e, 0, &failed) == mask && failed == 1);
+    xkl_engine_free(e);
+    e = xkl_engine_blank(4, stream); assert(e); assert(xkl_engine_start(e, 20750, 1));
+    assert(xkl_engine_can_postpone_professional(e)); assert(xkl_engine_postpone_professional(e, 2));
+    assert(info(e).word != 0 && info(e).completed == 0 && info(e).total_remaining == 4);
+    for (unsigned i = 0; i < 4; ++i) assert(xkl_engine_card(e, i) == 0);
+    xkl_engine_free(e);
+    e = xkl_engine_blank(1, stream); assert(e); assert(xkl_engine_start(e, 20750, 1));
+    assert(!xkl_engine_can_postpone_professional(e)); bytes = snapshot_bytes(e, &size);
+    assert(!xkl_engine_postpone_professional(e, 2)); assert_snapshot_equal(e, bytes, size);
+    free(bytes); xkl_engine_free(e);
+    puts("PASS professional postpone: stable whole-word queue partition, all seven W stages/failure/due/counts retained, metadata only, cold cross-day restoration, last-card atomic no-op");
+}
 int main(void) {
+    test_professional_postpone_is_only_a_stable_queue_partition();
     test_import_preserves_every_value_and_emits_no_history();
     test_pending_new_and_review_bridge(); test_invalid_inputs_fail_closed();
     test_pending_repair_does_not_promote_same_day();

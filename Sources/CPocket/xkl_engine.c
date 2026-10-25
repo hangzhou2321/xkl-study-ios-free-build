@@ -698,6 +698,45 @@ error:
     xkl_engine_free(candidate); return false;
 }
 
+bool xkl_engine_can_postpone_professional(const xkl_engine_t *e) {
+    if (!live_ready(e) || !e->state.body.length) return false;
+    const pocket_word_body_t *b = &e->state.body;
+    uint16_t word = b->active[b->queue[0].slot].word;
+    for (unsigned i = 1; i < b->length; ++i)
+        if (b->active[b->queue[i].slot].word != word) return true;
+    return false;
+}
+bool xkl_engine_postpone_professional(xkl_engine_t *e, int64_t at) {
+    if (!clock_ok(e, at) || !room(e, 2) || e->state.revision == UINT32_MAX ||
+        !xkl_engine_can_postpone_professional(e) || !state_consistent(e) || !log_state_consistent(e)) return false;
+    size_t size = xkl_engine_snapshot_size(e);
+    uint8_t *bytes = malloc(size);
+    if (!bytes) return false;
+    if (xkl_engine_snapshot(e, bytes, size) != size) { free(bytes); return false; }
+    xkl_engine_t *candidate = xkl_engine_restore(bytes, size);
+    free(bytes);
+    if (!candidate) return false;
+    pocket_word_state_t next = candidate->state;
+    const pocket_word_body_t *old = &candidate->state.body;
+    uint16_t word = old->active[old->queue[0].slot].word;
+    unsigned count = 0;
+    for (unsigned i = 0; i < old->length; ++i)
+        if (old->active[old->queue[i].slot].word != word) next.body.queue[count++] = old->queue[i];
+    for (unsigned i = 0; i < old->length; ++i)
+        if (old->active[old->queue[i].slot].word == word) next.body.queue[count++] = old->queue[i];
+    next.can_undo = 0; next.changed_word = POCKET_NO_WORD; next.changed_card = 0;
+    if (!pocket_word_recording_commit(&candidate->recording, &candidate->state, &next,
+            POCKET_EVENT_START, at, card_read, state_store, candidate) ||
+        !pocket_word_recording_present(&candidate->recording, &candidate->state, at)) goto postpone_error;
+    candidate->last_at = at;
+    if (!state_consistent(candidate) || !log_state_consistent(candidate)) goto postpone_error;
+    uint8_t *old_log = e->log_bytes;
+    *e = *candidate; e->log.io.context = e; e->recording.log = &e->log;
+    free(old_log); free(candidate); return true;
+postpone_error:
+    xkl_engine_free(candidate); return false;
+}
+
 bool xkl_engine_info(const xkl_engine_t *e, xkl_info_t *info) {
     if (!live_ready(e) || !info) return false;
     memset(info, 0, sizeof(*info));

@@ -82,6 +82,7 @@ struct ProfessionalRecallView: View {
                             Text("证据减量：\(engine.record.analysis.conservativeEnabled ? "已开启" : "已关闭") · 与英语减量开关同步")
                             Text("第一次就能回忆正确的卡，按单词规则不再安排复习；这里记为“首次自评记住”，不能当成做题已掌握。答错后进入当轮重现和后续跨天复习。")
                             Text("本轮新卡与到期复习由同一引擎安排；离开或锁屏不会清除队列。旧背卡历史作为迁移来源保留，不伪造为新算法作答。")
+                            Text("暂时不学：把当前卡及未完成的重现步骤移到当前队列后面，不记答对或答错，不改等级和复习日期。只剩这一张时可以先离开，稍后从断点继续。")
                         }.font(.footnote).foregroundStyle(.secondary).padding(.top,8)
                     }
                 } else {
@@ -167,6 +168,19 @@ struct ProfessionalRecallView: View {
                     Button("翻答案") { store.reveal(token:p.id) }
                         .buttonStyle(.borderedProminent).frame(maxWidth:.infinity,minHeight:44)
                         .accessibilityIdentifier("professional-recall-reveal")
+                }
+                if engine.canPostpone {
+                    Button("暂时不学 · 本轮稍后") {
+                        store.postpone(token:p.id)
+                        if !store.blocked, store.error == nil, store.engine?.record.presentation?.id != p.id {
+                            lastFeedback="已移到当前队列后面，未计入自评；稍后仍会回来。"
+                            lastReviewedCardID=nil
+                        }
+                    }.font(.subheadline).accessibilityIdentifier("professional-recall-postpone")
+                } else {
+                    Text("本轮只剩这张，可先离开，稍后从这里继续。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("professional-recall-postpone-last-card")
                 }
             }.controlSize(.large).padding(.horizontal,20).padding(.vertical,10).background(.bar).disabled(store.blocked)
         }

@@ -21,6 +21,19 @@ struct ProfessionalRecallAttempt: Codable, Equatable, Identifiable {
     let afterRevision: UInt32
 }
 
+/// A queue-order choice, never recall success/failure or a changed review date.
+struct ProfessionalRecallPostponement: Codable, Equatable, Identifiable {
+    let id: UUID
+    let cardID: String
+    let presentationID: UUID
+    let at: Date
+    let day: UInt32
+    let engineSequence: UInt32
+    let beforeRevision: UInt32
+    let afterRevision: UInt32
+    let beforeSnapshotSHA256: String
+}
+
 struct ProfessionalRecallImportedCard: Codable, Equatable {
     let cardID: String
     let prior: RecallProgress
@@ -87,6 +100,7 @@ struct ProfessionalRecallRecord: Codable, Equatable {
     var parkedCards: [String: ProfessionalRecallTransferState]? = nil
     var deferredCards: [String: ProfessionalRecallTransferState]? = nil
     var contentChanges: [ProfessionalRecallContentBoundary]? = nil
+    var postponements: [ProfessionalRecallPostponement]? = nil
 }
 
 struct ProfessionalRecallStats: Equatable {
@@ -111,6 +125,7 @@ final class ProfessionalRecallEngine {
     }
     var volumeRecords: UInt32 { engine.volumeRecords }
     var logBase: UInt32 { engine.logBase }
+    var canPostpone: Bool { engine.canPostponeProfessionalCard }
     var activeCardIDs: [String] { record.activeCardIDs ?? record.cardIDs }
     private static let inert: UInt32 = 0x50ffff
 
@@ -199,6 +214,21 @@ final class ProfessionalRecallEngine {
             }
         }
         let events = try allEvents()
+        let postponements = record.postponements ?? []
+        let bySequence = Dictionary(uniqueKeysWithValues: events.map { ($0.sequence, $0) })
+        guard Set(postponements.map(\.id)).count == postponements.count,
+              Set(postponements.map(\.presentationID)).count == postponements.count,
+              Set(postponements.map(\.engineSequence)).count == postponements.count else {
+            throw ExamError.invalid("专业卡暂缓记录重复，原档案保留。")
+        }
+        for delay in postponements {
+            guard record.cardIDs.contains(delay.cardID), delay.at.timeIntervalSinceReferenceDate.isFinite,
+                  delay.beforeSnapshotSHA256.count == 64, delay.beforeSnapshotSHA256.allSatisfy(\.isHexDigit),
+                  let event = bySequence[delay.engineSequence], event.kind == 2, event.day == delay.day,
+                  event.beforeRevision == delay.beforeRevision, event.afterRevision == delay.afterRevision else {
+                throw ExamError.invalid("专业卡暂缓记录与未评分的队列事件不一致。")
+            }
+        }
         let graded = events.filter { $0.kind == 5 || $0.kind == 6 }
         guard graded.count == record.attempts.count,
               Set(record.attempts.map(\.id)).count == record.attempts.count,
@@ -387,6 +417,25 @@ final class ProfessionalRecallEngine {
             $0.packed & (1 << 20) != 0 && $0.packed & (1 << 21) == 0 &&
             (1...10).contains(($0.packed >> 16) & 15) && ($0.packed & 65_535) <= day
         }.count
+    }
+
+    @discardableResult func postpone(token: UUID, now: Date = Date()) throws -> Bool {
+        guard let shown = record.presentation, shown.id == token else { return false }
+        try startIfNeeded(now: now)
+        guard canPostpone else { return false }
+        try transaction {
+            let before = try engine.info, hash = try StudySHA256.hex(engine.snapshot())
+            try engine.postponeProfessionalCard()
+            guard let event = try engine.events(from: before.log_records + 1).first(where: { $0.kind == 2 }) else {
+                throw ExamError.invalid("暂缓队列事件未保存。")
+            }
+            record.postponements = (record.postponements ?? []) + [ProfessionalRecallPostponement(
+                id: UUID(), cardID: shown.cardID, presentationID: token, at: now, day: event.day,
+                engineSequence: event.sequence, beforeRevision: event.beforeRevision,
+                afterRevision: event.afterRevision, beforeSnapshotSHA256: hash)]
+            try present(keeping: nil)
+        }
+        return true
     }
 
     func transferState(for cardID: String, sourceScope: String) throws -> ProfessionalRecallTransferState? {

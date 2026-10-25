@@ -88,6 +88,13 @@ xkl_engine_t *xkl_engine_restore(const uint8_t *blob, size_t length);
 void xkl_engine_free(xkl_engine_t *engine);
 bool xkl_engine_start(xkl_engine_t *engine, uint32_t day, int64_t uptime_us);
 bool xkl_engine_reveal(xkl_engine_t *engine, int64_t uptime_us);
+/* Explicit professional-card UI action only; vocabulary never calls this.
+ * Move every remaining token of the visible word behind the other queued
+ * words, preserving their relative order, all W stages, packed cards, due
+ * dates, failure flags and task counts. Emit START/PRESENT metadata, no grade.
+ * A sole remaining queued word cannot be postponed; failure is atomic. */
+bool xkl_engine_can_postpone_professional(const xkl_engine_t *engine);
+bool xkl_engine_postpone_professional(xkl_engine_t *engine, int64_t uptime_us);
 /* 0=correct, 1=wrong, 2=familiar, 3=partial. Familiar is permitted before
  * reveal; other grades require reveal. Display the same whole-word meanings
  * for partial repair, then call answer(3) only when the user finishes reading. */

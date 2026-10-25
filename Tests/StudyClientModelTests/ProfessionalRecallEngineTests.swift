@@ -35,6 +35,59 @@ final class ProfessionalRecallEngineTests: XCTestCase {
         }
     }
 
+    @MainActor func testPostponePreservesEveryCardAndRestoresTheReorderedBreakpoint() async throws {
+        let original = try ProfessionalRecallEngine.fresh(deck: deck(4), now: date(day))
+        try original.start(day: day, now: date(day))
+        let shown = try XCTUnwrap(original.record.presentation)
+        try original.reveal(token: shown.id, now: date(day))
+        let values = try original.record.cardIDs.map { try original.packedCard(id: $0) }
+        let before = try original.info
+        XCTAssertTrue(try original.postpone(token: shown.id, now: date(day)))
+        XCTAssertNotEqual(original.record.presentation?.cardID, shown.cardID)
+        XCTAssertEqual(original.record.presentation?.revealed, false)
+        XCTAssertEqual(try original.info.completed, before.completed)
+        XCTAssertEqual(try original.info.total_remaining, before.total_remaining)
+        XCTAssertEqual(try original.record.cardIDs.map { try original.packedCard(id: $0) }, values)
+        XCTAssertTrue(original.record.attempts.isEmpty)
+        XCTAssertEqual(original.record.postponements?.count, 1)
+        let saved = original.record
+        XCTAssertFalse(try original.postpone(token: shown.id, now: date(day)))
+        XCTAssertEqual(original.record, saved)
+        let restored = try ProfessionalRecallEngine(deck: original.deck, record: saved)
+        try restored.start(day: day + 1, now: date(day + 1))
+        XCTAssertEqual(restored.record.presentation, saved.presentation)
+        XCTAssertEqual(restored.record.postponements, saved.postponements)
+        XCTAssertTrue(restored.record.attempts.isEmpty)
+        var limit = 0
+        while restored.record.presentation?.cardID != shown.cardID {
+            limit += 1; XCTAssertLessThan(limit, 10)
+            if limit >= 10 { break }
+            let token = try XCTUnwrap(restored.record.presentation?.id)
+            try restored.reveal(token: token, now: date(day + 1))
+            try restored.grade(remembered: true, token: token, now: date(day + 1))
+        }
+        XCTAssertEqual(restored.record.presentation?.cardID, shown.cardID)
+        XCTAssertEqual(restored.record.presentation?.revealed, false)
+        XCTAssertNotEqual(restored.record.presentation?.id, shown.id)
+        XCTAssertEqual(try restored.packedCard(id: shown.cardID), values[0])
+    }
+
+    @MainActor func testPostponeLastCardIsAnExactNoOpAndOlderRecordsStillDecode() async throws {
+        let original = try ProfessionalRecallEngine.fresh(deck: deck(1), now: date(day))
+        try original.start(day: day, now: date(day))
+        let token = try XCTUnwrap(original.record.presentation?.id), before = original.record
+        XCTAssertFalse(original.canPostpone)
+        XCTAssertFalse(try original.postpone(token: token, now: date(day)))
+        XCTAssertEqual(original.record, before)
+        let data = try JSONEncoder().encode(before)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "postponements")
+        let legacy = try JSONDecoder().decode(ProfessionalRecallRecord.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(legacy.postponements)
+        let restored = try ProfessionalRecallEngine(deck: original.deck, record: legacy)
+        XCTAssertEqual(restored.record.snapshot, before.snapshot)
+    }
+
     @MainActor func testExactWordPolicyParityForCorrectWrongRepeatedWrongAndCrossDay() async throws {
         let actual = try ProfessionalRecallEngine.fresh(deck: deck(), now: date(day))
         let reference = try PocketEngine(snapshot: actual.record.snapshot)

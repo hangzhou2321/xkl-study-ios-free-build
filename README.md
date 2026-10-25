@@ -1,6 +1,8 @@
 # XKLStudy source-only build candidate
 
-Version 1.18.0 (34). Bundle identifier: `local.xkl.study`.
+Version 1.18.1 (35). Bundle identifier: `local.xkl.study`.
+
+Professional recall offers an explicit “暂时不学 · 本轮稍后” action. It moves all unfinished tokens of the current card behind other queued cards, preserving every scheduling value and emitting metadata rather than a grade. A sole remaining card stays as a saved breakpoint. Vocabulary, public-exam and math flows never call this API.
 
 This review package contains app source, synthetic unit tests, existing third-party license notices, and an unsigned iOS build workflow. It contains no study content packages or device backups. Tests requiring private fixtures skip when those fixtures are absent.
 

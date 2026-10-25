@@ -723,6 +723,17 @@ import UIKit
                 let scope:ProfessionalRecallScope=selectedCase == "unified-related" ? .related:.mainline
                 let unified=ProfessionalRecallStore(subject:subject,bank:bank,teaching:teaching,scope:scope,baseDirectory:root)
                 unified.start()
+                if selectedCase == "unified-postponed",let token=unified.engine?.record.presentation?.id {
+                    unified.postpone(token:token)
+                    precondition(unified.engine?.record.postponements?.count == 1 && unified.engine?.record.attempts.isEmpty == true,"Postpone must be ungraded and durable")
+                }
+                if selectedCase == "unified-last-card" {
+                    while let current=unified.engine,let p=current.record.presentation,(try current.info.total_remaining) > 1 {
+                        unified.reveal(token:p.id);unified.grade(remembered:true,token:p.id)
+                        precondition(!unified.blocked,"Synthetic last-card preparation must persist")
+                    }
+                    precondition(unified.engine?.canPostpone == false,"A last card cannot loop through postpone")
+                }
                 if (["unified-answer","unified-resume","unified-assisted-resume"].contains(selectedCase) || selectedCase.hasPrefix("unified-lesson")),let token=unified.engine?.record.presentation?.id { unified.reveal(token:token) }
                 if selectedCase == "unified-assisted-resume",let p=unified.engine?.record.presentation {
                     exposedRecallCardID=p.cardID
@@ -802,7 +813,7 @@ struct ProfessionalPriorityPreview: View {
         case "unified-home": return teaching.studyPlan != nil && engine.shown == nil && engine.record.attempts.isEmpty
         case "unified-assisted-resume":
             return engine.shown?.id == fixture.expectedSourceToken && engine.record.review == nil && engine.record.attempts.isEmpty && fixture.store.currentQuestionUsedCardHelp && fixture.exposedRecallCardID != nil
-        case "unified-front","unified-answer","unified-related","unified-resume","unified-lesson-example","unified-lesson-transfer","unified-lesson-transfer-answer":
+        case "unified-front","unified-answer","unified-related","unified-resume","unified-lesson-example","unified-lesson-transfer","unified-lesson-transfer-answer","unified-postponed","unified-last-card":
             let scope:ProfessionalRecallScope=fixture.selectedCase == "unified-related" ? .related:.mainline
             let unified=ProfessionalRecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,scope:scope,baseDirectory:fixture.root)
             guard !unified.blocked,unified.error == nil,let saved=unified.engine,let p=saved.record.presentation,

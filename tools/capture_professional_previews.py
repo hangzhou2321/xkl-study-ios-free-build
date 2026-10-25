@@ -19,7 +19,8 @@ CASES = ("plan", "sources", "question", "answer", "recall", "guide-only",
          "source-groups", "source-groups-learned", "card-priority-front", "card-priority-sheet",
          "unified-home", "unified-front", "unified-answer", "unified-related", "unified-resume",
          "unified-assisted-resume", "source-exposure", "unified-lesson-example",
-         "unified-lesson-transfer", "unified-lesson-transfer-answer")
+         "unified-lesson-transfer", "unified-lesson-transfer-answer",
+         "unified-postponed", "unified-last-card")
 CAPTURES = [(subject, case) for subject in SUBJECTS for case in CASES]
 
 
