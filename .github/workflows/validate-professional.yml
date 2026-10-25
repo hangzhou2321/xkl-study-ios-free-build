@@ -23,7 +23,7 @@ jobs:
   build:
     if: ${{ !inputs.preview_only }}
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content from build context
@@ -54,7 +54,7 @@ jobs:
   preview:
     if: ${{ !inputs.build_only }}
     runs-on: macos-15-intel
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content from build context

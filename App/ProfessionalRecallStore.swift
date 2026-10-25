@@ -305,6 +305,10 @@ final class ProfessionalRecallStore: ObservableObject {
         guard FileManager.default.fileExists(atPath: parent.path) else { return [] }
         let rootInfo = try parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard rootInfo.isDirectory == true, rootInfo.isSymbolicLink != true else { throw ExamError.invalid("旧背卡目录类型异常。") }
+        // Foundation may enumerate /private/var for a caller rooted at /var.
+        // Resolve both sides and compare components before deriving a relative
+        // archive path; character offsets can silently corrupt backup identity.
+        let rootComponents = parent.standardizedFileURL.resolvingSymlinksInPath().pathComponents
         guard let enumeration = FileManager.default.enumerator(at: parent,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: []) else { throw ExamError.invalid("无法遍历旧背卡档案。") }
         var files: [ProfessionalRecallLegacyFile] = []
@@ -313,9 +317,14 @@ final class ProfessionalRecallStore: ObservableObject {
             let attributes = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard attributes.isSymbolicLink != true else { throw ExamError.invalid("旧背卡目录含链接，停止备份。") }
             if attributes.isDirectory == true { continue }
+            let components = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+            guard components.count > rootComponents.count,
+                  Array(components.prefix(rootComponents.count)) == rootComponents else {
+                throw ExamError.invalid("旧背卡档案路径超出原目录，停止备份。")
+            }
+            let relative = components.dropFirst(rootComponents.count).joined(separator: "/")
             let bytes = try read(url); total += bytes.count
             guard total <= 128 * 1024 * 1024, files.count < 2000 else { throw ExamError.invalid("旧档案容量超出安全备份范围，停止迁移。") }
-            let relative = String(url.path.dropFirst(parent.path.count + 1))
             files.append(ProfessionalRecallLegacyFile(path: relative, sha256: StudySHA256.hex(bytes), bytes: bytes))
         }
         return files.sorted { $0.path < $1.path }

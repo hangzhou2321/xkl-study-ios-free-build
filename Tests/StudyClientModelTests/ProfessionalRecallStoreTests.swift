@@ -119,10 +119,18 @@ final class ProfessionalRecallStoreTests: XCTestCase {
     }
     private func files(_ root: URL) throws -> [String: Data] {
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return [:] }
+        let rootComponents = root.standardizedFileURL.resolvingSymlinksInPath().pathComponents
         var result: [String: Data] = [:]
         for case let url as URL in enumerator {
             guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
-            result[String(url.path.dropFirst(root.path.count + 1))] = try Data(contentsOf: url)
+            let components = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+            guard components.count > rootComponents.count,
+                  Array(components.prefix(rootComponents.count)) == rootComponents else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+            let relative = components.dropFirst(rootComponents.count).joined(separator: "/")
+            guard result[relative] == nil else { throw CocoaError(.fileReadCorruptFile) }
+            result[relative] = try Data(contentsOf: url)
         }
         return result
     }
@@ -168,6 +176,43 @@ final class ProfessionalRecallStoreTests: XCTestCase {
         let savedBaseline = try JSONDecoder().decode(ProfessionalRecallBaseline.self, from: baselineBytes)
         XCTAssertFalse(savedBaseline.files.isEmpty)
         for file in savedBaseline.files { XCTAssertEqual(StudySHA256.hex(file.bytes), file.sha256) }
+    }
+
+    @MainActor func testSymlinkBaseAliasKeepsCanonicalLegacyPathsBytesAndIdempotentReopen() throws {
+        let container = try root(); defer { try? FileManager.default.removeItem(at: container) }
+        let actual = container.appendingPathComponent("actual", isDirectory: true)
+        let alias = container.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+        let (bank, teaching) = try fixture()
+        let old = RecallStore(subject: .computer, bank: bank, teaching: teaching, baseDirectory: alias)
+        old.act("start", newLimit: 2)
+        let token = try XCTUnwrap(old.engine?.record.state.shown?.id)
+        old.act("reveal", token: token); old.act("grade", token: token, remembered: false)
+        XCTAssertFalse(old.blocked, old.error ?? "")
+        let oldRoot = actual.appendingPathComponent("RecallCards/computer", isDirectory: true)
+        let protected = try files(oldRoot)
+        XCTAssertFalse(protected.isEmpty)
+        XCTAssertEqual(try files(alias), try files(actual))
+        let migrated = ProfessionalRecallStore(subject: .computer, bank: bank, teaching: teaching, baseDirectory: alias)
+        XCTAssertFalse(migrated.blocked, migrated.error ?? "")
+        let baselineBytes = try Data(contentsOf: baseline(alias))
+        let saved = try JSONDecoder().decode(ProfessionalRecallBaseline.self, from: baselineBytes)
+        XCTAssertEqual(Set(saved.files.map(\.path)), Set(protected.keys))
+        for file in saved.files {
+            XCTAssertEqual(file.bytes, protected[file.path], file.path)
+            XCTAssertEqual(file.sha256, StudySHA256.hex(try XCTUnwrap(protected[file.path])))
+            XCTAssertEqual(try Data(contentsOf: oldRoot.appendingPathComponent(file.path)), file.bytes)
+        }
+        let currentBytes = try Data(contentsOf: current(alias))
+        let canonical = ProfessionalRecallStore(subject: .computer, bank: bank, teaching: teaching, baseDirectory: actual)
+        let reopened = ProfessionalRecallStore(subject: .computer, bank: bank, teaching: teaching, baseDirectory: alias)
+        XCTAssertFalse(canonical.blocked, canonical.error ?? "")
+        XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+        XCTAssertEqual(try Data(contentsOf: current(actual)), currentBytes)
+        XCTAssertEqual(try Data(contentsOf: baseline(alias)), baselineBytes)
+        XCTAssertEqual(try files(oldRoot), protected)
+        XCTAssertEqual(try files(alias), try files(actual))
     }
 
     @MainActor func testRepeatedStartRevealAndGradeTokenDoNotAppendAgainAndColdResumeRetainsAnswer() throws {
