@@ -802,7 +802,7 @@ struct ProfessionalPriorityPreview: View {
         case "unified-home": return teaching.studyPlan != nil && engine.shown == nil && engine.record.attempts.isEmpty
         case "unified-assisted-resume":
             return engine.shown?.id == fixture.expectedSourceToken && engine.record.review == nil && engine.record.attempts.isEmpty && fixture.store.currentQuestionUsedCardHelp && fixture.exposedRecallCardID != nil
-        case "unified-front","unified-answer","unified-related","unified-resume":
+        case "unified-front","unified-answer","unified-related","unified-resume","unified-lesson-example","unified-lesson-transfer","unified-lesson-transfer-answer":
             let scope:ProfessionalRecallScope=fixture.selectedCase == "unified-related" ? .related:.mainline
             let unified=ProfessionalRecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,scope:scope,baseDirectory:fixture.root)
             guard !unified.blocked,unified.error == nil,let saved=unified.engine,let p=saved.record.presentation,

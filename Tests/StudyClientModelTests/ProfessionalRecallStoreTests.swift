@@ -367,9 +367,14 @@ final class ProfessionalRecallStoreTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
         }
         let updated=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:augmented,baseDirectory:directory)
+        // Metadata import and catalog restoration preserve the archive byte-for-byte.
+        XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        // A genuine page resume may append its existing engine start event; it must not grade again.
         updated.start()
         XCTAssertFalse(updated.blocked);XCTAssertNil(updated.error)
-        XCTAssertEqual(try Data(contentsOf:current(directory)),saved)
+        XCTAssertEqual(updated.engine?.record.cardIDs,old.engine?.record.cardIDs)
+        XCTAssertEqual(updated.engine?.record.migration,old.engine?.record.migration)
+        XCTAssertEqual(updated.engine?.record.contentChanges,old.engine?.record.contentChanges)
         XCTAssertEqual(updated.engine?.record.presentation?.id,token)
         XCTAssertEqual(updated.engine?.record.presentation?.revealed,true)
         XCTAssertEqual(updated.engine?.record.attempts,old.engine?.record.attempts)
