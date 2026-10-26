@@ -47,6 +47,17 @@ final class KnowledgeStructuredTests:XCTestCase {
         let equivalent=response(q,["relation":"p*t=e"])
         XCTAssertTrue(q.accepts(equivalent));XCTAssertTrue(q.correct(equivalent))
     }
+    func testChangingLayoutCannotMakeTheSameStemUnseenAgain()throws {
+        let original=course(),p=original.points[0];var checks=p.checks
+        checks[2].stemID=checks[0].id
+        let changed=KnowledgeCourse.Point(id:p.id,title:p.title,goal:p.goal,prerequisites:p.prerequisites,sections:p.sections,keyFacts:p.keyFacts,example:p.example,checks:checks,sources:p.sources,legacyEvidenceCardIDs:p.legacyEvidenceCardIDs,skills:p.skills,retiredChecks:p.retiredChecks,legacyBaseline:p.legacyBaseline)
+        let c=KnowledgeCourse(format:original.format,id:original.id,subject:original.subject,bankSHA256:original.bankSHA256,retiredLegacyCards:true,points:[changed,original.points[1]],questionMappings:original.questionMappings)
+        var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day))
+        XCTAssertGreaterThan(e.encounterCount(checks[2].id),0)
+        try e.open(p.id,review:true,now:date(day+1))
+        if e.check?.id==checks[2].id{XCTAssertNotEqual(e.current?.familiarity,"unseen-in-app")}
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
     func testHighScaffoldAloneDoesNotCompleteMethodAndAllStagesColdRestore()throws {
         let c=course();var e=try KnowledgeLearningEngine.fresh(c);try e.start(now:date(day))
         while e.current?.phase=="lesson"{try e.readNext(token:e.current!.id,now:date(day))}
@@ -90,6 +101,37 @@ final class KnowledgeStructuredTests:XCTestCase {
 
 #if os(macOS)
 final class KnowledgeStructuredStoreTests:XCTestCase {
+    @MainActor func testCompleteArchivePreservesUnknownRawFieldsAndRejectsOverwrite()throws {
+        let r=FileManager.default.temporaryDirectory.appendingPathComponent("archive-source-"+UUID().uuidString),target=FileManager.default.temporaryDirectory.appendingPathComponent("archive-target-"+UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:r);try? FileManager.default.removeItem(at:target)}
+        let c=KnowledgeCourse.structuredSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
+        let s=KnowledgeLearningStore(course:c,baseDirectory:r);s.start()
+        let path=r.appendingPathComponent("KnowledgeLearning/power/current.json")
+        var object=try JSONSerialization.jsonObject(with:Data(contentsOf:path)) as! [String:Any]
+        object["futureMetadata"]=["literal":"keep me","version":88]
+        let raw=try JSONSerialization.data(withJSONObject:object,options:[.sortedKeys]);try raw.write(to:path)
+        let cold=KnowledgeLearningStore(course:c,baseDirectory:r);XCTAssertFalse(cold.blocked,cold.error ?? "")
+        cold.readNext(cold.engine!.current!.id);XCTAssertFalse(cold.blocked,cold.error ?? "")
+        let archive=try cold.exportArchive(),decoded=try JSONDecoder().decode(KnowledgeArchive.self,from:archive)
+        XCTAssertTrue(decoded.files.contains{$0.bytes==raw && $0.name.hasPrefix("before-raw-")})
+        try KnowledgeArchive.restore(archive,course:c,baseDirectory:target)
+        let restored=KnowledgeLearningStore(course:c,baseDirectory:target)
+        XCTAssertFalse(restored.blocked,restored.error ?? "");XCTAssertEqual(restored.engine?.record,cold.engine?.record)
+        XCTAssertEqual(try restored.exportArchive(),archive)
+        XCTAssertThrowsError(try KnowledgeArchive.restore(archive,course:c,baseDirectory:target))
+        XCTAssertEqual(try restored.exportArchive(),archive)
+    }
+    @MainActor func testUnknownEventCannotBeSilentlyDiscarded()throws {
+        let r=FileManager.default.temporaryDirectory.appendingPathComponent("unknown-event-"+UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:r)}
+        let c=KnowledgeCourse.structuredSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[]),s=KnowledgeLearningStore(course:c,baseDirectory:r);s.start()
+        let path=r.appendingPathComponent("KnowledgeLearning/power/current.json")
+        var object=try JSONSerialization.jsonObject(with:Data(contentsOf:path)) as! [String:Any],events=object["events"] as! [[String:Any]]
+        events[0]["kind"]="future-assessment-kind";object["events"]=events
+        let raw=try JSONSerialization.data(withJSONObject:object,options:[.sortedKeys]);try raw.write(to:path)
+        let cold=KnowledgeLearningStore(course:c,baseDirectory:r);XCTAssertTrue(cold.blocked)
+        XCTAssertEqual(try Data(contentsOf:path),raw)
+    }
     @MainActor func testPendingFormulaSavesDraftWithoutGradeAndColdRestoresExactVersion()throws {
         let r=FileManager.default.temporaryDirectory.appendingPathComponent("structured-store-"+UUID().uuidString)
         defer{try? FileManager.default.removeItem(at:r)}

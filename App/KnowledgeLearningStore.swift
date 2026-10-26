@@ -82,11 +82,25 @@ import StudyCore
             _=try KnowledgeLearningEngine(course:course,record:next.record)
             let bytes=try encode(next.record)
             guard StudySHA256.hex(bytes) != hash else{return}
+            let raw=try read(current)
+            let decoded=try JSONDecoder().decode(KnowledgeLearningRecord.self,from:raw)
+            // Unknown fields are retained as original bytes before a typed
+            // writer can omit them. Unknown event kinds fail replay earlier.
+            let known=try JSONSerialization.jsonObject(with:encode(decoded))
+            let original=try JSONSerialization.jsonObject(with:raw)
+            if !NSDictionary(dictionary:known as! [String:Any]).isEqual(to:original as! [String:Any]) {
+                let backup=root.appendingPathComponent("before-raw-"+StudySHA256.hex(raw)+".json")
+                if FileManager.default.fileExists(atPath:backup.path){guard try read(backup)==raw else{throw ExamError.invalid("未知字段原档备份不一致。")}}
+                else{try writer(raw,backup)}
+                guard try read(backup)==raw else{throw ExamError.invalid("未知字段原档未保存，停止写入。")}
+            }
+            guard StudySHA256.hex(try read(current))==hash else{throw ExamError.invalid("归档期间出现新记录，不会覆盖。")}
             try writer(bytes,current);guard try read(current)==bytes else{throw ExamError.invalid("本次记录未完整落盘。")}
             hash=StudySHA256.hex(bytes);engine=next
         } catch{fail(error)}
     }
     func export()throws->Data {try read(current)}
+    func exportArchive()throws->Data {try KnowledgeArchive.make(course:course,root:root)}
     private func encode<T:Encodable>(_ v:T)throws->Data {
         let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
         let data=try encoder.encode(v);guard data.count<=256*1024*1024 else{throw ExamError.invalid("档案过大，已有事件不会截断。")};return data

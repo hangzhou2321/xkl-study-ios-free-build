@@ -537,6 +537,23 @@ struct KnowledgeLearningEngine {
         let pool=p.checks.filter{["transfer","mixed"].contains(p.purpose($0)) && evidenceQualifies($0,point:p)}
         return pool.isEmpty || pool.allSatisfy{encounterCount($0.id)>0}
     }
+    func independentEvidenceGaps(_ id:String)->[String] {
+        guard let p=course.point(id) else{return []}
+        return p.requiredSkillIDs.compactMap{skill in
+            let qualified=p.checks.filter{p.skill($0)==skill && p.purpose($0) != "guided" && evidenceQualifies($0,point:p)}
+            guard qualified.isEmpty else{return nil}
+            return p.skills?.first{$0.id==skill}?.title ?? p.title
+        }
+    }
+    func evidenceCounts(_ id:String)->[String:Int] {
+        var counts:[String:Int]=[:]
+        for e in record.events where e.pointID==id && e.kind=="answer" && e.correct==true && !e.assisted && e.eligibleAtShow==true {
+            guard let q=Self.question(e,in:record) else{continue}
+            let kind=q.evidence=="result" ? "result":(e.familiarity=="unseen-in-app" ? (q.purpose ?? "independent"):"retention")
+            counts[kind,default:0]+=1
+        }
+        return counts
+    }
     mutating func explainAgain(now:Date=Date())throws {
         guard let old=current,let unit=displayPoint else{return};let q=check;var p=presentation(old.pointID,q:q);p.curriculumID=old.curriculumID
         p.page=unit.sectionIndex(old.selectedID.flatMap{q?.repairSection($0)} ?? q?.repairSectionID) ?? 0

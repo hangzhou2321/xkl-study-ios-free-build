@@ -48,7 +48,7 @@ struct KnowledgeLearningView:View {
         .toolbar {
             ToolbarItem(placement:.topBarTrailing){Button("大纲"){if let p=store.engine?.current,p.phase=="question"{saveDraft(p)};outline=true}}
             ToolbarItem(placement:.topBarTrailing){Button("导出"){
-                do{document=KnowledgeRecordDocument(data:try store.export());exporting=true}catch{}
+                do{if let p=store.engine?.current,p.phase=="question"{saveDraft(p)};document=KnowledgeRecordDocument(data:try store.exportArchive());exporting=true}catch{}
             }.disabled(store.engine==nil)}
         }
         .sheet(isPresented:$outline,onDismiss:{store.start()}){NavigationStack{outlineView}}
@@ -56,7 +56,7 @@ struct KnowledgeLearningView:View {
             KnowledgeSourcesView(course:course,pointID:store.engine?.point?.id,baseDirectory:baseDirectory).navigationTitle("讲义与题目对应")
                 .toolbar{Button("关闭"){references=false}}
         }}
-        .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:course.subject.shortTitle+"-知识点诊断记录"){_ in}
+        .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:course.subject.shortTitle+"-教学完整归档"){_ in}
         .task{store.start()}
         .onChange(of:scenePhase){_,phase in
             if phase == .active,store.engine?.current != nil{store.start()}
@@ -186,6 +186,10 @@ struct KnowledgeLearningView:View {
             Button("再读一次这个知识点"){store.explain()}
             Button("再练一道（提前打开会成为已见练习题）"){store.practiceAgain()}
             if engine.unseenTransferPoolEmpty(point.id){Text("本点暂缺App内尚未展示的变式。仍可继续已见题保持或学习其他知识，不能据此新增未见迁移通过。").font(.footnote).foregroundStyle(.secondary)}
+            let gaps=engine.independentEvidenceGaps(point.id)
+            if !gaps.isEmpty{Text("仍缺可核对过程的独立任务："+gaps.joined(separator:"、")+"。现有最终数值练习不能替代方法证据，可先继续学习其他点。").font(.footnote).foregroundStyle(.secondary)}
+            let evidence=engine.evidenceCounts(point.id)
+            Text("符合首次展示延迟与无帮助条件的正确记录：原题 \(evidence["original",default:0]) · 变式 \(evidence["transfer",default:0]) · 组合 \(evidence["mixed",default:0]) · 已见保持 \(evidence["retention",default:0]) · 仅结果 \(evidence["result",default:0])。这些是个人作答记录，不是题库覆盖率。").font(.caption).foregroundStyle(.secondary)
             if let status=engine.reviewStatus(point.id) {
                 Text("下次独立复核：\(status.dueAt.formatted(date:.numeric,time:.shortened)) · 当前复核级别\(status.level)")
                     .font(.subheadline).foregroundStyle(.secondary)
