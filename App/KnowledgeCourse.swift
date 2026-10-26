@@ -17,6 +17,7 @@ struct KnowledgeCourse: Codable, Equatable {
             var errorTag:String? = nil
             var repairSectionID:String? = nil
             var repairPointID:String? = nil
+            var probeSkillID:String? = nil
         }
         struct Numeric:Codable,Equatable {
             let value:Double;let tolerance:Double;let unit:String
@@ -26,6 +27,16 @@ struct KnowledgeCourse: Codable, Equatable {
         struct CommonError:Codable,Equatable {
             let value:Double;let feedback:String;let errorTag:String
             var repairSectionID:String? = nil
+        }
+        struct ExpressionError:Codable,Equatable {
+            let forms:[String];let feedback:String;let errorTag:String
+            var repairSectionID:String?=nil
+            var repairPointID:String?=nil
+            var probeSkillID:String?=nil
+        }
+        struct Expression:Codable,Equatable {
+            let version:Int;let variables:[String];let expectedLHS:String?;let accepted:[String]
+            var rejected:[ExpressionError]?=nil
         }
         let id: String; let prompt: String; let choices: [Choice]; let answerID: String; let explanation: String
         var purpose:String? = nil
@@ -40,10 +51,17 @@ struct KnowledgeCourse: Codable, Equatable {
         var relatedKnowledgeIDs:[String]? = nil
         var originalQuestionID:String? = nil
         var practiceStage:String? = nil
+        var expression:Expression? = nil
+        var steps:[Check]? = nil
+        var methodIDs:[String]? = nil
+        var stemID:String? = nil
+        var exposureAliases:[String]? = nil
+        var evidenceKind:String? = nil
     }
     struct Skill:Codable,Equatable,Identifiable {
         let id:String;let title:String;let lessonSectionID:String
         var practiceStages:[String]? = nil
+        var independentEvidence:String? = nil
     }
     struct LegacyBaseline:Codable,Equatable {
         let checks:[Check];let sectionCount:Int
@@ -85,6 +103,10 @@ struct KnowledgeCourse: Codable, Equatable {
         let old=Set((teaching.primaryRecallDeck?.cards.map(\.id) ?? [])+(teaching.recallGroups ?? []).flatMap { $0.recallCards.map(\.id) })
         var earlier=Set<String>(),checkIDs=Set<String>()
         let pointIDs=Set(points.map(\.id))
+        let methodPairs=points.flatMap{p in (p.skills?.map(\.id) ?? [p.id]).map{($0,p.id)}}
+        let methodIDs=Set(methodPairs.map(\.0))
+        guard methodIDs.count==methodPairs.count else{throw ExamError.invalid("不同知识点的方法身份重复。")}
+        let methodOwners=Dictionary(uniqueKeysWithValues:methodPairs)
         for p in points {
             guard valid(p.id,120),valid(p.title,120),valid(p.goal,600),
                   Set(p.prerequisites).count==p.prerequisites.count,Set(p.prerequisites).isSubset(of:pointIDs),!p.prerequisites.contains(p.id),
@@ -98,6 +120,7 @@ struct KnowledgeCourse: Codable, Equatable {
             let skills=p.skills ?? []
             guard (p.skills==nil || (1...48).contains(skills.count)),Set(skills.map(\.id)).count==skills.count,skills.allSatisfy({valid($0.id,160) && valid($0.title,160) && sectionIDs.contains($0.lessonSectionID)}) else{throw ExamError.invalid("知识点内方法身份不完整。")}
             guard skills.allSatisfy({s in let stages=s.practiceStages ?? ["practice"];return !stages.isEmpty && Set(stages).count==stages.count && stages.allSatisfy{["practice","scaffold-high","scaffold-low"].contains($0)}}) else{throw ExamError.invalid("方法的练习梯度定义无效。")}
+            guard skills.allSatisfy({$0.independentEvidence==nil || ["concept","steps"].contains($0.independentEvidence!)}) else{throw ExamError.invalid("独立证据要求无效。")}
             if format=="knowledge-course-v2" {
                 guard !skills.isEmpty,p.checks.allSatisfy({$0.skillID != nil && $0.purpose != nil}),
                       p.checks.filter({$0.purpose != "guided"}).count>=2,p.checks.contains(where:{["transfer","original"].contains($0.purpose ?? "")}),
@@ -115,6 +138,17 @@ struct KnowledgeCourse: Codable, Equatable {
                 guard valid(q.id,140),checkIDs.insert(q.id).inserted,valid(q.prompt,2000),
                       valid(q.explanation,2000) else { throw ExamError.invalid("知识点诊断题不完整或重复。") }
                 try q.validateResponse()
+                var helpScope=Set([p.id]+(q.relatedKnowledgeIDs ?? [])),toVisit=Array(helpScope)
+                while let id=toVisit.popLast(){for parent in point(id)?.prerequisites ?? []{if helpScope.insert(parent).inserted{toVisit.append(parent)}}}
+                for component in [q]+(q.steps ?? []) {
+                    guard Set(component.methodIDs ?? []).isSubset(of:methodIDs),Set((component.methodIDs ?? []).compactMap{methodOwners[$0]}).isSubset(of:helpScope),component.repairSectionID==nil || sectionIDs.contains(component.repairSectionID!) else{throw ExamError.invalid("步骤引用的方法、帮助范围或回补小节不存在。")}
+                    for error in component.expression?.rejected ?? [] {
+                        guard error.repairPointID==nil || helpScope.contains(error.repairPointID!),error.probeSkillID==nil || (error.repairPointID != nil && methodOwners[error.probeSkillID!]==error.repairPointID),error.repairSectionID==nil || sectionIDs.contains(error.repairSectionID!) else{throw ExamError.invalid("式子探针或回补位置不存在。")}
+                    }
+                    for choice in component.choices {
+                        guard choice.repairSectionID==nil || sectionIDs.contains(choice.repairSectionID!),choice.repairPointID==nil || helpScope.contains(choice.repairPointID!),choice.probeSkillID==nil || (choice.repairPointID != nil && methodOwners[choice.probeSkillID!]==choice.repairPointID) else{throw ExamError.invalid("步骤选项的回补或探针引用无效。")}
+                    }
+                }
                 guard q.skillID==nil || skills.contains(where:{$0.id==q.skillID}),
                       q.repairSectionID==nil || sectionIDs.contains(q.repairSectionID!),
                       Set(q.relatedKnowledgeIDs ?? []).isSubset(of:pointIDs) else{throw ExamError.invalid("小题的方法或回补位置不存在。")}

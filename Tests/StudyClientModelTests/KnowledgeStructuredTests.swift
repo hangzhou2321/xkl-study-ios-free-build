@@ -1,0 +1,113 @@
+import Foundation
+import XCTest
+@testable import StudyClientModel
+
+final class KnowledgeStructuredTests:XCTestCase {
+    private let day=20_750
+    private func date(_ d:Int)->Date{Date(timeIntervalSince1970:Double(d)*86400+43200)}
+    private func course()->KnowledgeCourse{.structuredSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])}
+    private func train(_ e:inout KnowledgeLearningEngine,at now:Date)throws {
+        try e.start(now:now);var n=0
+        while let p=e.current,p.phase != "complete" {
+            n+=1;guard n<80 else{XCTFail("Structured teaching did not finish");return}
+            if p.phase=="lesson"{try e.readNext(token:p.id,now:now)}
+            else if p.phase=="question"{try e.answer(e.check!.syntheticCorrectResponse,token:p.id,now:now)}
+            else{try e.finish(token:p.id,now:now)}
+        }
+    }
+    private func response(_ q:KnowledgeCourse.Check,_ changes:[String:String])->String {
+        var values=q.stepResponses(q.syntheticCorrectResponse)!
+        for (k,v) in changes{values[k]=v}
+        let e=JSONEncoder();e.outputFormatting=[.sortedKeys];return String(data:try! e.encode(values),encoding:.utf8)!
+    }
+    func testAlgebraAcceptsEquivalentRelationsWithoutEvaluatingCode() {
+        let vars=["i","p","u","c","r","dp","ps","t","es"]
+        for (a,b,lhs) in [("p=√3*u*i*c","i=p/(sqrt(3)*u*c)","i"),("p/u/c/√3","i=√3*p/(3*u*c)","i"),("dp=r*i*i*3","dp=3*i²*r","dp"),("1000*es=t*p+t*dp","es=(p+dp)*t/1000","es")] {
+            XCTAssertEqual(KnowledgeFormula.equivalent(a,to:b,variables:vars,lhs:lhs),true,a)
+        }
+        XCTAssertEqual(KnowledgeFormula.equivalent("-i^2",to:"i^2",variables:vars,lhs:nil),false)
+        XCTAssertEqual(KnowledgeFormula.equivalent("(-i)^2",to:"i²",variables:vars,lhs:nil),true)
+        for unsafe in ["__import__('os')","eval(1)","i=p/0","sqrt(u)",String(repeating:"(",count:301)] {
+            XCTAssertNil(KnowledgeFormula.equivalent(unsafe,to:"i=p/u",variables:vars,lhs:"i"))
+        }
+    }
+    func testCorrectFinalNumberWithKnownWrongMethodCannotPass()throws {
+        let q=course().points[0].checks[1];try q.validateResponse()
+        let raw=response(q,["relation":"t=e*p"])
+        XCTAssertTrue(q.accepts(raw));XCTAssertFalse(q.correct(raw))
+        let scores=q.stepScores(raw)!
+        XCTAssertEqual(scores.map(\.status),["correct","wrong","correct"])
+        XCTAssertEqual(scores[1].errorTag,"method")
+    }
+    func testUnrecognizedAlternativeRemainsPendingRatherThanBecomingWrong()throws {
+        let q=course().points[0].checks[1]
+        let raw=response(q,["relation":"t^2=e^2/p^2"])
+        XCTAssertFalse(q.accepts(raw));XCTAssertEqual(q.stepScores(raw)?[1].status,"pending")
+        XCTAssertTrue(q.inputIssue(raw).contains("待确认"))
+        let equivalent=response(q,["relation":"p*t=e"])
+        XCTAssertTrue(q.accepts(equivalent));XCTAssertTrue(q.correct(equivalent))
+    }
+    func testHighScaffoldAloneDoesNotCompleteMethodAndAllStagesColdRestore()throws {
+        let c=course();var e=try KnowledgeLearningEngine.fresh(c);try e.start(now:date(day))
+        while e.current?.phase=="lesson"{try e.readNext(token:e.current!.id,now:date(day))}
+        let id=e.current!.pointID
+        XCTAssertEqual(e.check?.practiceStage,"scaffold-high")
+        try e.answer(e.check!.syntheticCorrectResponse,token:e.current!.id,now:date(day))
+        try e.finish(token:e.current!.id,now:date(day));XCTAssertNil(e.trainedAt(id));XCTAssertEqual(e.learnedSkills(id),0)
+        e=try KnowledgeLearningEngine(course:c,record:e.record)
+        var n=0
+        while e.current?.phase != "complete" {
+            n+=1;guard n<30 else{XCTFail("Low scaffold stuck");return}
+            let p=e.current!
+            if p.phase=="lesson"{try e.readNext(token:p.id,now:date(day))}
+            else if p.phase=="question"{XCTAssertEqual(e.check?.practiceStage,"scaffold-low");try e.answer(e.check!.syntheticCorrectResponse,token:p.id,now:date(day))}
+            else{try e.finish(token:p.id,now:date(day))}
+        }
+        XCTAssertNotNil(e.trainedAt(id));XCTAssertEqual(e.record.events.filter{$0.kind=="answer"}.count,2)
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
+    func testStructuredWrongAnswerKeepsSeparateStepEvidenceAcrossColdRestore()throws {
+        let c=course();var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day));let id=e.current!.pointID
+        try e.open(id,review:true,now:date(day+1));let raw=response(e.check!,["relation":"t=e*p"])
+        try e.answer(raw,token:e.current!.id,now:date(day+1))
+        let event=e.record.events.last{$0.kind=="answer"}!
+        XCTAssertEqual(event.correct,false);XCTAssertEqual(event.stepScores?.map(\.status),["correct","wrong","correct"])
+        XCTAssertFalse(e.reviewPassed(id))
+        let restored=try KnowledgeLearningEngine(course:c,record:e.record)
+        XCTAssertEqual(restored.record.events.last{$0.kind=="answer"},event)
+    }
+    func testUnsubmittedStructuredDraftCanReturnFromExplanationWithoutGainingIndependence()throws {
+        let c=course();var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day));let id=e.current!.pointID
+        try e.open(id,review:true,now:date(day+1));let old=e.current!,raw=response(e.check!,["relation":"p*t=e"])
+        try e.saveDraft(raw,token:old.id);try e.explainAgain(now:date(day+1))
+        XCTAssertEqual(e.current?.resumeAttemptID,old.id)
+        try e.resumeAttempt(old.id,now:date(day+1).addingTimeInterval(1))
+        XCTAssertEqual(e.current?.draftResponse,raw);XCTAssertEqual(e.current?.shownAt,old.shownAt);XCTAssertTrue(e.current!.assisted)
+        XCTAssertEqual(e.record.events.filter{$0.kind=="answer"}.count,2)
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
+}
+
+#if os(macOS)
+final class KnowledgeStructuredStoreTests:XCTestCase {
+    @MainActor func testPendingFormulaSavesDraftWithoutGradeAndColdRestoresExactVersion()throws {
+        let r=FileManager.default.temporaryDirectory.appendingPathComponent("structured-store-"+UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:r)}
+        let c=KnowledgeCourse.structuredSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[]),s=KnowledgeLearningStore(course:c,baseDirectory:r)
+        s.start();var n=0
+        while let p=s.engine?.current {
+            n+=1;guard n<50 else{XCTFail("Fixture did not reach low scaffold");return}
+            if p.phase=="question",s.engine?.check?.practiceStage=="scaffold-low"{break}
+            if p.phase=="lesson"{s.readNext(p.id)}else if p.phase=="question"{s.answer(s.engine!.check!.syntheticCorrectResponse,token:p.id)}else{s.finish(p.id)}
+        }
+        let token=s.engine!.current!.id,question=s.engine!.check!,count=s.engine!.record.events.filter{$0.kind=="answer"}.count
+        var values=question.stepResponses(question.syntheticCorrectResponse)!;values["relation"]="t^2=e^2/p^2"
+        let raw=String(data:try JSONEncoder().encode(values),encoding:.utf8)!
+        s.answer(raw,token:token);XCTAssertFalse(s.blocked,s.error ?? "");XCTAssertTrue(s.error?.contains("待确认")==true)
+        XCTAssertEqual(s.engine?.record.events.filter{$0.kind=="answer"}.count,count)
+        let cold=KnowledgeLearningStore(course:c,baseDirectory:r)
+        XCTAssertFalse(cold.blocked,cold.error ?? "");XCTAssertEqual(cold.engine?.current?.id,token);XCTAssertEqual(cold.engine?.current?.draftResponse,raw)
+        XCTAssertEqual(cold.engine?.check,question)
+    }
+}
+#endif

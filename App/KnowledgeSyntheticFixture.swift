@@ -2,6 +2,47 @@
 import Foundation
 
 extension KnowledgeCourse {
+    static func structuredSynthetic(subject:ConceptSubject,hash:String,legacyIDs:[String])->Self {
+        let base=adaptiveSynthetic(subject:subject,hash:hash,legacyIDs:legacyIDs)
+        let points=base.points.enumerated().map { index,p -> Point in
+            let method=p.id+"-calculation",section="worked-method"
+            func number(_ id:String,_ prompt:String,_ value:Double,_ unit:String)->Check {
+                var q=Check(id:id,prompt:prompt,choices:[],answerID:"number",explanation:"按本题条件核对数值与单位。")
+                q.responseType="number";q.numeric = .init(value:value,tolerance:0.0001,unit:unit,unitFactors:unit=="h" ? ["h":1,"min":1.0/60]:[unit:1],requiresUnit:true);q.methodIDs=[method];return q
+            }
+            func task(_ label:String,role:String,e:Double,rate:Double,reserve:Double,stage:String?=nil,mixed:Bool=false)->Check {
+                let id=p.id+"-structured-"+label+"-v2",time=mixed ? (24-3*2)/6:(e-reserve)/rate
+                var conditions=Check(id:"conditions",prompt:"你对条件的判断",choices:[.init(id:"A",text:mixed ? "问题问第二阶段；第一阶段已发生；两段速度分别恒定":"e是总量，p是每小时速度；留存部分不可消耗",feedback:"本题的可用范围与时段条件已明确。"),.init(id:"B",text:"问题总问最初起算的全部时间，且任何总量都可全部使用",feedback:"必须分清所求时段及允许使用范围。",errorTag:"conditions",repairSectionID:section)],answerID:"A",explanation:"先确定问题实际可用的总量和所求时段。")
+                conditions.methodIDs=[method]
+                let vars=mixed ? ["t","e","p1","t1","p2"]:(reserve>0 ? ["t","e","reserve","p"]:["t","e","p"])
+                let right=mixed ? "t=(e-p1*t1)/p2":(reserve>0 ? "t=(e-reserve)/p":"t=e/p")
+                let wrong=mixed ? "t=e/p2":(reserve>0 ? "t=e/p":"t=e*p")
+                var relation=Check(id:"relation",prompt:"写出你使用的关系（t是所求小时数）",choices:[],answerID:"expression",explanation:"先确定可用量，再除以这一阶段每小时用量。")
+                relation.responseType="expression";relation.expression = .init(version:1,variables:vars,expectedLHS:"t",accepted:[right],rejected:[.init(forms:[wrong],feedback:mixed ? "遗漏了前一阶段已经消耗的量。":(reserve>0 ? "把必须保留的部分也算成可用了。":"相乘不能得到持续时长。"),errorTag:"method",repairSectionID:section)])
+                relation.methodIDs=[method]
+                let prompt=reserve>0 ? "纯合成题：总量e=\(e)L，必须保留reserve=\(reserve)L，每小时消耗p=\(rate)L/h。求还能使用的时间t。":"纯合成题：允许使用的总量e=\(e)L，每小时消耗p=\(rate)L/h。求还能使用的时间t。"
+                var root=Check(id:id,prompt:mixed ? "纯合成组合题：总量e=24L，第一段以p1=3L/h用t1=2h，之后改为p2=6L/h。第二段还能使用多久？请自己组织关系。":prompt,choices:[],answerID:"steps",explanation:"各项按同一题面分别核对。条件或关系不符时，最终数值相符也不记方法通过。")
+                root.responseType="structured";root.steps=[conditions,relation,number("result","时间结果（带单位）",time,"h")]
+                root.skillID=method;root.purpose=role;root.family=p.id+"-"+label;root.repairSectionID=section;root.practiceStage=stage
+                root.hint=mixed ? "第一段已用量是p1×t1，剩余再除以p2。":"用总量先扣保留量，再按每小时用量计算。"
+                if mixed{root.stemID="synthetic-shared-mixed-stem";root.relatedKnowledgeIDs=base.points.filter{$0.id != p.id}.map(\.id)}
+                return root
+            }
+            var high=task("high",role:"guided",e:12,rate:3,reserve:index==0 ? 0:6,stage:"scaffold-high")
+            high.prompt+="\n本轮已给框架：先求可用量，再除以每小时速度。只补关键数值，记录有帮助练习。"
+            high.steps=[number("available","允许使用多少L？",index==0 ? 12:6,"L"),number("result","能用多少h？",index==0 ? 4:2,"h")]
+            high.exposureAliases=[p.id+"-practice"]+(index==0 ? [p.id+"-number-v2"]:[])
+            let low=task("low",role:"guided",e:18,rate:3,reserve:index==0 ? 0:6,stage:"scaffold-low")
+            let independent=task("independent",role:"independent",e:25,rate:4,reserve:index==0 ? 0:5)
+            let transfer=task("transfer",role:"transfer",e:28,rate:4,reserve:index==0 ? 8:4)
+            let mixed=task("mixed",role:"mixed",e:24,rate:6,reserve:0,mixed:true)
+            var sections=p.sections;sections[2].checkpointID=high.id
+            sections.append(.init(title:"撤去给定公式，再独立组织一遍",body:"先判断允许使用的范围，再组织总量、每小时用量和时间的关系。留存部分不能拿来消耗；分段时先扣已用量。不要只填写看起来合理的最终数。",id:"low-scaffold",checkpointID:low.id))
+            let skills=[Skill(id:method,title:"确定可用量并求时长",lessonSectionID:section,practiceStages:["scaffold-high","scaffold-low"],independentEvidence:"steps")]
+            return Point(id:p.id,title:p.title,goal:p.goal,prerequisites:p.prerequisites,sections:sections,keyFacts:p.keyFacts,example:p.example,checks:[high,low,independent,transfer,mixed],sources:p.sources,legacyEvidenceCardIDs:p.legacyEvidenceCardIDs,skills:skills,retiredChecks:(p.retiredChecks ?? [])+p.checks,legacyBaseline:p.legacyBaseline)
+        }
+        return .init(format:"knowledge-course-v2",id:base.id,subject:subject,bankSHA256:hash,retiredLegacyCards:true,points:points,questionMappings:base.questionMappings)
+    }
     static func adaptiveSynthetic(subject:ConceptSubject,hash:String,legacyIDs:[String])->Self {
         let base=synthetic(subject:subject,hash:hash,legacyIDs:legacyIDs)
         let points=base.points.map { old -> Point in
@@ -44,6 +85,17 @@ extension KnowledgeCourse {
             sources:[.init(documentID:"synthetic",title:"纯合成演示材料",page:2)],legacyEvidenceCardIDs:Array(legacyIDs.dropFirst().prefix(1)))
         return .init(format:"knowledge-course-v1",id:"synthetic-knowledge-"+subject.rawValue,subject:subject,bankSHA256:hash,retiredLegacyCards:true,points:[p,q],
             questionMappings:[.init(id:"synthetic-basic-1",documentID:"synthetic",book:"基础（合成）",page:1,knowledgeIDs:[one,two],method:"先定可用总量，再除以每小时的用量；一个问题可以用到两个知识点。",status:"supported",questionText:"纯合成题，不是用户题库。",label:"基础合成题1")])
+    }
+}
+extension KnowledgeCourse.Check {
+    /// Fixture driver only. It simulates a known response; it is not a learner
+    /// test and is never compiled into a Release App.
+    var syntheticCorrectResponse:String {
+        if type=="structured"{let values=Dictionary(uniqueKeysWithValues:(steps ?? []).map{($0.id,$0.syntheticCorrectResponse)});let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return String(data:try! encoder.encode(values),encoding:.utf8)!}
+        if type=="expression"{return expression!.accepted[0]}
+        if type=="number"{return String(numeric!.value)+numeric!.unit}
+        if type=="multiple"{return correctChoiceIDs!.sorted().joined(separator:"|")}
+        return answerID
     }
 }
 #endif

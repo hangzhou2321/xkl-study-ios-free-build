@@ -12,6 +12,9 @@ struct KnowledgeLearningView:View {
     @State private var document=KnowledgeRecordDocument(data:Data())
     @State private var numberInput=""
     @State private var selectedChoices=Set<String>()
+    @State private var stepInputs:[String:String]=[:]
+    @State private var draftTask:Task<Void,Never>?
+    @State private var inputToken:UUID?
     @Environment(\.scenePhase) private var scenePhase
     init(course:KnowledgeCourse,baseDirectory:URL?=nil) {
         self.course=course;self.baseDirectory=baseDirectory
@@ -23,8 +26,8 @@ struct KnowledgeLearningView:View {
                 if let engine=store.engine {
                     progress(engine)
                     if let p=engine.current,let point=engine.displayPoint {
-                        Text(point.title).font(.title2.bold()).accessibilityIdentifier("knowledge-point-title")
-                        Text(point.goal).font(.subheadline).foregroundStyle(.secondary)
+                        Text(engine.check?.purpose=="mixed" && p.phase != "lesson" ? "组合问题":point.title).font(.title2.bold()).accessibilityIdentifier("knowledge-point-title")
+                        if engine.check?.purpose != "mixed" || p.phase=="lesson"{Text(point.goal).font(.subheadline).foregroundStyle(.secondary)}
                         content(engine,p,point)
                         Button("讲义、基础题与强化题对应") {store.reference();references=true}
                             .buttonStyle(.bordered).accessibilityIdentifier("knowledge-source-mapping")
@@ -42,7 +45,7 @@ struct KnowledgeLearningView:View {
         }
         .navigationTitle("讲懂一个知识点").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement:.topBarTrailing){Button("大纲"){outline=true}}
+            ToolbarItem(placement:.topBarTrailing){Button("大纲"){if let p=store.engine?.current,p.phase=="question"{saveDraft(p)};outline=true}}
             ToolbarItem(placement:.topBarTrailing){Button("导出"){
                 do{document=KnowledgeRecordDocument(data:try store.export());exporting=true}catch{}
             }.disabled(store.engine==nil)}
@@ -61,13 +64,16 @@ struct KnowledgeLearningView:View {
         .task(id:store.engine?.current?.id){
             numberInput=store.engine?.current?.selectedID ?? store.engine?.current?.draftResponse ?? ""
             selectedChoices=Set((store.engine?.current?.selectedID ?? store.engine?.current?.draftResponse ?? "").split(separator:"|").map(String.init))
+            stepInputs=store.engine?.check?.stepResponses(store.engine?.current?.selectedID ?? store.engine?.current?.draftResponse ?? "") ?? [:]
+            inputToken=store.engine?.current?.id
+            #if DEBUG
+            if let p=store.engine?.current{knowledgePreview.didRender(p.pointID,p.phase)}
+            #endif
         }
-        .onDisappear{if let p=store.engine?.current,p.phase=="question"{saveDraft(p)}}
-        #if DEBUG
-        .task(id:store.engine?.current?.id){
-            if let p=store.engine?.current {knowledgePreview.didRender(p.pointID,p.phase)}
-        }
-        #endif
+        .onChange(of:numberInput){_,_ in scheduleDraft()}
+        .onChange(of:selectedChoices){_,_ in scheduleDraft()}
+        .onChange(of:stepInputs){_,_ in scheduleDraft()}
+        .onDisappear{draftTask?.cancel();if let p=store.engine?.current,p.phase=="question"{saveDraft(p)}}
     }
     private func progress(_ engine:KnowledgeLearningEngine)->some View {
         let trained=course.points.filter{engine.trainedDay($0.id) != nil}.count
@@ -97,6 +103,7 @@ struct KnowledgeLearningView:View {
             Button(p.page<point.sections.count && point.sections[p.page].checkpointID != nil ? "我来补上这一步":(p.page<point.lessonPageCount-1 ? "明白这一小步，继续":"检查本点方法练习")){store.readNext(p.id)}
                 .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("knowledge-next-step")
             if p.page>0{Button("回看上一小步"){store.lessonPage(p.page-1)}}
+            if let previous=p.resumeAttemptID{Button("回到刚才未提交的题（保留草稿）"){store.resumeAttempt(previous)}}
             if let other=point.sections.indices.first(where:{$0 != p.page && (point.sections[$0].id?.hasSuffix("-alt")==true)}) {
                 Button("这段没懂，换个角度解释"){store.lessonPage(other)}
             }
@@ -107,14 +114,24 @@ struct KnowledgeLearningView:View {
             Text(familiarity(p))
                 .font(.caption).foregroundStyle(.secondary)
             Text(q.prompt).font(.system(size:24).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
-            if q.type=="number" {
+            if q.type=="structured",let steps=q.steps {
+                Text("请分别提交条件、关系和结果。结果碰巧正确不能代替方法；未识别的写法保留待确认。").font(.footnote).foregroundStyle(.secondary)
+                ForEach(steps){step in
+                    KnowledgeStepInputView(step:step,value:Binding(get:{stepInputs[step.id] ?? ""},set:{stepInputs[step.id]=$0}),disabled:p.phase=="feedback" || inputToken != p.id)
+                }
+                if p.phase=="question"{Button("提交整题过程"){store.answer(encodedSteps(),token:p.id)}.buttonStyle(.borderedProminent).disabled(inputToken != p.id)}
+            } else if q.type=="expression" {
+                KnowledgeStepInputView(step:q,value:$numberInput,disabled:p.phase=="feedback" || inputToken != p.id)
+                if p.phase=="question"{Button("提交关系式"){store.answer(numberInput,token:p.id)}.buttonStyle(.borderedProminent).disabled(inputToken != p.id)}
+            } else if q.type=="number" {
                 Text(q.numeric?.requiresUnit==true ? "填写数值和单位。":"按题中指定单位填写数值：\(q.numeric?.unit ?? "")").font(.subheadline)
                 TextField("先自己计算，再填写",text:$numberInput).textFieldStyle(.roundedBorder).font(.system(size:24))
-                    .keyboardType(.numbersAndPunctuation).disabled(p.phase=="feedback")
-                if p.phase=="question"{Button("提交计算结果"){store.answer(numberInput,token:p.id)}.buttonStyle(.borderedProminent)}
+                    .keyboardType(.numbersAndPunctuation).disabled(p.phase=="feedback" || inputToken != p.id)
+                if p.phase=="question"{Button("提交计算结果"){store.answer(numberInput,token:p.id)}.buttonStyle(.borderedProminent).disabled(inputToken != p.id)}
             } else {ForEach(p.order,id:\.self){id in
                 if let choice=q.choices.first(where:{$0.id==id}) {
                     Button{
+                        guard inputToken==p.id else{return}
                         if q.type=="multiple"{if !selectedChoices.insert(id).inserted{selectedChoices.remove(id)}}else{store.answer(id,token:p.id)}
                     }label:{
                         HStack(alignment:.top){Text(choice.text).font(.system(size:22));Spacer();if p.selectedID==id || selectedChoices.contains(id){Image(systemName:"checkmark.circle")}}
@@ -123,19 +140,30 @@ struct KnowledgeLearningView:View {
                     }.buttonStyle(.plain).disabled(p.phase=="feedback" || store.blocked)
                 }
             }
-                if q.type=="multiple",p.phase=="question"{Button("提交多选答案"){store.answer(selectedChoices.sorted().joined(separator:"|"),token:p.id)}.buttonStyle(.borderedProminent)}
+                if q.type=="multiple",p.phase=="question"{Button("提交多选答案"){store.answer(selectedChoices.sorted().joined(separator:"|"),token:p.id)}.buttonStyle(.borderedProminent).disabled(inputToken != p.id)}
             }
             if p.phase=="question" {
                 if p.hintVisible {Text("提示："+(q.hint ?? point.keyFacts.first ?? point.sections[0].body)).font(.system(size:21)).foregroundStyle(.secondary)}
                 Button("给一点提示（会记录用过帮助）"){store.hint(p.id)}.disabled(p.hintVisible)
-                Button("没读懂，回到这个知识点"){store.explain()}
-                Button("暂时先学其他知识点"){store.deferCurrent()}
+                Button("没读懂，回到这个知识点"){saveDraft(p);store.explain()}
+                Button("暂时先学其他知识点"){saveDraft(p);store.deferCurrent()}
             } else {
                 let correct=p.selectedID.map{q.correct($0)} ?? false
                 Label(correct ? "这道小题答对了":"先找出卡住的一步",systemImage:correct ? "checkmark.circle.fill":"arrow.uturn.backward.circle")
                     .font(.headline).foregroundStyle(correct ? .green:.orange)
                 if let response=p.selectedID,q.feedback(response) != q.explanation{Text(q.feedback(response)).font(.system(size:22))}
                 Text(q.explanation).font(.system(size:22)).accessibilityIdentifier("knowledge-check-feedback")
+                if let raw=p.selectedID,let scores=q.stepScores(raw),let steps=q.steps {
+                    ForEach(scores,id:\.id){score in
+                        if let step=steps.first(where:{$0.id==score.id}) {
+                            Text(step.prompt+" · "+(score.status=="correct" ? "本项核对相符":(score.status=="wrong" ? "本项需回看":"待确认"))).font(.headline)
+                            Text("你的作答："+score.response).textSelection(.enabled)
+                            if score.status != "correct"{Text(step.feedback(score.response)).font(.body)}
+                        }
+                    }
+                    if !correct{Text("各步证据分别保留；条件或方法未通过时，即使最终数值正确，也不记整题或方法通过。").font(.footnote)}
+                } else if q.evidence=="result"{Text("本题只核对最终结果，尚未检验列式过程，不作为完整方法通过。").font(.footnote).foregroundStyle(.secondary)}
+                if let raw=p.selectedID,let parent=q.repairPoint(raw){Button("用一个前置小检查定位这一步"){store.repairPrerequisite(parent,skillID:q.probeSkill(raw))}}
                 Text(p.assisted ? "本次按练习保存：可能刚学过、提前打开或使用过帮助，不计合格延迟检验。":"延迟资格在本题首次展示时已满足；此后未记录相关App内帮助。这里只说明本题表现，已见题保持不冒充未见迁移。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button(correct ? "保存了，继续":"回到讲解，拆小一步再学"){store.finish(p.id)}.buttonStyle(.borderedProminent)
@@ -187,7 +215,17 @@ struct KnowledgeLearningView:View {
         ["meaning":"概念含义","conditions":"适用条件／审题","method":"选方法或列式","calculation":"计算过程","units":"量纲与单位","code-flow":"程序状态与顺序"][tag] ?? tag
     }
     private func saveDraft(_ p:KnowledgePresentation) {
-        store.saveDraft(store.engine?.check?.type=="multiple" ? selectedChoices.sorted().joined(separator:"|"):numberInput,token:p.id)
+        guard inputToken==p.id else{return}
+        let type=store.engine?.check?.type
+        store.saveDraft(type=="structured" ? encodedSteps():(type=="multiple" ? selectedChoices.sorted().joined(separator:"|"):numberInput),token:p.id)
+    }
+    private func encodedSteps()->String{let e=JSONEncoder();e.outputFormatting=[.sortedKeys];return (try? e.encode(stepInputs)).flatMap{String(data:$0,encoding:.utf8)} ?? "{}"}
+    private func scheduleDraft() {
+        draftTask?.cancel()
+        let token=inputToken
+        draftTask=Task { @MainActor in
+            try? await Task.sleep(for:.milliseconds(350));guard !Task.isCancelled,let p=store.engine?.current,p.phase=="question",p.id==token else{return};saveDraft(p)
+        }
     }
     private func familiarity(_ p:KnowledgePresentation)->String {
         switch p.familiarity {
@@ -197,6 +235,38 @@ struct KnowledgeLearningView:View {
         case "source-exposed":return "本题所在资料页已有查阅记录，熟悉度不能算未见。"
         default:return "本题旧展示历史不完整，熟悉度标为未知，保留原记录。"
         }
+    }
+}
+
+private struct KnowledgeStepInputView:View {
+    let step:KnowledgeCourse.Check
+    @Binding var value:String
+    var disabled=false
+    var body:some View {
+        VStack(alignment:.leading,spacing:10) {
+            Text(step.prompt).font(.system(size:22).weight(.semibold))
+            if step.type=="expression" {
+                Text("可用变量："+(step.expression?.variables.joined(separator:"、") ?? "")+"；支持 + − * / ^、括号与sqrt(3)。").font(.footnote).foregroundStyle(.secondary)
+                TextField("写出关系，不用先代入数值",text:$value,axis:.vertical).textFieldStyle(.roundedBorder).font(.system(size:22))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                LazyVGrid(columns:[GridItem(.adaptive(minimum:48))],spacing:6) {
+                    ForEach((step.expression?.variables ?? [])+["√3","²","×","÷","(",")"],id:\.self){symbol in
+                        Button(symbol){value+=symbol}.buttonStyle(.bordered).font(.system(size:17))
+                    }
+                }
+            } else if step.type=="number" {
+                Text("按题目填写数值"+((step.numeric?.unit.isEmpty==false) ? "与单位 "+step.numeric!.unit:"（本项无量纲）")).font(.footnote)
+                TextField("你的计算结果",text:$value).textFieldStyle(.roundedBorder).font(.system(size:22)).keyboardType(.numbersAndPunctuation)
+            } else {
+                ForEach(step.choices){choice in
+                    let selected=Set(value.split(separator:"|").map(String.init)).contains(choice.id)
+                    Button {
+                        if step.type=="multiple"{var ids=Set(value.split(separator:"|").map(String.init));if !ids.insert(choice.id).inserted{ids.remove(choice.id)};value=ids.sorted().joined(separator:"|")}
+                        else{value=choice.id}
+                    } label:{HStack{Text(choice.text).font(.system(size:21));Spacer();if selected{Image(systemName:"checkmark.circle.fill")}}.padding(12).frame(maxWidth:.infinity,alignment:.leading).background(.quaternary,in:RoundedRectangle(cornerRadius:10))}.buttonStyle(.plain)
+                }
+            }
+        }.padding(14).background(Color.secondary.opacity(0.06),in:RoundedRectangle(cornerRadius:12)).disabled(disabled)
     }
 }
 

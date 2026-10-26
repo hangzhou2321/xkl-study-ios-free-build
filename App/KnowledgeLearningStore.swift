@@ -56,7 +56,10 @@ import StudyCore
     func hint(_ id:UUID){change{try $0.hint(token:id)}}
     func answer(_ answer:String,token:UUID){
         guard engine?.current?.id==token,let q=engine?.check else{return}
-        guard q.accepts(answer) else{error=q.type=="number" ? "请填写有限数值和题目要求的单位。":"请先选择完整答案。";return}
+        guard q.accepts(answer) else{
+            if ["structured","expression"].contains(q.type){saveDraft(answer,token:token)}
+            if !blocked{error=q.inputIssue(answer)};return
+        }
         error=nil;change{try $0.answer(answer,token:token)}
     }
     func finish(_ id:UUID){change{try $0.finish(token:id)}}
@@ -66,6 +69,7 @@ import StudyCore
     func errorNote(_ tag:String,token:UUID){change{try $0.noteError(tag,token:token)}}
     func saveDraft(_ text:String,token:UUID){change{try $0.saveDraft(text,token:token)}}
     func lessonPage(_ page:Int){change{try $0.lessonPage(page)}}
+    func resumeAttempt(_ id:UUID){change{try $0.resumeAttempt(id)}}
     func next(){change{try $0.next()}}
     func deferCurrent(){change{try $0.deferCurrent()}}
     func reference(){change{try $0.reference()}}
