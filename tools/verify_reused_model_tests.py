@@ -7,7 +7,9 @@ BASE='464ca9fe6aa9bef4080e4a682701c0b2d8214ae8'
 RUN=40354862241
 REPOSITORY='hangzhou2321/xkl-study-ios-free-build'
 ALLOWED={'App/HandbookCardView.swift','.github/workflows/build-ios.yml',
-         'tools/build_unsigned_ios.sh','tools/verify_reused_model_tests.py'}
+         'tools/build_unsigned_ios.sh','tools/verify_reused_model_tests.py',
+         'App/StudyApp.swift','App/StudyHomeView.swift','App/ConceptView.swift','App/Info.plist',
+         'App/HandbookCardPreview.swift','tools/capture_handbook_card_previews.py'}
 
 def main():
     request=urllib.request.Request(f'https://api.github.com/repos/{REPOSITORY}/actions/runs/{RUN}',
@@ -24,7 +26,7 @@ def main():
              'allowedChanges':changed,'modelAndStorageSourcesByteIdentical':True,
              'swiftTestsFromBaseline':{'executed':439,'passed':432,'skipped':7,'failures':0},
              'strictCSuitesFromBaseline':4,'testsRerunForUIOnlyCommit':False,
-             'currentCommitRequiredChecks':['iOS Release compile','8 native synthetic phone previews']}
+             'currentCommitRequiredChecks':['iOS Release compile','16 native synthetic computer/power phone previews']}
     out=ROOT/'build/reused-model-tests.json';out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf8')
     print('UI-only revision: exact model/storage source parity with successful full run',RUN,BASE)

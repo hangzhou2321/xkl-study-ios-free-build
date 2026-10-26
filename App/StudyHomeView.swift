@@ -10,6 +10,7 @@ struct StudyHomeView: View {
     @ObservedObject var professionalComputer: ProfessionalQuestionStore
     @ObservedObject var professionalPower: ProfessionalQuestionStore
     @ObservedObject var handbookComputer: HandbookCardStore
+    @ObservedObject var handbookPower: HandbookCardStore
     @ObservedObject var flow: StudyFlowStore
     var launch: (StudyArea, StudySegmentMode) -> Void
     @State private var selectedArea: StudyArea = .vocabulary
@@ -61,7 +62,7 @@ struct StudyHomeView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("保留原来的学习节奏").font(.headline)
-                        Text("单词每课仍是 25 个新词，允许分段完成；到期复习不设总量上限。计算机按《宝典一》知识点背卡，自评单独记录；电力系统保持基础、强化原题流程。")
+                        Text("单词每课仍是 25 个新词，允许分段完成；到期复习不设总量上限。计算机和电力系统按《宝典一》知识点背卡，自评分别保存；原题与旧资料可从专业课的次级入口查看。")
                         Text("专业原题答错隔天再测，答对至少隔 3 天；同题不在本轮立即重现，提前参考过答案会单独记录。")
                         Text("暂停只保存断点，不算答对、不推迟到期，也不清空剩余任务。")
                     }.font(.subheadline).foregroundStyle(.secondary)
@@ -94,7 +95,7 @@ struct StudyHomeView: View {
         case .vocabulary: return store.deck != nil && store.canLearn
         case .publicQuestions: return exams.bank != nil && !exams.storageBlocked
         case .computer: return !handbookComputer.blocked
-        case .power: return !professionalPower.blocked
+        case .power: return !handbookPower.blocked
         }
     }
 
@@ -103,7 +104,7 @@ struct StudyHomeView: View {
         case .vocabulary: return store.info.has_task != 0
         case .publicQuestions: return exams.currentQuestion != nil || exams.isShowingResult
         case .computer: return handbookComputer.engine?.presentation != nil
-        case .power: return professionalPower.engine?.presentation != nil
+        case .power: return handbookPower.engine?.presentation != nil
         }
     }
 
@@ -127,10 +128,9 @@ struct StudyHomeView: View {
             if let card = engine.currentCard { return "继续背卡 · \(card.title)" }
             return "按原书顺序背，先复习到期卡"
         case .power:
-            let target = professionalPower
-            guard let engine = target.engine else { return "先导入本科目的基础、强化原题" }
-            if engine.result != nil { return "继续查看刚才的答案与解析" }
-            return engine.presentation != nil ? "继续刚才的原题，已选选项保留" : "先复测到期原题，再做新题"
+            guard let engine = handbookPower.engine else { return "先导入《宝典一》电力系统原文卡" }
+            if let card = engine.currentCard { return "继续背卡 · \(card.title)" }
+            return "按讲义原文顺序背，先复习到期卡"
         }
     }
 
@@ -149,18 +149,14 @@ struct StudyHomeView: View {
             let stats = engine.stats(on: Date())
             return "宝典 \(stats.total) 张 · 已开始 \(stats.seen) · 到期 \(stats.due) · 未背 \(stats.unseen)"
         case .power:
-            let target = professionalPower
-            guard let engine = target.engine else { return "进入专业课页，导入手机中已准备的原题题库" }
+            guard let engine = handbookPower.engine else { return "进入专业课页，导入已准备的电力原文卡" }
             let stats = engine.stats(on: Date())
-            return "主线 \(stats.total) 题 · 已作答 \(stats.answered) · 到期 \(stats.due) · 未做 \(stats.unseen)"
+            return "讲义 \(stats.total) 张 · 已开始 \(stats.seen) · 到期 \(stats.due) · 未背 \(stats.unseen)"
         }
     }
     private func primaryActionTitle(_ area: StudyArea) -> String {
         if area == .computer { return handbookComputer.engine == nil ? "导入宝典卡" : "继续背宝典" }
-        if area == .power {
-            let target = professionalPower
-            return target.engine == nil ? "导入原题" : "继续做题"
-        }
+        if area == .power { return handbookPower.engine == nil ? "导入电力原文卡" : "继续背卡" }
         return hasSavedPosition(area) ? "接着学" : "开始学习"
     }
 }

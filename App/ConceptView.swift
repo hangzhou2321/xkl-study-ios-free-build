@@ -13,6 +13,7 @@ struct ProfessionalCoursesView: View {
     var objectiveComputer: ProfessionalQuestionStore? = nil
     var objectivePower: ProfessionalQuestionStore? = nil
     var handbookComputer: HandbookCardStore? = nil
+    var handbookPower: HandbookCardStore? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,15 +28,12 @@ struct ProfessionalCoursesView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
-            if subject == .computer {
-                HandbookCardView(injectedStore: handbookComputer, originalQuestionStore: objectiveComputer,
-                                 legacyStore: computer, studying: $recalling,
-                                 onStart: onStart, onOverlayChanged: onOverlayChanged)
-            } else {
-                ProfessionalQuestionView(subject: .power, injectedStore: objectivePower, legacyStore: power,
-                                         practicing: $practicing, recalling: $recalling,
-                                         onStart: onStart, onOverlayChanged: onOverlayChanged)
-            }
+            HandbookCardView(subject: subject,
+                             injectedStore: subject == .computer ? handbookComputer : handbookPower,
+                             originalQuestionStore: subject == .computer ? objectiveComputer : objectivePower,
+                             legacyStore: subject == .computer ? computer : power, studying: $recalling,
+                             onStart: onStart, onOverlayChanged: onOverlayChanged)
+                .id(subject.rawValue)
         }
     }
 }

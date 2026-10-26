@@ -19,6 +19,7 @@ struct HandbookCardView: View {
     @State private var exporting = false
     @State private var showingOutline = false
     @State private var showingSources = false
+    @State private var showingAllSources = false
     @State private var showingOldQuestions = false
     @State private var document = HandbookCardRecordDocument(data: Data())
     @State private var displayDate = Date()
@@ -92,7 +93,7 @@ struct HandbookCardView: View {
                 #endif
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("宝典一 · 计算机")
+            .navigationTitle("宝典一 · \(subject.shortTitle)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -101,6 +102,7 @@ struct HandbookCardView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if store.package != nil { Button("章节目录", systemImage: "list.bullet") { showingOutline = true } }
+                        if store.package != nil { Button("核对讲义原页", systemImage: "doc.text.magnifyingglass") { showingAllSources = true } }
                         if let staged = singleStagedFile {
                             Button("导入已准备的宝典卡", systemImage: "tray.and.arrow.down") { importStaged(staged) }
                                 .disabled(store.blocked)
@@ -123,7 +125,7 @@ struct HandbookCardView: View {
             }
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .json,
-                      defaultFilename: "宝典一-计算机-完整背卡记录") { result in
+                      defaultFilename: "宝典一-\(subject.shortTitle)-完整背卡记录") { result in
             if case .failure(let error) = result { store.error = error.localizedDescription }
         }
         .sheet(isPresented: $showingOutline) {
@@ -131,7 +133,13 @@ struct HandbookCardView: View {
         }
         .sheet(isPresented: $showingSources) {
             if let package = store.package, let card = store.engine?.currentCard {
-                HandbookSourcePagesView(card: card, package: package, assetRoot: sourceRoot)
+                HandbookSourcePagesView(pageNumbers: card.sourcePages, package: package, assetRoot: sourceRoot, title: "原文出处")
+            }
+        }
+        .sheet(isPresented: $showingAllSources) {
+            if let package = store.package {
+                HandbookSourcePagesView(pageNumbers: (package.sourcePages ?? []).map(\.number).sorted(),
+                                        package: package, assetRoot: sourceRoot, title: "核对讲义原页")
             }
         }
         .sheet(isPresented: $showingOldQuestions) {
@@ -153,7 +161,7 @@ struct HandbookCardView: View {
         .task { if startInStudy || studying { store.start() } }
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
-        .onChange(of: importing || exporting || showingOutline || showingSources || showingOldQuestions || store.error != nil) { _, value in
+        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingOldQuestions || store.error != nil) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -222,7 +230,7 @@ struct HandbookCardView: View {
         return VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("按知识点，把这一册背清楚").font(.system(.title, design: .rounded).weight(.bold))
-                Text(engine.package.title).font(.subheadline).foregroundStyle(.secondary)
+                Text(verbatim: engine.package.title).font(.subheadline).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .firstTextBaseline) {
@@ -246,6 +254,14 @@ struct HandbookCardView: View {
                 HStack { Label("按章节查看卡片", systemImage: "list.bullet.rectangle"); Spacer(); Image(systemName: "chevron.right") }
                     .font(.headline).padding(18).frame(maxWidth: .infinity)
             }.buttonStyle(.plain).background(.background, in: RoundedRectangle(cornerRadius: 18))
+            Button { showingAllSources = true } label: {
+                HStack {
+                    Label("核对讲义原页", systemImage: "doc.text.magnifyingglass")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }.font(.subheadline.weight(.medium)).padding(18).frame(maxWidth: .infinity)
+            }.buttonStyle(.plain).background(.background, in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityIdentifier("handbook-all-sources")
             scheduleNote
         }.padding(.top, 20)
     }
@@ -261,7 +277,7 @@ struct HandbookCardView: View {
         let index = engine.package.cards.firstIndex(where: { $0.id == card.id }).map { $0 + 1 }
         return VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text(engine.package.chapter(for: card)?.title ?? "宝典知识点").font(.subheadline.weight(.medium))
+                Text(verbatim: engine.package.chapter(for: card)?.title ?? "宝典知识点").font(.subheadline.weight(.medium))
                 Spacer()
                 Text(index.map { "\($0) / \(stats.total)" } ?? "复习中")
                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
@@ -351,7 +367,7 @@ struct HandbookCardView: View {
         NavigationStack {
             List {
                 ForEach(package.chapters, id: \.id) { chapter in
-                    Section(chapter.title) {
+                    Section {
                         ForEach(package.cards.filter { package.chapter(for: $0)?.id == chapter.id }, id: \.id) { card in
                             NavigationLink {
                                 ScrollView {
@@ -361,8 +377,10 @@ struct HandbookCardView: View {
                                         .font(.footnote).foregroundStyle(.secondary).padding()
                                 }.background(Color(uiColor: .systemGroupedBackground))
                                     .navigationTitle("知识点预览").navigationBarTitleDisplayMode(.inline)
-                            } label: { Text(card.title).padding(.vertical, 5) }
+                            } label: { Text(verbatim: card.title).padding(.vertical, 5) }
                         }
+                    } header: {
+                        Text(verbatim: chapter.title)
                     }
                 }
             }.navigationTitle("章节目录").navigationBarTitleDisplayMode(.inline)
@@ -370,8 +388,8 @@ struct HandbookCardView: View {
         }
     }
     private func sourceLabel(_ card: HandbookCard) -> String {
-        let pages = card.sourcePages.map { String(max(1, $0 - 1)) }.joined(separator: "、")
-        return "原文 · 印刷第\(pages)页"
+        let pages = card.sourcePages.map(String.init).joined(separator: "、")
+        return "原文 · PDF第\(pages)页"
     }
     private func dueText(_ date: Date) -> String {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "zh_CN")
@@ -423,21 +441,21 @@ private struct HandbookCardFace: View {
                 Image(systemName: revealed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle")
                     .foregroundStyle(.blue.opacity(0.7))
             }
-            Text(card.title).font(.system(size: titleSize, weight: .bold, design: .rounded))
+            Text(verbatim: card.title).font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
             if !revealed {
-                Text(card.prompt).font(.system(size: promptSize)).lineSpacing(8)
+                Text(verbatim: card.prompt).font(.system(size: promptSize)).lineSpacing(8)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("handbook-card-prompt")
                     .padding(.top, 5).padding(.bottom, 34)
             } else {
-                Text(.init(card.answerSummary)).font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
+                Text(verbatim: card.answerSummary).font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-summary")
                 ForEach(Array(card.blocks.enumerated()), id: \.offset) { _, block in
                     if block.collapsed {
                         DisclosureGroup {
                             HandbookCardBlockView(block: block).padding(.top, 12)
-                        } label: { Text(block.title.isEmpty ? "展开补充" : block.title).font(.headline) }
+                        } label: { Text(verbatim: block.title.isEmpty ? "展开补充" : block.title).font(.headline) }
                     } else { HandbookCardBlockView(block: block) }
                 }
                 if !card.examples.isEmpty {
@@ -445,18 +463,19 @@ private struct HandbookCardFace: View {
                         VStack(alignment: .leading, spacing: 20) {
                             ForEach(Array(card.examples.enumerated()), id: \.offset) { _, example in
                                 VStack(alignment: .leading, spacing: 11) {
-                                    if !example.title.isEmpty { Text(example.title).font(.headline) }
-                                    Text(example.prompt).font(.system(size: exampleSize)).lineSpacing(5)
+                                    if !example.title.isEmpty { Text(verbatim: example.title).font(.headline) }
+                                    Text(verbatim: example.prompt).font(.system(size: exampleSize)).lineSpacing(5)
                                     ForEach(Array(example.steps.enumerated()), id: \.offset) { index, step in
                                         HStack(alignment: .top, spacing: 9) {
                                             Text(String(index + 1)).font(.caption.bold()).foregroundStyle(.blue)
                                                 .frame(width: 22, height: 22).background(.blue.opacity(0.09), in: Circle())
-                                            Text(.init(step)).font(.system(size: stepSize)).fixedSize(horizontal: false, vertical: true)
+                                            Text(verbatim: step).font(.system(size: stepSize)).fixedSize(horizontal: false, vertical: true)
                                         }
                                     }
-                                    Text(.init(example.answer)).font(.system(size: exampleSize, weight: .medium))
+                                    Text(verbatim: example.answer).font(.system(size: exampleSize, weight: .medium))
+                                    Text("PDF第\(example.sourcePage)页").font(.caption).foregroundStyle(.secondary)
                                     if let note = example.sourceIssueNote, !note.isEmpty {
-                                        Text(note).font(.footnote).foregroundStyle(.secondary)
+                                        Text(verbatim: note).font(.footnote).foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -467,7 +486,7 @@ private struct HandbookCardFace: View {
                     DisclosureGroup("原书校注") {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(Array(card.sourceNotes.enumerated()), id: \.offset) { _, note in
-                                Text(.init(note)).font(.system(size: noteSize)).foregroundStyle(.secondary).lineSpacing(5)
+                                Text(verbatim: note).font(.system(size: noteSize)).foregroundStyle(.secondary).lineSpacing(5)
                             }
                         }.padding(.top, 10)
                     }.font(.headline)
@@ -487,18 +506,18 @@ private struct HandbookCardBlockView: View {
     @ScaledMetric(relativeTo: .body) private var keyWidth: CGFloat = 72.0
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            if !block.title.isEmpty && !block.collapsed { Text(block.title).font(.headline).foregroundStyle(.secondary) }
+            if !block.title.isEmpty && !block.collapsed { Text(verbatim: block.title).font(.headline).foregroundStyle(.secondary) }
             if block.kind == "keyValues" || block.kind == "table" { table }
             else if block.kind == "bullets" || block.kind == "steps" {
                 ForEach(Array((block.items ?? []).enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 11) {
                         Text(block.kind == "steps" ? String(index + 1) + "." : "•")
                             .font(.system(size: keySize, weight: .semibold)).foregroundStyle(.blue).frame(minWidth: 15, alignment: .leading)
-                        Text(.init(item)).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+                        Text(verbatim: item).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
                     }
                 }
             } else if let text = block.text {
-                Text(.init(text)).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+                Text(verbatim: text).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -507,7 +526,7 @@ private struct HandbookCardBlockView: View {
             if block.kind == "table", let columns = block.columns, !columns.isEmpty, !dynamicType.isAccessibilitySize {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(Array(columns.enumerated()), id: \.offset) { index, title in
-                        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(verbatim: title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                             .frame(width: columns.count == 2 && index == 0 ? keyWidth : nil, alignment: .leading)
                             .frame(maxWidth: columns.count == 2 && index == 0 ? nil : .infinity, alignment: .leading)
                     }
@@ -526,7 +545,7 @@ private struct HandbookCardBlockView: View {
                 ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
                     VStack(alignment: .leading, spacing: 4) {
                         if block.kind == "table", let columns = block.columns, column < columns.count {
-                            Text(columns[column]).font(.caption).foregroundStyle(.secondary)
+                            Text(verbatim: columns[column]).font(.caption).foregroundStyle(.secondary)
                         }
                         cellText(cell, column: column)
                     }
@@ -543,26 +562,31 @@ private struct HandbookCardBlockView: View {
         }
     }
     private func cellText(_ cell: String, column: Int) -> some View {
-        Text(.init(cell)).font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
+        Text(verbatim: cell).font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
             .foregroundStyle(column == 0 ? Color.blue : Color.primary)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 private struct HandbookSourcePagesView: View {
-    let card: HandbookCard
+    let pageNumbers: [Int]
     let package: HandbookCardPackage
     let assetRoot: URL
+    let title: String
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("原页用于核对出处，文字卡可以独立背诵。")
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    Text("按PDF物理页号核对原文。查阅原页不产生自评，也不改变复习日期。")
                         .font(.subheadline).foregroundStyle(.secondary)
-                    ForEach(card.sourcePages, id: \.self) { number in
+                    if pageNumbers.isEmpty {
+                        Text("这个卡包暂未附上原页图片；仍可继续背文字卡。")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    ForEach(pageNumbers, id: \.self) { number in
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("印刷第\(max(1, number - 1))页 · PDF第\(number)页").font(.headline)
+                            Text("PDF第\(number)页").font(.headline)
                             if let page = package.sourcePages?.first(where: { $0.number == number }) {
                                 HandbookOriginalPageImage(asset: page.asset, root: assetRoot)
                             } else {
@@ -572,7 +596,7 @@ private struct HandbookSourcePagesView: View {
                         }
                     }
                 }.padding(20)
-            }.navigationTitle("原文出处").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button("关闭") { dismiss() } }
         }
     }

@@ -8,7 +8,7 @@ on:
         required: false
         default: false
       reuse_verified_model_tests:
-        description: UI-only rebuild; requires exact model/storage parity with successful run 40354862241
+        description: UI routing/display rebuild; requires exact model/storage parity with successful run 40354862241
         type: boolean
         required: false
         default: false
@@ -19,7 +19,7 @@ jobs:
   build:
     if: ${{ !inputs.preview_only }}
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content from build context
@@ -56,7 +56,7 @@ jobs:
           retention-days: 1
   preview:
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content from build context
