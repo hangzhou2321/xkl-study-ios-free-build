@@ -173,6 +173,7 @@ struct KnowledgeLearningEngine {
         return try Self(course:course,record:appending(empty,to:course))
     }
     init(course:KnowledgeCourse,record:KnowledgeLearningRecord)throws {
+        try course.validateTopics()
         self.course=course;self.record=record
         let pointIDs=Set(course.points.map(\.id))
         guard record.format=="knowledge-learning-v2",record.subject==course.subject,record.courseID==course.id,
@@ -618,29 +619,57 @@ struct KnowledgeLearningEngine {
         if let section=p.skills?.first(where:{$0.id==skillID})?.lessonSectionID{next.page=p.sectionIndex(section) ?? 0}
         record.currentID=p.id;savePresentation(next);try event("read",next,now)
     }
+    /// Enter the required route without deleting an archived point's draft or return frames.
+    mutating func continueMainline(now:Date=Date())throws {
+        _=try day(now)
+        if let p=current,course.isRequired(p.pointID) {
+            if ["probe","probe-lesson"].contains(p.mode ?? "") {
+                // An explicit archive repair is not a mainline lesson. Archive its
+                // presentation, retaining the frame and displaced draft for return.
+                try open(p.pointID,restart:true,now:now)
+            } else{try start(now:now)}
+            return
+        }
+        let resumable=record.events.reversed().map(\.pointID).first{id in
+            course.isRequired(id) && record.bookmarks[id].map{$0.phase != "complete"}==true
+        }
+        if let resumable{try open(resumable,now:now);return}
+        record.currentID=nil;record.deferredIDs=[]
+        try advanceMainline(now:now)
+    }
     mutating func next(now:Date=Date())throws {
         _=try day(now);let excluded=Set(record.deferredIDs)
-        if var frames=record.returnFrames,let frame=frames.popLast() {
+        if var frames=record.returnFrames,let frame=frames.last,course.isRequired(frame.returnPointID) || isArchiveRepair {
+            frames.removeLast()
             record.returnFrames=frames
             restoreFrame(frame)
             try open(frame.returnPointID,now:now);return
         }
-        if var stack=record.returnPoints,let id=stack.popLast(),!excluded.contains(id) {
+        if var stack=record.returnPoints,let id=stack.last,!excluded.contains(id),course.isRequired(id) || isArchiveRepair {
+            stack.removeLast()
             record.returnPoints=stack;try open(id,now:now);return
         }
+        try advanceMainline(now:now)
+    }
+    private mutating func advanceMainline(now:Date)throws {
+        let excluded=Set(record.deferredIDs),candidates=course.requiredPoints
         let snapshot=self
         let ready:(KnowledgeCourse.Point)->Bool={p in !excluded.contains(p.id) && p.prerequisites.allSatisfy{snapshot.trainedAt($0) != nil}}
-        let due=course.points.first{ready($0) && snapshot.reviewStatus($0.id).map{$0.dueAt<=now}==true}
-        let fresh=course.points.first{ready($0) && snapshot.trainedAt($0.id)==nil}
+        let due=candidates.first{ready($0) && snapshot.reviewStatus($0.id).map{$0.dueAt<=now}==true}
+        let fresh=candidates.first{ready($0) && snapshot.trainedAt($0.id)==nil}
         record.currentID=nil
-        let accessible=course.points.first{!excluded.contains($0.id) && snapshot.trainedAt($0.id)==nil}
+        let accessible=candidates.first{!excluded.contains($0.id) && snapshot.trainedAt($0.id)==nil}
         if let p=due ?? fresh ?? accessible {
             let restart=fresh?.id==p.id && record.bookmarks[p.id]?.phase=="complete"
             if restart,let missing=p.requiredSkillIDs.first(where:{!Self.practiceSkills(record:record,course:course,pointID:p.id).contains($0)}){try beginUpdatedLesson(p,skillID:missing,now:now)}
             else{try open(p.id,review:due?.id==p.id,restart:restart,now:now)}
         }
     }
-    var hasPendingReturn:Bool{!(record.returnFrames ?? []).isEmpty || !(record.returnPoints ?? []).isEmpty}
+    private var isArchiveRepair:Bool { current.map{!course.isRequired($0.pointID) || ["probe","probe-lesson"].contains($0.mode ?? "")}==true }
+    var hasPendingReturn:Bool {
+        (record.returnFrames ?? []).contains{course.isRequired($0.returnPointID) || isArchiveRepair}
+            || (record.returnPoints ?? []).contains{course.isRequired($0) || isArchiveRepair}
+    }
     mutating func deferCurrent(now:Date=Date())throws {
         guard let p=current else{return};try event("defer",p,now)
         if ["probe","probe-lesson"].contains(p.mode ?? ""),hasPendingReturn{try next(now:now);return}

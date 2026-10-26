@@ -728,6 +728,11 @@ import UIKit
                 teaching.knowledgeCourse = .synthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))
                 if ["knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair"].contains(selectedCase){teaching.knowledgeCourse = .adaptiveSynthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))}
                 if selectedCase.hasPrefix("knowledge-steps-"){teaching.knowledgeCourse = .structuredSynthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))}
+                if selectedCase == "knowledge-mainline-home",var knowledge=teaching.knowledgeCourse {
+                    knowledge.topics=[.init(id:"synthetic-topic-quantity",title:"合成专题一：总量与速度",scope:"required",pointIDs:[knowledge.points[0].id]),
+                                      .init(id:"synthetic-topic-available",title:"合成专题二：可用范围",scope:"required",pointIDs:[knowledge.points[1].id])]
+                    teaching.knowledgeCourse=knowledge
+                }
                 teaching.knowledgeCourse?.sourceDocuments=[.init(id:"synthetic",title:"纯合成讲义原页（非用户资料）",fileName:"synthetic.pdf",sha256:sourceHash,bytes:bytes.count,pages:[.init(number:1,asset:sourceAsset),.init(number:2,asset:continuationAsset)])]
                 let knowledgeAssets=root.appendingPathComponent("KnowledgeSources",isDirectory:true)
                 try FileManager.default.createDirectory(at:knowledgeAssets,withIntermediateDirectories:true)
@@ -744,7 +749,7 @@ import UIKit
                     let auxiliary=ProfessionalRecallStore(subject:subject,bank:bank,teaching:teaching,baseDirectory:root)
                     auxiliary.start();expectedUnifiedCardID=auxiliary.engine?.currentItem?.id
                     precondition(!auxiliary.blocked && auxiliary.engine?.record.cardIDs.allSatisfy({$0.hasPrefix("kp-")})==true,"New recall cannot contain legacy cards")
-                } else if !["knowledge-home","knowledge-sources"].contains(selectedCase) {
+                } else if !["knowledge-home","knowledge-mainline-home","knowledge-sources"].contains(selectedCase) {
                     let learning=KnowledgeLearningStore(course:knowledge,baseDirectory:root);learning.start()
                     if selectedCase.hasPrefix("knowledge-steps-") {
                         var process=learning.engine!,count=0
@@ -906,6 +911,7 @@ struct ProfessionalPriorityPreview: View {
     @State private var priorityCardVisible:String?
     @State private var unifiedRendered:ProfessionalRecallPreviewObservation?
     @State private var knowledgeRendered:String?
+    @State private var knowledgeMainlineRendered:KnowledgeMainlinePreviewObservation?
     var body: some View {
         NavigationStack {
             if let bank=fixture.store.engine?.bank,let teaching=fixture.store.teaching {
@@ -915,8 +921,10 @@ struct ProfessionalPriorityPreview: View {
                     KnowledgeSourcesView(course:course)
                 } else if fixture.selectedCase == "knowledge-recall" {
                     ProfessionalRecallView(subject:fixture.subject,bank:bank,teaching:teaching,baseDirectory:fixture.root)
+                } else if fixture.selectedCase == "knowledge-mainline-home",let course=teaching.knowledgeCourse {
+                    KnowledgeLearningView(course:course,baseDirectory:fixture.root,priorities:teaching.cardPriorities ?? [],startInLearning:false)
                 } else if fixture.selectedCase.hasPrefix("knowledge-"),let course=teaching.knowledgeCourse {
-                    KnowledgeLearningView(course:course,baseDirectory:fixture.root,priorities:teaching.cardPriorities ?? [])
+                    KnowledgeLearningView(course:course,baseDirectory:fixture.root,priorities:teaching.cardPriorities ?? [],startInLearning:true)
                 } else if fixture.selectedCase == "unified-home" {
                     ConceptView(store:fixture.store,practicing:.constant(false),recalling:.constant(false))
                 } else if fixture.selectedCase == "unified-assisted-resume" {
@@ -941,8 +949,9 @@ struct ProfessionalPriorityPreview: View {
         }.environment(\.professionalQuestionZoomPreview,ProfessionalQuestionZoomPreview(autoOpen:fixture.selectedCase == "question-zoom",didAppear:{ width,height in zoomWidth=width; zoomHeight=height; zoomAppeared=true }))
         .environment(\.professionalPriorityPreview,ProfessionalPriorityPreviewState(openCard:fixture.selectedCase == "card-priority-sheet",didRender:{ priorityCardVisible=$0 }))
         .environment(\.professionalRecallPreview,ProfessionalRecallPreviewState(didRender:{ unifiedRendered=$0 },lessonExampleExpanded:fixture.selectedCase == "unified-lesson-example",lessonTransferExpanded:fixture.selectedCase.hasPrefix("unified-lesson-transfer"),lessonSolutionVisible:fixture.selectedCase == "unified-lesson-transfer-answer",lessonScrollTarget:fixture.selectedCase == "unified-lesson-example" ? "professional-lesson-worked" : (fixture.selectedCase.hasPrefix("unified-lesson-transfer") ? "professional-lesson-transfer":nil)))
-        .environment(\.knowledgePreview,KnowledgePreviewState(didRender:{id,phase in knowledgeRendered=id+"|"+phase}))
+        .environment(\.knowledgePreview,KnowledgePreviewState(didRender:{id,phase in knowledgeRendered=id+"|"+phase},didRenderMainline:{knowledgeMainlineRendered=$0}))
         .onChange(of:knowledgeRendered){_,value in if value != nil{reportWhenReady()}}
+        .onChange(of:knowledgeMainlineRendered){_,value in if value != nil{reportWhenReady()}}
         .onChange(of:unifiedRendered) { _,value in if value != nil { reportWhenReady() } }
         .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || ["unified-home","unified-assisted-resume"].contains(fixture.selectedCase)) { reportWhenReady() } }
         .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet","knowledge-recall"].contains(fixture.selectedCase) { reportWhenReady() } }
@@ -962,6 +971,15 @@ struct ProfessionalPriorityPreview: View {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
         case "knowledge-home","knowledge-sources":return teaching.knowledgeCourse?.retiredLegacyCards==true && engine.record.attempts.isEmpty
+        case "knowledge-mainline-home":
+            guard let course=teaching.knowledgeCourse,let observed=knowledgeMainlineRendered,
+                  course.topics?.count==2,course.points.count==2,
+                  observed.courseID==course.id,observed.topicIDs==course.learningTopics.map(\.id),
+                  observed.requiredPointIDs==course.requiredPoints.map(\.id),
+                  observed.eventCount==0,!observed.hasCurrent else{return false}
+            let stored=KnowledgeLearningStore(course:course,baseDirectory:fixture.root)
+            return !stored.blocked && stored.error==nil && stored.engine?.current==nil
+                && stored.engine?.record.events.isEmpty==true && engine.record.attempts.isEmpty
         case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review","knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair","knowledge-steps-high","knowledge-steps-low","knowledge-steps-wrong","knowledge-steps-draft","knowledge-steps-mixed","knowledge-steps-mixed-wrong":
             guard let course=teaching.knowledgeCourse,let expected=fixture.expectedKnowledgePointID,
                   knowledgeRendered==expected+"|"+fixture.expectedKnowledgePhase else{return false}

@@ -92,11 +92,49 @@ struct KnowledgeCourse: Codable, Equatable {
         let id:String;let title:String;let fileName:String;let sha256:String;let bytes:Int
         var pages:[Page]=[]
     }
+    /// Presentation and queue scope only. Never part of a point's grading or curriculum identity.
+    struct Topic:Codable,Equatable,Identifiable {
+        let id:String;let title:String;let scope:String;let pointIDs:[String]
+        var note:String?=nil
+        var scopeTitle:String {
+            switch scope {case "supplemental":return "补充资料";case "out_of_scope":return "范围外档案";default:return "主线必学"}
+        }
+    }
     let format: String; let id: String; let subject: ConceptSubject; let bankSHA256: String
     let retiredLegacyCards: Bool; let points: [Point]; let questionMappings: [QuestionMapping]
     var sourceDocuments:[Document]=[]
+    var topics:[Topic]?=nil
+
+    /// Old course packages retain their original point order and full queue.
+    var learningTopics:[Topic] { topics ?? [.init(id:"legacy-mainline",title:"原课程知识点",scope:"required",pointIDs:points.map(\.id))] }
+    var requiredTopics:[Topic] { learningTopics.filter{$0.scope=="required"} }
+    var archiveTopics:[Topic] { learningTopics.filter{$0.scope != "required"} }
+    var requiredPoints:[Point] {
+        guard topics != nil else{return points}
+        let ids=requiredTopics.flatMap(\.pointIDs),scope=Set(ids)
+        var seen=Set<String>(),ordered=[Point]()
+        func append(_ id:String) {
+            guard scope.contains(id),seen.insert(id).inserted,let p=point(id) else{return}
+            for prerequisite in p.prerequisites{append(prerequisite)}
+            ordered.append(p)
+        }
+        for id in ids{append(id)}
+        return ordered
+    }
+    func topic(for pointID:String)->Topic? { learningTopics.first{$0.pointIDs.contains(pointID)} }
+    func isRequired(_ pointID:String)->Bool { topics==nil ? point(pointID) != nil:topic(for:pointID)?.scope=="required" }
+    func validateTopics()throws {
+        guard let topics else{return}
+        let ids=topics.flatMap(\.pointIDs)
+        guard !topics.isEmpty,topics.count<=128,Set(topics.map(\.id)).count==topics.count,
+              topics.allSatisfy({t in !t.id.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && t.id.count<=120 && !t.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && t.title.count<=160 && ["required","supplemental","out_of_scope"].contains(t.scope) && !t.pointIDs.isEmpty && (t.note?.count ?? 0)<=1200}),
+              ids.count==Set(ids).count,Set(ids)==Set(points.map(\.id)) else {
+            throw ExamError.invalid("专题范围必须保留全部原知识点且每点只归一组。")
+        }
+    }
 
     func validate(bank: ConceptBank, teaching: ConceptTeaching) throws {
+        try validateTopics()
         func valid(_ s: String,_ max: Int)->Bool { !s.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && s.count<=max }
         guard ["knowledge-course-v1","knowledge-course-v2"].contains(format), retiredLegacyCards, subject.bankID==bank.id,
               bankSHA256==teaching.bankSHA256, valid(id,100), (1...256).contains(points.count),

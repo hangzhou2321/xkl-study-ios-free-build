@@ -51,6 +51,7 @@ import StudyCore
         } catch{fail(error)}
     }
     func start(now:Date=Date()){change{try $0.start(now:now)}}
+    func continueMainline(now:Date=Date()){change{try $0.continueMainline(now:now)}}
     func open(_ id:String,now:Date=Date()){change{try $0.open(id,now:now)}}
     func readNext(_ id:UUID){change{try $0.readNext(token:id)}}
     func hint(_ id:UUID){change{try $0.hint(token:id)}}
