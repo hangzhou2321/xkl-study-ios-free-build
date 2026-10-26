@@ -299,7 +299,7 @@ private struct SyllabusLeafView: View {
                                 NavigationLink("查看完整核验题") { ProfessionalSourceStartView(store:store,question:question) }
                             }
                             if let links=teaching.questionLinks?.first(where: { $0.questionID == id }) {
-                                ProfessionalQuestionCardsView(primaryIDs:links.primaryCardIDs,supplementIDs:links.supplementCardIDs,guideIDs:links.guideConceptIDs,teaching:teaching,bank:bank,subject:store.subject)
+                                ProfessionalQuestionCardsView(primaryIDs:links.primaryCardIDs,supplementIDs:links.supplementCardIDs,guideIDs:links.guideConceptIDs,teaching:teaching,bank:bank,subject:store.subject,baseDirectory:store.professionalLearningBaseDirectory)
                             }
                         }
                     }

@@ -144,6 +144,7 @@ private struct ProfessionalCardReference: Identifiable { let id: String; let car
 private struct ProfessionalGuideReference: Identifiable { let id: String; let lesson: ConceptLesson }
 struct ProfessionalQuestionCardsView: View {
     let primaryIDs: [String]; let supplementIDs: [String]; var guideIDs: [String] = []; let teaching: ConceptTeaching; let bank: ConceptBank; let subject: ConceptSubject
+    var baseDirectory:URL?=nil
     @State private var selection: ProfessionalCardReference?
     @State private var guideSelection: ProfessionalGuideReference?
     #if DEBUG
@@ -173,6 +174,9 @@ struct ProfessionalQuestionCardsView: View {
         #endif
         .sheet(item: $selection) { item in
             NavigationStack {
+                if let course=teaching.knowledgeCourse {
+                    KnowledgeLinkedCardView(course:course,card:item.card,baseDirectory:baseDirectory,onClose:{selection=nil})
+                } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         if let priority=teaching.cardPriorities?.first(where: { $0.cardID == item.card.id && $0.sourceCardDigest == item.card.professionalDigest }) {
@@ -189,6 +193,7 @@ struct ProfessionalQuestionCardsView: View {
                         Text("本页只查阅知识，不提交卡片自评，也不改变原题成绩。").font(.footnote).foregroundStyle(.secondary)
                     }.padding(22)
                 }.navigationTitle("知识卡").toolbar { Button("关闭") { selection = nil } }
+                }
             }
         }
         .sheet(item:$guideSelection) { item in
@@ -231,7 +236,7 @@ struct ProfessionalPracticeCardsView: View {
         if !primaryIDs.isEmpty || !supplementIDs.isEmpty || !guideIDs.isEmpty {
             if store.engine?.shown?.id == token {
                 if store.engine?.record.review != nil || store.currentQuestionUsedCardHelp {
-                    ProfessionalQuestionCardsView(primaryIDs:primaryIDs,supplementIDs:supplementIDs,guideIDs:guideIDs,teaching:teaching,bank:bank,subject:store.subject)
+                    ProfessionalQuestionCardsView(primaryIDs:primaryIDs,supplementIDs:supplementIDs,guideIDs:guideIDs,teaching:teaching,bank:bank,subject:store.subject,baseDirectory:store.professionalLearningBaseDirectory)
                 } else {
                     Button("查看本题知识卡") {
                         guard store.engine?.shown?.id == token else { return }
@@ -500,7 +505,7 @@ private struct ProfessionalSourceLeafView: View {
                         ProfessionalSourceImageView(visual:visual,assetRoot:sourceAssetRoot)
                     }
                     if let teaching=store.teaching, let bank=store.engine?.bank {
-                        ProfessionalQuestionCardsView(primaryIDs:leaf.primaryCardIDs,supplementIDs:leaf.supplementCardIDs,teaching:teaching,bank:bank,subject:store.subject)
+                        ProfessionalQuestionCardsView(primaryIDs:leaf.primaryCardIDs,supplementIDs:leaf.supplementCardIDs,teaching:teaching,bank:bank,subject:store.subject,baseDirectory:store.professionalLearningBaseDirectory)
                     }
                     if leaf.status == "verified", let id=leaf.bankQuestionID,
                        let question=store.engine?.bank.concepts.flatMap(\.questions).first(where: { $0.id == id }) {

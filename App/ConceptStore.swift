@@ -17,6 +17,7 @@ final class ConceptStore: ObservableObject {
     private let directory: URL
     private let write: (Data, URL) throws -> Void
     private var activeURL: URL { directory.appendingPathComponent("active.json") }
+    var professionalLearningBaseDirectory:URL { directory.deletingLastPathComponent() }
 
     init(subject: ConceptSubject = .computer, baseDirectory: URL? = nil,
          writer: @escaping (Data, URL) throws -> Void = DurableFile.write) {

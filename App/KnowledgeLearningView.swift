@@ -190,6 +190,37 @@ struct KnowledgeLearningView:View {
     }
 }
 
+struct KnowledgeLinkedCardView:View {
+    let course:KnowledgeCourse;let card:RecallCard;var baseDirectory:URL?=nil;let onClose:()->Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var exposureSaved=false
+    @State private var wasBackground=false
+    @State private var error:String?
+    var body:some View {
+        ScrollView {
+            VStack(alignment:.leading,spacing:22) {
+                Text(card.prompt).font(.system(size:26).weight(.semibold))
+                if exposureSaved {
+                    Text(card.answer).font(.system(size:25))
+                    if let detail=card.detail{DisclosureGroup("详细说明"){Text(detail).font(.system(size:22))}}
+                    Text("本页只保存查阅事实，不提交自评，不改变原题或知识点答题成绩。").font(.footnote).foregroundStyle(.secondary)
+                } else if let error {
+                    Text(error).foregroundStyle(.red);Button("重试保存查阅事件"){recordExposure()}
+                } else{ProgressView("正在保存查阅事件…")}
+            }.padding(22)
+        }.navigationTitle("知识卡").toolbar{Button("关闭",action:onClose)}
+        .task{recordExposure()}
+        .onChange(of:scenePhase){_,phase in
+            if phase == .background{wasBackground=true;exposureSaved=false}
+            if phase == .active,wasBackground{wasBackground=false;recordExposure()}
+        }
+    }
+    private func recordExposure() {
+        do{try KnowledgeExposureLedger.recordCard(course:course,cardID:card.id,baseDirectory:baseDirectory);error=nil;exposureSaved=true}
+        catch{exposureSaved=false;self.error="查阅事实未保存，答案暂未显示。"+error.localizedDescription}
+    }
+}
+
 struct KnowledgeSourcesView:View {
     let course:KnowledgeCourse
     var pointID:String?=nil

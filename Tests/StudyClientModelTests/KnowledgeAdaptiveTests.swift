@@ -151,6 +151,18 @@ final class KnowledgeAdaptiveTests:XCTestCase {
 #if os(macOS)
 final class KnowledgeUpgradeStoreTests:XCTestCase {
     private func root()throws->URL{let u=FileManager.default.temporaryDirectory.appendingPathComponent("knowledge-upgrade-"+UUID().uuidString);try FileManager.default.createDirectory(at:u,withIntermediateDirectories:true);return u}
+    @MainActor func testLinkedCardUsesSameLedgerAndRejectsForeignCardWithoutInventingAnswers()throws {
+        let r=try root();defer{try? FileManager.default.removeItem(at:r)}
+        let c=KnowledgeCourse.synthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
+        let store=KnowledgeLearningStore(course:c,baseDirectory:r);store.start()
+        let current=r.appendingPathComponent("KnowledgeLearning/power/current.json"),before=try Data(contentsOf:current)
+        try KnowledgeExposureLedger.recordCard(course:c,cardID:c.points[0].id+":knowledge-v1",baseDirectory:r)
+        XCTAssertEqual(try Data(contentsOf:current),before)
+        XCTAssertThrowsError(try KnowledgeExposureLedger.recordCard(course:c,cardID:"archived-foreign-card",baseDirectory:r))
+        let exposures=try KnowledgeExposureLedger.read(course:c,baseDirectory:r)
+        XCTAssertEqual(exposures.count,1);XCTAssertEqual(exposures[0].pointIDs,[c.points[0].id])
+        store.start();XCTAssertFalse(store.blocked,store.error ?? "");XCTAssertTrue(store.engine!.record.events.filter{$0.kind=="answer"}.isEmpty)
+    }
     @MainActor func testV1MigrationBacksUpExactBytesAndReimportDoesNotRewriteHistory()throws {
         let r=try root();defer{try? FileManager.default.removeItem(at:r)}
         let c=KnowledgeCourse.synthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])

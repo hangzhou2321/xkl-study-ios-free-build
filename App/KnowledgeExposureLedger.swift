@@ -4,6 +4,11 @@ import StudyCore
 /// Every help route appends a fact here without overwriting another view's
 /// assessment snapshot. The grading store ingests these facts before answering.
 @MainActor enum KnowledgeExposureLedger {
+    @discardableResult static func recordCard(course:KnowledgeCourse,cardID:String,now:Date=Date(),baseDirectory:URL?=nil)throws->KnowledgeExposure? {
+        let ids=course.points.filter{$0.id+":knowledge-v1"==cardID}.map(\.id)
+        guard !ids.isEmpty else{throw ExamError.invalid("知识卡不属于当前知识点课程。")}
+        return try record(course:course,pointIDs:ids,kind:"recall",reference:"linked-card/"+cardID,now:now,baseDirectory:baseDirectory)
+    }
     static func root(_ subject:ConceptSubject,baseDirectory:URL?=nil)->URL {
         (baseDirectory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0])
             .appendingPathComponent("KnowledgeLearning",isDirectory:true).appendingPathComponent(subject.rawValue,isDirectory:true)
