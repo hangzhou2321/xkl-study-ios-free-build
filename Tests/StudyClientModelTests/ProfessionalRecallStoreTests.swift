@@ -343,6 +343,38 @@ final class ProfessionalRecallStoreTests: XCTestCase {
         XCTAssertEqual(try files(root), protected)
     }
 
+    @MainActor func testKnowledgeAnswerCorrectionKeepsFailedStagesRatingsAndRollbackHistory() throws {
+        let (bank,base)=try fixture(),directory=try root();defer{try? FileManager.default.removeItem(at:directory)}
+        let evidence=(base.primaryRecallDeck?.cards.map(\.id) ?? [])+(base.recallGroups ?? []).flatMap{$0.recallCards.map(\.id)}
+        var teaching=base;teaching.knowledgeCourse = .synthetic(subject:.computer,hash:base.bankSHA256,legacyIDs:evidence)
+        let original=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        original.start();let id=try XCTUnwrap(original.engine?.currentItem?.id),token=try XCTUnwrap(original.engine?.record.presentation?.id)
+        original.reveal(token:token);original.grade(remembered:false,token:token)
+        let prior=try XCTUnwrap(original.engine),state=try XCTUnwrap(prior.transferState(for:id,sourceScope:"mainline")),attempts=prior.record.attempts
+        XCTAssertNotEqual(state.stageMask,0)
+        let path=directory.appendingPathComponent("KnowledgeRecall/computer/current.json"),raw=try Data(contentsOf:path)
+        var object=try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(teaching)) as? [String:Any])
+        var course=object["knowledgeCourse"] as! [String:Any],points=course["points"] as! [[String:Any]],sections=points[0]["sections"] as! [[String:Any]]
+        sections[0]["body"]="Corrected synthetic explanation of this same point; no new identity and no invented grade."
+        points[0]["sections"]=sections;course["points"]=points;object["knowledgeCourse"]=course
+        let updated=try JSONDecoder().decode(ConceptTeaching.self,from:JSONSerialization.data(withJSONObject:object))
+        try updated.validateAppendOnlyRecall(from:teaching,bank:bank)
+        let changed=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:updated,baseDirectory:directory)
+        XCTAssertFalse(changed.blocked,changed.error ?? "")
+        let next=try XCTUnwrap(changed.engine),kept=try XCTUnwrap(next.transferState(for:id,sourceScope:"mainline"))
+        XCTAssertEqual(kept.packed,state.packed);XCTAssertEqual(kept.stageMask,state.stageMask);XCTAssertEqual(kept.failedRound,state.failedRound)
+        XCTAssertEqual(next.record.attempts,attempts);XCTAssertEqual(next.record.cardIDs,prior.record.cardIDs)
+        XCTAssertEqual(next.record.contentChanges?.last?.beforeItems,prior.deck.cards)
+        let disk=try JSONDecoder().decode(ProfessionalRecallSubjectDisk.self,from:Data(contentsOf:path))
+        let hash=StudySHA256.hex(raw);XCTAssertTrue(disk.revisionSHA256s.contains(hash))
+        XCTAssertEqual(try Data(contentsOf:directory.appendingPathComponent("KnowledgeRecall/computer/revisions/"+hash+".json")),raw)
+        let current=try Data(contentsOf:path),again=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:updated,baseDirectory:directory)
+        XCTAssertFalse(again.blocked,again.error ?? "");XCTAssertEqual(try Data(contentsOf:path),current)
+        let rollback=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:teaching,baseDirectory:directory)
+        XCTAssertFalse(rollback.blocked,rollback.error ?? "");XCTAssertEqual(rollback.engine?.record.attempts,attempts)
+        XCTAssertEqual(try rollback.engine?.packedCard(id:id),state.packed)
+    }
+
     @MainActor func testKnowledgeReplacementRetiresAllLegacyCardsAndKeepsTheirArchiveBytes() throws {
         let (bank,base)=try fixture(),directory=try root();defer{try? FileManager.default.removeItem(at:directory)}
         let old=ProfessionalRecallStore(subject:.computer,bank:bank,teaching:base,baseDirectory:directory)
