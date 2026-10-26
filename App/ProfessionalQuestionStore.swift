@@ -104,6 +104,27 @@ final class ProfessionalQuestionStore: ObservableObject {
                     // Preserve differing raw serialization/unknown source fields
                     // without creating a new grade or modifying the active log.
                     try immutable(raw, at: archiveURL("imports", rawHash, suffix: ".xklquestions"))
+                    guard !next.importedRawSHA256s.contains(rawHash) else { error = nil; return }
+                    // The raw import must join the durable export index as part
+                    // of the same atomic envelope, even when its typed content
+                    // is unchanged. The engine record and content versions stay
+                    // exactly as they were before this import.
+                    let previous = try read(currentURL)
+                    let decoded = try JSONDecoder().decode(ProfessionalQuestionDisk.self, from: previous)
+                    let known = try JSONSerialization.jsonObject(with: encode(decoded)) as! [String: Any]
+                    let original = try JSONSerialization.jsonObject(with: previous) as! [String: Any]
+                    if !NSDictionary(dictionary: known).isEqual(to: original) {
+                        let previousHash = StudySHA256.hex(previous)
+                        try immutable(previous, at: archiveURL("raw", previousHash))
+                        if !next.retainedRawSHA256s.contains(previousHash) { next.retainedRawSHA256s.append(previousHash) }
+                    }
+                    next.importedRawSHA256s.append(rawHash)
+                    try guardCurrentUnchanged()
+                    let bytes = try encode(next)
+                    touchedCurrent = true
+                    try writer(bytes, currentURL)
+                    guard try read(currentURL) == bytes else { throw ExamError.invalid("原题原包归档索引没有完整保存。") }
+                    disk = next; durableSHA256 = StudySHA256.hex(bytes)
                     error = nil
                     return
                 }

@@ -22,6 +22,14 @@ final class ProfessionalQuestionStoreTests: XCTestCase {
             revision: revision, sources: [.init(id: "synthetic-source", title: "Synthetic only", reference: "fixture")],
             questions: (1...count).map { question($0, book: $0 == count ? "reinforcement" : "basic") })
     }
+    private func differentlySerializedFixture() throws -> Data {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encode(fixture())) as? [String: Any])
+        object["syntheticFutureSourceMetadata"] = ["evidence": "retain these supplied source bytes"]
+        let raw = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        XCTAssertEqual(try ProfessionalQuestionPackage.load(raw), fixture())
+        XCTAssertNotEqual(raw, try encode(fixture()))
+        return raw
+    }
     private func root() throws -> URL {
         let value = FileManager.default.temporaryDirectory.appendingPathComponent("professional-question-store-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: value, withIntermediateDirectories: true); return value
@@ -96,6 +104,76 @@ final class ProfessionalQuestionStoreTests: XCTestCase {
         store.importData(try encode(fixture())); store.importData(try encode(fixture()))
         XCTAssertNil(store.error); XCTAssertFalse(store.blocked)
         XCTAssertEqual(store.engine?.record, record); XCTAssertEqual(try files(base), before)
+    }
+
+    @MainActor func testSameSemanticPackageWithDifferentRawBytesJoinsExportWithoutChangingLearning() throws {
+        let base = try root(); defer { try? FileManager.default.removeItem(at: base) }
+        let store = try prepared(base); _ = try answer(store)
+        let record = try XCTUnwrap(store.engine?.record), anchor = try Data(contentsOf: initial(base))
+        let original = try encode(fixture()), alternate = try differentlySerializedFixture()
+        store.importData(alternate)
+        XCTAssertFalse(store.blocked, store.error ?? ""); XCTAssertNil(store.error)
+        XCTAssertEqual(store.engine?.record, record)
+        XCTAssertEqual(store.engine?.record.attempts.count, 1)
+        XCTAssertEqual(store.engine?.record.contentVersions.count, 1)
+        XCTAssertEqual(try Data(contentsOf: initial(base)), anchor)
+        struct Export: Decodable { let contentImports: [String: Data]; let contentRevisions: [String: Data] }
+        let exported = try JSONDecoder().decode(Export.self, from: store.exportRecords())
+        XCTAssertEqual(exported.contentImports.count, 2); XCTAssertTrue(exported.contentRevisions.isEmpty)
+        XCTAssertEqual(exported.contentImports[StudySHA256.hex(original)], original)
+        XCTAssertEqual(exported.contentImports[StudySHA256.hex(alternate)], alternate)
+        let beforeRepeat = try files(base)
+        store.importData(alternate)
+        XCTAssertEqual(try files(base), beforeRepeat)
+        let reopened = ProfessionalQuestionStore(subject: .power, baseDirectory: base)
+        XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+        XCTAssertEqual(reopened.engine?.record, record)
+        let recovered = try JSONDecoder().decode(Export.self, from: reopened.exportRecords())
+        XCTAssertEqual(recovered.contentImports, exported.contentImports)
+    }
+
+    @MainActor func testRawImportIndexFailureBeforeReplacementPublishesNoNewIndexOrGrade() throws {
+        let base = try root(); defer { try? FileManager.default.removeItem(at: base) }
+        let first = try prepared(base); _ = try answer(first)
+        let record = first.engine?.record, before = try Data(contentsOf: current(base))
+        let failing = ProfessionalQuestionStore(subject: .power, baseDirectory: base, writer: { bytes, url in
+            if url.lastPathComponent == "current.json" { throw Failure.injected }
+            try DurableFile.write(bytes, to: url)
+        })
+        failing.importData(try differentlySerializedFixture())
+        XCTAssertTrue(failing.blocked); XCTAssertEqual(failing.engine?.record, record)
+        XCTAssertEqual(try Data(contentsOf: current(base)), before)
+        struct Export: Decodable { let contentImports: [String: Data] }
+        let uncommitted = try JSONDecoder().decode(Export.self, from: failing.exportRecords())
+        XCTAssertEqual(uncommitted.contentImports.count, 1)
+        let retry = ProfessionalQuestionStore(subject: .power, baseDirectory: base)
+        retry.importData(try differentlySerializedFixture())
+        XCTAssertFalse(retry.blocked, retry.error ?? ""); XCTAssertEqual(retry.engine?.record, record)
+        let recovered = try JSONDecoder().decode(Export.self, from: retry.exportRecords())
+        XCTAssertEqual(recovered.contentImports.count, 2)
+    }
+
+    @MainActor func testRawImportIndexErrorAfterReplacementRecoversCommittedIndexWithoutRollback() throws {
+        let base = try root(); defer { try? FileManager.default.removeItem(at: base) }
+        let first = try prepared(base); _ = try answer(first)
+        let record = first.engine?.record, anchor = try Data(contentsOf: initial(base))
+        let alternate = try differentlySerializedFixture()
+        let failing = ProfessionalQuestionStore(subject: .power, baseDirectory: base, writer: { bytes, url in
+            try DurableFile.write(bytes, to: url)
+            if url.lastPathComponent == "current.json" { throw Failure.injected }
+        })
+        failing.importData(alternate)
+        XCTAssertTrue(failing.blocked); XCTAssertEqual(failing.engine?.record, record)
+        let committed = try Data(contentsOf: current(base))
+        let reopened = ProfessionalQuestionStore(subject: .power, baseDirectory: base)
+        XCTAssertFalse(reopened.blocked, reopened.error ?? ""); XCTAssertEqual(reopened.engine?.record, record)
+        struct Export: Decodable { let contentImports: [String: Data] }
+        let exported = try JSONDecoder().decode(Export.self, from: reopened.exportRecords())
+        XCTAssertEqual(exported.contentImports.count, 2)
+        XCTAssertEqual(exported.contentImports[StudySHA256.hex(alternate)], alternate)
+        reopened.importData(alternate)
+        XCTAssertEqual(try Data(contentsOf: current(base)), committed)
+        XCTAssertEqual(try Data(contentsOf: initial(base)), anchor)
     }
 
     @MainActor func testDraftHelpAndSubmittedFeedbackSurviveReopeningWithoutDoubleGrade() throws {
