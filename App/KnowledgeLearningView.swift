@@ -115,7 +115,8 @@ struct KnowledgeLearningView:View {
             }
             Button("这会儿先学其他知识点"){store.deferCurrent()}.font(.subheadline)
         } else if let q=engine.check,p.phase=="question" || p.phase=="feedback" {
-            Text(p.mode=="review" ? (p.assisted ? "复核练习 · 本次已有帮助":"隔时小检验"):((p.mode=="probe") ? "先补一个小检查":"方法练习")).font(.headline)
+            Text(p.mode=="review" ? (p.assisted ? "复核练习 · 本次不计独立成绩":"隔时小检验"):((p.mode=="probe") ? "先补一个小检查":"方法练习")).font(.headline)
+            if let due=p.reviewDueAt,let shown=p.shownAt,shown<due{Text("本题首次打开尚未到期，之后等待也不改变本次资格。安排的复核时间："+due.formatted(date:.numeric,time:.shortened)).font(.caption).foregroundStyle(.secondary)}
             if point.purpose(q)=="guided",p.mode != "review",let id=q.skillID,let skill=point.skills?.first(where:{$0.id==id}){Text("练习方法："+skill.title).font(.subheadline).foregroundStyle(.secondary)}
             Text(familiarity(p))
                 .font(.caption).foregroundStyle(.secondary)

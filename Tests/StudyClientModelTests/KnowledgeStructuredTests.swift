@@ -51,15 +51,30 @@ final class KnowledgeStructuredTests:XCTestCase {
         XCTAssertEqual(q.stepScores(raw())?.filter{$0.status=="wrong"}.count,1)
         XCTAssertTrue(q.feedback(raw()).contains("重复"))
     }
+    func testOriginalChoiceIsReachableBesideProcessTasksWithoutAdvancingMethodLevel()throws {
+        let base=course(),p=base.points[0],old=KnowledgeCourse.synthetic(subject:base.subject,hash:base.bankSHA256,legacyIDs:[]).points[0].checks[1]
+        var original=KnowledgeCourse.Check(id:p.id+"-original-check",prompt:old.prompt,choices:old.choices,answerID:old.answerID,explanation:old.explanation)
+        original.purpose="original";original.skillID=p.skills!.first!.id;original.family="source-occurrence";original.originalQuestionID=base.questionMappings[0].id
+        let changed=KnowledgeCourse.Point(id:p.id,title:p.title,goal:p.goal,prerequisites:p.prerequisites,sections:p.sections,keyFacts:p.keyFacts,example:p.example,checks:p.checks+[original],sources:p.sources,legacyEvidenceCardIDs:p.legacyEvidenceCardIDs,skills:p.skills,retiredChecks:p.retiredChecks,legacyBaseline:p.legacyBaseline)
+        let c=KnowledgeCourse(format:base.format,id:base.id,subject:base.subject,bankSHA256:base.bankSHA256,retiredLegacyCards:true,points:[changed,base.points[1]],questionMappings:base.questionMappings)
+        var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day))
+        for d in [day+1,day+2,day+4] {try e.open(p.id,review:true,now:date(d));XCTAssertNotEqual(e.check?.purpose,"original");try e.answer(e.check!.syntheticCorrectResponse,token:e.current!.id,now:date(d));try e.finish(token:e.current!.id,now:date(d))}
+        let level=e.reviewStatus(p.id)!.level
+        try e.open(p.id,review:true,now:date(day+7));XCTAssertEqual(e.check?.id,original.id)
+        try e.answer(original.answerID,token:e.current!.id,now:date(day+7))
+        XCTAssertEqual(e.evidenceCounts(p.id)["original"],1)
+        XCTAssertEqual(e.reviewStatus(p.id)?.level,level) // It checks the original choice, not the full method.
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
     func testMixedWrongRelationWithRightNumberRetainsRawStepsAfterColdRestore()throws {
         let c=course();var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day));let id=c.points[0].id
         for d in [day+1,day+2] {
             try e.open(id,review:true,now:date(d));try e.answer(e.check!.syntheticCorrectResponse,token:e.current!.id,now:date(d));try e.finish(token:e.current!.id,now:date(d))
         }
-        try e.open(id,review:true,now:date(day+3));XCTAssertEqual(e.check?.purpose,"mixed")
+        try e.open(id,review:true,now:date(day+4));XCTAssertEqual(e.check?.purpose,"mixed")
         var values=e.check!.stepResponses(e.check!.syntheticCorrectResponse)!;values["model3"]="t=e/p2"
         let raw=String(data:try JSONEncoder().encode(values),encoding:.utf8)!
-        try e.answer(raw,token:e.current!.id,now:date(day+3))
+        try e.answer(raw,token:e.current!.id,now:date(day+4))
         let answer=e.record.events.last{$0.kind=="answer"}!
         XCTAssertEqual(answer.correct,false);XCTAssertEqual(answer.stepScores?.last?.status,"correct")
         XCTAssertEqual(answer.stepScores?.filter{$0.status=="wrong"}.count,1)

@@ -749,7 +749,7 @@ import UIKit
                     if selectedCase.hasPrefix("knowledge-steps-") {
                         var process=learning.engine!,count=0
                         if selectedCase.hasPrefix("knowledge-steps-mixed") {
-                            let now=Date();process=try KnowledgeLearningEngine.fresh(knowledge);let early=now.addingTimeInterval(-3*86400)
+                            let now=Date();process=try KnowledgeLearningEngine.fresh(knowledge);let early=now.addingTimeInterval(-4*86400)
                             try process.start(now:early)
                             while let p=process.current,p.phase != "complete",count<40 {
                                 count+=1
@@ -757,7 +757,7 @@ import UIKit
                                 else if p.phase=="question"{try process.answer(process.check!.syntheticCorrectResponse,token:p.id,now:early)}
                                 else{try process.finish(token:p.id,now:early)}
                             }
-                            for days in [-2,-1] {
+                            for days in [-3,-2] {
                                 let at=now.addingTimeInterval(Double(days)*86400);try process.open(knowledge.points[0].id,review:true,now:at)
                                 try process.answer(process.check!.syntheticCorrectResponse,token:process.current!.id,now:at);try process.finish(token:process.current!.id,now:at)
                             }

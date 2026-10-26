@@ -39,6 +39,20 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         let restored=try KnowledgeLearningEngine(course:c,record:e.record)
         XCTAssertEqual(restored.evidenceCounts(id),e.evidenceCounts(id));XCTAssertEqual(restored.record.events,e.record.events)
     }
+    func testEarlyOpeningBeforeScheduledReviewCannotGainEligibilityByWaiting()throws {
+        let c=course();var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day));let id=e.point!.id
+        for d in [day+1,day+2] {try e.open(id,review:true,now:date(d));try e.answer(e.check!.answerID,token:e.current!.id,now:date(d));try e.finish(token:e.current!.id,now:date(d))}
+        let level=e.reviewStatus(id)!.level,due=e.reviewStatus(id)!.dueAt
+        XCTAssertEqual(due,date(day+4))
+        try e.open(id,review:true,now:date(day+3));let token=e.current!.id
+        XCTAssertEqual(e.current?.reviewDueAt,due);XCTAssertEqual(e.current?.eligibleAtShow,false)
+        e=try KnowledgeLearningEngine(course:c,record:e.record)
+        try e.answer(e.check!.answerID,token:token,now:date(day+5))
+        XCTAssertEqual(e.record.events.last{$0.kind=="answer"}?.assisted,true)
+        XCTAssertEqual(e.record.events.last{$0.kind=="answer"}?.reviewDueAt,due)
+        XCTAssertEqual(e.reviewStatus(id)?.level,level)
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
     func testUnindexedContinuationPageStillRecordsDocumentHelpInsteadOfBypassingIt() {
         let c=course()
         XCTAssertEqual(Set(c.affectedPoints(documentID:"synthetic",page:99)),Set(c.points.map(\.id)))

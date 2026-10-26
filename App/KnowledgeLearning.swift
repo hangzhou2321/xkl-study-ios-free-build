@@ -20,6 +20,7 @@ struct KnowledgePresentation:Codable,Equatable {
     var probeForAttemptID:UUID?=nil
     var probeForStepID:String?=nil
     var hypothesisTag:String?=nil
+    var reviewDueAt:Date?=nil
 }
 struct KnowledgeLearningEvent:Codable,Equatable {
     let id:UUID;let sequence:Int;let day:Int;let at:Date;let kind:String
@@ -38,6 +39,7 @@ struct KnowledgeLearningEvent:Codable,Equatable {
     var probeForAttemptID:UUID?=nil
     var probeForStepID:String?=nil
     var hypothesisTag:String?=nil
+    var reviewDueAt:Date?=nil
 }
 struct KnowledgeQuestionVersion:Codable,Equatable {
     let pointID:String;let check:KnowledgeCourse.Check
@@ -234,6 +236,7 @@ struct KnowledgeLearningEngine {
                     guard !eligible || qualified else{throw ExamError.invalid("首次展示的延迟资格不一致。")}
                 }
                 guard !eligible || !e.assisted else{throw ExamError.invalid("首次展示帮助标记不一致。")}
+                if let due=e.reviewDueAt{guard !eligible || due<=e.at else{throw ExamError.invalid("首次展示尚未到安排的复核时间。")}}
                 let sourceSeen=v.check.originalQuestionID.flatMap{id in course.questionMappings.first{$0.id==id}}.map{sourceReferences.contains($0.documentID+"/"+String($0.page))} ?? false
                 let exposureIDs=v.check.exposureKeys
                 let expected=(!seenAnswers.isDisjoint(with:exposureIDs)) ? "seen-answer":(!seenChecks.isDisjoint(with:exposureIDs) ? "seen-question":(sourceSeen ? "source-exposed":(v.check.originalQuestionID != nil ? "history-unknown":"unseen-in-app")))
@@ -251,7 +254,7 @@ struct KnowledgeLearningEngine {
                 if [3,4].contains(e.evidenceVersion ?? 0) {
                     guard let opened=displayed[e.presentationID],opened.definitionID==e.definitionID,e.shownAt==opened.at,
                           e.eligibleAtShow==opened.eligibleAtShow,e.familiarity==opened.familiarity,e.curriculumID==opened.curriculumID,e.helpPointIDs==opened.helpPointIDs,
-                          e.purpose==opened.purpose,e.probeForAttemptID==opened.probeForAttemptID,e.probeForStepID==opened.probeForStepID,e.hypothesisTag==opened.hypothesisTag else{throw ExamError.invalid("作答缺少相应首次展示事实。")}
+                          e.purpose==opened.purpose,e.probeForAttemptID==opened.probeForAttemptID,e.probeForStepID==opened.probeForStepID,e.hypothesisTag==opened.hypothesisTag,e.reviewDueAt==opened.reviewDueAt else{throw ExamError.invalid("作答缺少相应首次展示事实。")}
                     let helpers=Set(opened.helpPointIDs ?? ([p.id]+(q.relatedKnowledgeIDs ?? [])))
                     let helpedSinceShow=hinted.contains(e.presentationID) || helpers.contains{(helpAt[$0] ?? .distantPast)>=opened.at}
                     guard e.assisted || (opened.eligibleAtShow==true && !opened.assisted && !helpedSinceShow && e.purpose=="review") else{throw ExamError.invalid("提前展示或作答期间用过帮助，不能改成延迟独立成绩。")}
@@ -284,7 +287,7 @@ struct KnowledgeLearningEngine {
                   Set(p.order)==Set(q.choices.map(\.id)),p.order.count==q.choices.count else{throw ExamError.invalid("知识点断点或选项次序无效。")}
             if let shown=p.shownAt {
                 guard let event=displayed[p.id],event.at==shown,event.definitionID==p.definitionID,event.familiarity==p.familiarity,event.eligibleAtShow==p.eligibleAtShow,event.purpose==p.mode,event.curriculumID==p.curriculumID,event.helpPointIDs==p.helpPointIDs,
-                      event.probeForAttemptID==p.probeForAttemptID,event.probeForStepID==p.probeForStepID,event.hypothesisTag==p.hypothesisTag else{throw ExamError.invalid("断点首次展示信息不一致。")}
+                      event.probeForAttemptID==p.probeForAttemptID,event.probeForStepID==p.probeForStepID,event.hypothesisTag==p.hypothesisTag,event.reviewDueAt==p.reviewDueAt else{throw ExamError.invalid("断点首次展示信息不一致。")}
             } else if p.eligibleAtShow==true{throw ExamError.invalid("没有首次展示事实的断点不能声明延迟资格。")}
             if p.phase=="feedback" || p.phase=="complete",let selected=p.selectedID {
                 guard let e=record.events.last(where:{$0.presentationID==p.id && $0.kind=="answer"}),e.selectedID==selected,e.checkID==q.id,e.assisted==p.assisted else{throw ExamError.invalid("当前反馈与落盘作答不一致。")}
@@ -380,7 +383,7 @@ struct KnowledgeLearningEngine {
             checkID:["answer","hint","error-note","feedback-read","present"].contains(kind) ? q?.id:nil,
             selectedID:selected,correct:selected.map{q!.correct($0)},assisted:p.assisted,definitionID:p.definitionID,purpose:p.mode,errorTag:tag,evidenceVersion:4,
             shownAt:p.shownAt,eligibleAtShow:p.eligibleAtShow,familiarity:p.familiarity,curriculumID:p.curriculumID,helpPointIDs:p.helpPointIDs,
-            stepScores:selected.flatMap{q?.stepScores($0)},probeForAttemptID:p.probeForAttemptID,probeForStepID:p.probeForStepID,hypothesisTag:p.hypothesisTag))
+            stepScores:selected.flatMap{q?.stepScores($0)},probeForAttemptID:p.probeForAttemptID,probeForStepID:p.probeForStepID,hypothesisTag:p.hypothesisTag,reviewDueAt:p.reviewDueAt))
     }
     private func version(_ pointID:String,_ q:KnowledgeCourse.Check)->String{(try? KnowledgeQuestionVersion(pointID:pointID,check:q).identity) ?? ""}
     private mutating func savePresentation(_ p:KnowledgePresentation) {
@@ -402,7 +405,7 @@ struct KnowledgeLearningEngine {
     }
     private func selectCheck(_ p:KnowledgeCourse.Point,review:Bool,skillID:String?=nil)->KnowledgeCourse.Check {
         let pool=p.checks.filter{q in (review ? p.purpose(q) != "guided":p.purpose(q)=="guided") && (skillID==nil || p.skill(q)==skillID)}
-        let qualified=review ? pool.filter{evidenceQualifies($0,point:p)}:pool
+        let qualified=review ? pool.filter{evidenceQualifies($0,point:p) || p.purpose($0)=="original"}:pool
         let eligible=qualified.isEmpty ? pool:qualified
         let candidates=eligible.isEmpty ? p.checks:eligible,answers=record.events.filter{$0.pointID==p.id && $0.kind=="answer"}
         let last=answers.last?.checkID,counts=Dictionary(grouping:answers,by:{$0.checkID ?? ""}).mapValues{$0.count}
@@ -469,7 +472,8 @@ struct KnowledgeLearningEngine {
         if p.curriculumID==nil{p.curriculumID=try KnowledgeCurriculumVersion.current(point!).identity}
         guard let cid=p.curriculumID,let definition=record.curriculumVersions?[cid] else{throw ExamError.invalid("本次展示缺少教学条件版本。")}
         p.helpPointIDs=Self.helperIDs(course:course,pointID:p.pointID,check:q,extra:definition.prerequisites ?? []).sorted()
-        p.shownAt=now;p.eligibleAtShow=p.mode=="review" && !p.hintVisible && Self.trainingAt(record:record,definition:definition).map{now.timeIntervalSince($0)>=86_400}==true
+        p.reviewDueAt=reviewStatus(p.pointID)?.dueAt
+        p.shownAt=now;p.eligibleAtShow=p.mode=="review" && !p.hintVisible && p.reviewDueAt.map{now >= $0}==true && Self.trainingAt(record:record,definition:definition).map{now.timeIntervalSince($0)>=86_400}==true
             && !Self.hasHelp(record:record,course:course,pointID:p.pointID,check:q,at:now,scope:Set(p.helpPointIDs ?? [p.pointID]))
         p.assisted=p.eligibleAtShow != true
         savePresentation(p);try event("present",p,now)
