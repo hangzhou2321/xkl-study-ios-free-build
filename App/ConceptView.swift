@@ -94,7 +94,7 @@ struct ConceptView: View {
             .navigationDestination(isPresented: $practicing) { practice }
             .navigationDestination(isPresented: $recalling) {
                 if let course=store.teaching?.knowledgeCourse {
-                    KnowledgeLearningView(course:course,priorities:teaching.cardPriorities ?? [])
+                    KnowledgeLearningView(course:course,priorities:store.teaching?.cardPriorities ?? [])
                 } else {
                     ContentUnavailableView("背卡主线暂不可用",systemImage:"rectangle.on.rectangle",description:Text("返回课程首页，导入带主线计划的最新版课程。"))
                 }

@@ -632,7 +632,7 @@ import UIKit
         selectedCase=value("--professional-case") ?? "plan"
         let unifiedPreview=selectedCase.hasPrefix("unified-")
         let groupingPreview=["source-groups","source-groups-learned","source-exposure"].contains(selectedCase) || unifiedPreview
-        let priorityPreview=["card-priority-front","card-priority-sheet"].contains(selectedCase) || unifiedPreview
+        let priorityPreview=["card-priority-front","card-priority-sheet","knowledge-recall"].contains(selectedCase) || unifiedPreview
         root=FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-professional-"+UUID().uuidString,isDirectory:true)
         let target=ConceptStore(subject:subject,baseDirectory:root)
         do {

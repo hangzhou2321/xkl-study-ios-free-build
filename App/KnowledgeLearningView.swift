@@ -209,8 +209,9 @@ struct KnowledgeLearningView:View {
             Section{Text("先讲懂，再做小题；错在哪里就回到哪里补。旧卡和旧分数没有参与这条新主线。").font(.footnote)}
             ForEach(course.points){point in
                 Button{store.open(point.id);outline=false}label:{
-                    VStack(alignment:.leading,spacing:5){Text(point.title);Text(store.engine?.reviewPassed(point.id)==true ? "有独立检验证据，仍会到期复核":(store.engine?.trainedDay(point.id) != nil ? "方法练习已完成，待独立检验":"方法小节仍待练习")).font(.caption).foregroundStyle(.secondary)}
-                    if !point.inheritedPriorityTitles(priorities).isEmpty{Text("原标注："+point.inheritedPriorityTitles(priorities).joined(separator:"、")).font(.caption).foregroundStyle(.secondary)}
+                    VStack(alignment:.leading,spacing:5){Text(point.title);Text(store.engine?.reviewPassed(point.id)==true ? "有独立检验证据，仍会到期复核":(store.engine?.trainedDay(point.id) != nil ? "方法练习已完成，待独立检验":"方法小节仍待练习")).font(.caption).foregroundStyle(.secondary)
+                        if !point.inheritedPriorityTitles(priorities).isEmpty{Text("原标注："+point.inheritedPriorityTitles(priorities).joined(separator:"、")).font(.caption).foregroundStyle(.secondary)}
+                    }
                 }
             }
             NavigationLink("查看全部基础／强化题对应与待校勘项"){KnowledgeSourcesView(course:course,baseDirectory:baseDirectory)}
