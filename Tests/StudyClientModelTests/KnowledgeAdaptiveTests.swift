@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import CPocket
+import StudyCore
 @testable import StudyClientModel
 
 final class KnowledgeAdaptiveTests:XCTestCase {
