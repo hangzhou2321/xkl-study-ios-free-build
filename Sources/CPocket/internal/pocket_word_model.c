@@ -1,4 +1,5 @@
 #include "pocket_word_model.h"
+#include "pocket_review_intervals.h"
 #include <string.h>
 
 bool pocket_word_card_valid(uint32_t p) {
@@ -319,10 +320,9 @@ bool pocket_word_answer(pocket_word_state_t *s, pocket_word_answer_t answer, poc
             c.learned = 1;
             c.due_day = b->day + 1;
         } else {
-            static const uint16_t gaps[] = {0, 1, 2, 3, 5, 7, 10, 15, 30, 90, 180};
             if (!c.learned) { c.learned = 1; c.level = 1; }
             else if (!a->failed_round && c.level < POCKET_MAX_LEVEL) ++c.level;
-            c.due_day = b->day + gaps[c.level];
+            c.due_day = b->day + pocket_review_interval_days(c.level);
         }
         ++b->completed;
     }

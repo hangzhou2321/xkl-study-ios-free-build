@@ -133,6 +133,9 @@ size_t xkl_engine_snapshot(const xkl_engine_t *engine, uint8_t *out, size_t capa
 bool xkl_engine_info(const xkl_engine_t *engine, xkl_info_t *info);
 /* Original packed card, unchanged; UINT32_MAX for invalid engine/word. */
 uint32_t xkl_engine_card(const xkl_engine_t *engine, uint32_t word);
+/* Read-only access to the same table used by vocabulary review. This does
+ * not create/answer a word, mutate a snapshot, or change graduation rules. */
+uint16_t xkl_word_review_interval_days(uint32_t level);
 /* Original binary log header + occupied records; trailing erased Flash bytes
  * are omitted. A full export parser can pad with 0xff to 2 MiB. */
 size_t xkl_engine_log_size(const xkl_engine_t *engine);

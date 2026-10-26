@@ -10,6 +10,8 @@ struct KnowledgeLearningView:View {
     @State private var references=false
     @State private var exporting=false
     @State private var document=KnowledgeRecordDocument(data:Data())
+    @State private var numberInput=""
+    @State private var selectedChoices=Set<String>()
     @Environment(\.scenePhase) private var scenePhase
     init(course:KnowledgeCourse,baseDirectory:URL?=nil) {
         self.course=course;self.baseDirectory=baseDirectory
@@ -45,14 +47,22 @@ struct KnowledgeLearningView:View {
                 do{document=KnowledgeRecordDocument(data:try store.export());exporting=true}catch{}
             }.disabled(store.engine==nil)}
         }
-        .sheet(isPresented:$outline){NavigationStack{outlineView}}
-        .sheet(isPresented:$references){NavigationStack{
-            KnowledgeSourcesView(course:course,pointID:store.engine?.point?.id).navigationTitle("讲义与题目对应")
+        .sheet(isPresented:$outline,onDismiss:{store.start()}){NavigationStack{outlineView}}
+        .sheet(isPresented:$references,onDismiss:{store.start()}){NavigationStack{
+            KnowledgeSourcesView(course:course,pointID:store.engine?.point?.id,baseDirectory:baseDirectory).navigationTitle("讲义与题目对应")
                 .toolbar{Button("关闭"){references=false}}
         }}
         .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:course.subject.shortTitle+"-知识点诊断记录"){_ in}
         .task{store.start()}
-        .onChange(of:scenePhase){_,phase in if phase == .active,store.engine?.current != nil{store.start()}}
+        .onChange(of:scenePhase){_,phase in
+            if phase == .active,store.engine?.current != nil{store.start()}
+            else if let p=store.engine?.current,p.phase=="question"{saveDraft(p)}
+        }
+        .task(id:store.engine?.current?.id){
+            numberInput=store.engine?.current?.selectedID ?? store.engine?.current?.draftResponse ?? ""
+            selectedChoices=Set((store.engine?.current?.selectedID ?? store.engine?.current?.draftResponse ?? "").split(separator:"|").map(String.init))
+        }
+        .onDisappear{if let p=store.engine?.current,p.phase=="question"{saveDraft(p)}}
         #if DEBUG
         .task(id:store.engine?.current?.id){
             if let p=store.engine?.current {knowledgePreview.didRender(p.pointID,p.phase)}
@@ -63,67 +73,94 @@ struct KnowledgeLearningView:View {
         let trained=course.points.filter{engine.trainedDay($0.id) != nil}.count
         let reviewed=course.points.filter{engine.reviewPassed($0.id)}.count
         return VStack(alignment:.leading,spacing:6){
-            Text("知识点 \(course.points.count) 个 · 当场练习通过 \(trained) · 隔日无提示复核 \(reviewed)").font(.subheadline)
+            Text("知识点 \(course.points.count) 个 · 练习完成 \(trained) · 独立检验有证据 \(reviewed)").font(.subheadline)
             ProgressView(value:Double(trained),total:Double(course.points.count))
-            Text("看过讲解不计通过；用过提示按有帮助练习记录。").font(.caption).foregroundStyle(.secondary)
+            Text("练习完成与独立解题分开；独立检验通过后仍继续安排到期复核。").font(.caption).foregroundStyle(.secondary)
         }
     }
     @ViewBuilder private func content(_ engine:KnowledgeLearningEngine,_ p:KnowledgePresentation,_ point:KnowledgeCourse.Point)->some View {
         if p.phase=="lesson" {
             if p.page<point.sections.count {
-                Text(point.sections[p.page].title).font(.headline)
-                Text(point.sections[p.page].body).font(.system(size:23)).textSelection(.enabled)
+                let section=point.sections[p.page]
+                Text(section.title).font(.headline)
+                Text(section.body).font(.system(size:23)).textSelection(.enabled)
+                if let diagram=section.diagram{ConceptDiagramView(diagram:diagram)}
+                if let example=section.example{workedExample(example)}
             } else if p.page==point.sections.count {
                 Text("用一个完整例子串起来 · 新编讲解").font(.headline)
-                Text(point.example.prompt).font(.system(size:23))
-                ForEach(Array(point.example.steps.enumerated()),id:\.offset){i,step in Text("\(i+1). \(step)").font(.system(size:22))}
-                Text("结论："+point.example.answer).font(.system(size:23).weight(.medium))
+                workedExample(point.example)
             } else {
                 Text("现在再记这些结论").font(.headline)
                 ForEach(Array(point.keyFacts.enumerated()),id:\.offset){_,fact in Text("• "+fact).font(.system(size:22))}
             }
-            Text("第 \(p.page+1) / \(point.sections.count+2) 小步").font(.caption).foregroundStyle(.secondary)
-            Button(p.page<point.sections.count+1 ? "明白这一小步，继续":"试一道小题，看看哪里没懂"){store.readNext(p.id)}
+            Text("第 \(p.page+1) / \(point.lessonPageCount) 小步 · 本点方法练习 \(engine.learnedSkills(point.id)) / \(point.requiredSkillIDs.count)").font(.caption).foregroundStyle(.secondary)
+            Button(p.page<point.sections.count && point.sections[p.page].checkpointID != nil ? "我来补上这一步":(p.page<point.lessonPageCount-1 ? "明白这一小步，继续":"检查本点方法练习")){store.readNext(p.id)}
                 .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("knowledge-next-step")
+            if p.page>0{Button("回看上一小步"){store.lessonPage(p.page-1)}}
+            if let other=point.sections.indices.first(where:{$0 != p.page && (point.sections[$0].id?.hasSuffix("-alt")==true)}) {
+                Button("这段没懂，换个角度解释"){store.lessonPage(other)}
+            }
             Button("这会儿先学其他知识点"){store.deferCurrent()}.font(.subheadline)
         } else if let q=engine.check,p.phase=="question" || p.phase=="feedback" {
-            Text(p.checkIndex==0 ? "当场诊断 · 刚学过，按练习记录":"隔日复核 · 先自己作答").font(.headline)
+            Text(p.mode=="review" ? (p.assisted ? "复核练习 · 本次已有帮助":"独立检验 · 未记录App内帮助"):"补步骤／方法练习 · 不冒充独立成绩").font(.headline)
+            if let id=q.skillID,let skill=point.skills?.first(where:{$0.id==id}){Text("本题方法："+skill.title).font(.subheadline).foregroundStyle(.secondary)}
+            Text(engine.encounterCount(q.id)==0 ? "这是本题首次作答。":"此前本题已作答\(engine.encounterCount(q.id))次；这次用于练习或保持复核。")
+                .font(.caption).foregroundStyle(.secondary)
             Text(q.prompt).font(.system(size:24).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
-            ForEach(p.order,id:\.self){id in
+            if q.type=="number" {
+                Text(q.numeric?.requiresUnit==true ? "填写数值和单位。":"按题中指定单位填写数值：\(q.numeric?.unit ?? "")").font(.subheadline)
+                TextField("先自己计算，再填写",text:$numberInput).textFieldStyle(.roundedBorder).font(.system(size:24))
+                    .keyboardType(.numbersAndPunctuation).disabled(p.phase=="feedback")
+                if p.phase=="question"{Button("提交计算结果"){store.answer(numberInput,token:p.id)}.buttonStyle(.borderedProminent)}
+            } else {ForEach(p.order,id:\.self){id in
                 if let choice=q.choices.first(where:{$0.id==id}) {
-                    Button{store.answer(id,token:p.id)}label:{
-                        HStack(alignment:.top){Text(choice.text).font(.system(size:22));Spacer();if p.selectedID==id{Image(systemName:"checkmark.circle")}}
+                    Button{
+                        if q.type=="multiple"{if !selectedChoices.insert(id).inserted{selectedChoices.remove(id)}}else{store.answer(id,token:p.id)}
+                    }label:{
+                        HStack(alignment:.top){Text(choice.text).font(.system(size:22));Spacer();if p.selectedID==id || selectedChoices.contains(id){Image(systemName:"checkmark.circle")}}
                             .padding(14).frame(maxWidth:.infinity,minHeight:48,alignment:.leading)
                             .background(.quaternary,in:RoundedRectangle(cornerRadius:12))
                     }.buttonStyle(.plain).disabled(p.phase=="feedback" || store.blocked)
                 }
             }
+                if q.type=="multiple",p.phase=="question"{Button("提交多选答案"){store.answer(selectedChoices.sorted().joined(separator:"|"),token:p.id)}.buttonStyle(.borderedProminent)}
+            }
             if p.phase=="question" {
-                if p.hintVisible {Text("提示："+(point.keyFacts.first ?? point.sections[0].body)).font(.system(size:21)).foregroundStyle(.secondary)}
+                if p.hintVisible {Text("提示："+(q.hint ?? point.keyFacts.first ?? point.sections[0].body)).font(.system(size:21)).foregroundStyle(.secondary)}
                 Button("给一点提示（会记录用过帮助）"){store.hint(p.id)}.disabled(p.hintVisible)
                 Button("没读懂，回到这个知识点"){store.explain()}
                 Button("暂时先学其他知识点"){store.deferCurrent()}
             } else {
-                let correct=p.selectedID==q.answerID
+                let correct=p.selectedID.map{q.correct($0)} ?? false
                 Label(correct ? "这道小题答对了":"先找出卡住的一步",systemImage:correct ? "checkmark.circle.fill":"arrow.uturn.backward.circle")
                     .font(.headline).foregroundStyle(correct ? .green:.orange)
-                if let chosen=q.choices.first(where:{$0.id==p.selectedID}),chosen.feedback != q.explanation{Text(chosen.feedback).font(.system(size:22))}
+                if let response=p.selectedID,q.feedback(response) != q.explanation{Text(q.feedback(response)).font(.system(size:22))}
                 Text(q.explanation).font(.system(size:22)).accessibilityIdentifier("knowledge-check-feedback")
-                Text(p.assisted ? "本次按有帮助练习保存，不计无提示复核。":"本次未在该诊断中使用系统提示；只代表这道小题的表现。")
+                Text(p.assisted ? "本次按有帮助练习保存，不计独立检验。":"本次未记录相关App内帮助，且与学习或相关帮助至少间隔24小时；只代表本题表现。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button(correct ? "保存了，继续":"回到讲解，拆小一步再学"){store.finish(p.id)}.buttonStyle(.borderedProminent)
                 if !correct {
+                    if let response=p.selectedID,let tag=q.errorTag(response){Text("可能卡在："+errorTitle(tag)).font(.subheadline)}
+                    Menu("我卡在这里（只补充错因，不改判分）") {
+                        ForEach(["meaning","conditions","method","calculation","units","code-flow"],id:\.self){tag in Button(errorTitle(tag)){store.errorNote(tag,token:p.id)}}
+                    }
                     ForEach(point.prerequisites,id:\.self){id in
-                        if let prerequisite=course.point(id){Button("先补："+prerequisite.title){store.open(id);store.explain()}}
+                        if let prerequisite=course.point(id){Button("先补："+prerequisite.title){store.repairPrerequisite(id)}}
                     }
                     Button("先学其他知识点"){store.deferCurrent()}
                 }
             }
         } else if p.phase=="complete" {
-            Label(engine.reviewPassed(point.id) ? "本知识点有隔日无提示复核证据":"当场练习通过，隔日再复核",systemImage:"checkmark.circle").font(.headline)
+            Label(engine.reviewPassed(point.id) ? "已有不同任务与迁移的独立检验证据":"方法练习已完成，独立检验继续安排",systemImage:"checkmark.circle").font(.headline)
             Text("这不是整套基础或强化题的掌握保证。可查看本知识点关联的原题，组合题还要一起用到其他知识点。")
             Button("继续下一个知识点"){store.next()}.buttonStyle(.borderedProminent)
             Button("再读一次这个知识点"){store.explain()}
+            Button("再练一道（看过帮助会按练习记录）"){store.practiceAgain()}
+            if let status=engine.reviewStatus(point.id) {
+                Text("下次独立复核：\(status.dueAt.formatted(date:.numeric,time:.shortened)) · 当前复核级别\(status.level)")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Text("复核间隔共用当前词引擎表；这里的练习和能力成绩独立保存，不改变英语或旧题库成绩。").font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
     private var outlineView:some View {
@@ -131,27 +168,39 @@ struct KnowledgeLearningView:View {
             Section{Text("先讲懂，再做小题；错在哪里就回到哪里补。旧卡和旧分数没有参与这条新主线。").font(.footnote)}
             ForEach(course.points){point in
                 Button{store.open(point.id);outline=false}label:{
-                    VStack(alignment:.leading,spacing:5){Text(point.title);Text(store.engine?.reviewPassed(point.id)==true ? "有隔日无提示复核证据":(store.engine?.trainedDay(point.id) != nil ? "当场练习通过，待复核":"尚未通过小题诊断")).font(.caption).foregroundStyle(.secondary)}
+                    VStack(alignment:.leading,spacing:5){Text(point.title);Text(store.engine?.reviewPassed(point.id)==true ? "有独立检验证据，仍会到期复核":(store.engine?.trainedDay(point.id) != nil ? "方法练习已完成，待独立检验":"方法小节仍待练习")).font(.caption).foregroundStyle(.secondary)}
                 }
             }
-            NavigationLink("查看全部基础／强化题对应与待校勘项"){KnowledgeSourcesView(course:course)}
+            NavigationLink("查看全部基础／强化题对应与待校勘项"){KnowledgeSourcesView(course:course,baseDirectory:baseDirectory)}
         }.navigationTitle("知识点大纲").toolbar{Button("关闭"){outline=false}}
     }
     #if DEBUG
     @Environment(\.knowledgePreview) private var knowledgePreview
     #endif
+    @ViewBuilder private func workedExample(_ example:ProfessionalCardLesson.Example)->some View {
+        Text(example.prompt).font(.system(size:23))
+        ForEach(Array(example.steps.enumerated()),id:\.offset){i,step in Text("\(i+1). \(step)").font(.system(size:22))}
+        Text("结论："+example.answer).font(.system(size:23).weight(.medium))
+    }
+    private func errorTitle(_ tag:String)->String {
+        ["meaning":"概念含义","conditions":"适用条件／审题","method":"选方法或列式","calculation":"计算过程","units":"量纲与单位","code-flow":"程序状态与顺序"][tag] ?? tag
+    }
+    private func saveDraft(_ p:KnowledgePresentation) {
+        store.saveDraft(store.engine?.check?.type=="multiple" ? selectedChoices.sorted().joined(separator:"|"):numberInput,token:p.id)
+    }
 }
 
 struct KnowledgeSourcesView:View {
     let course:KnowledgeCourse
     var pointID:String?=nil
+    var baseDirectory:URL?=nil
     var body:some View {
         List {
             if let id=pointID,let point=course.point(id) {
                 Section("同一知识点的讲义出处"){
                     ForEach(Array(point.sources.enumerated()),id:\.offset){_,s in
                         NavigationLink("\(s.title) · PDF第\(s.page)页"){
-                            KnowledgeSourcePageView(course:course,documentID:s.documentID,page:s.page)
+                            KnowledgeSourcePageView(course:course,documentID:s.documentID,page:s.page,baseDirectory:baseDirectory)
                         }
                     }
                 }
@@ -165,7 +214,7 @@ struct KnowledgeSourcesView:View {
                         if let text=m.questionText{Text(text).font(.footnote).textSelection(.enabled)}
                         Text("来源\(m.documentID)，PDF第\(m.page)页。对应关系不等于已经独立做对。").font(.caption).foregroundStyle(.secondary)
                         NavigationLink("打开原题所在页（含上下文）"){
-                            KnowledgeSourcePageView(course:course,documentID:m.documentID,page:m.page)
+                            KnowledgeSourcePageView(course:course,documentID:m.documentID,page:m.page,baseDirectory:baseDirectory)
                         }
                     }
                 }
@@ -178,16 +227,27 @@ struct KnowledgeSourcesView:View {
 }
 private struct KnowledgeSourcePageView:View {
     let course:KnowledgeCourse;let documentID:String;let page:Int
+    var baseDirectory:URL?=nil
+    @State private var exposureSaved=false
+    @State private var error:String?
     var body:some View {
         ScrollView {
-            if let doc=course.sourceDocuments.first(where:{$0.id==documentID}),let source=doc.pages.first(where:{$0.number==page}) {
+            if let error{Text(error).foregroundStyle(.red).padding()}
+            else if !exposureSaved{ProgressView("正在保存查阅事件…").padding()}
+            else if let doc=course.sourceDocuments.first(where:{$0.id==documentID}),let source=doc.pages.first(where:{$0.number==page}) {
                 VStack(alignment:.leading,spacing:12){
                     Text("\(doc.title) · PDF第\(page)页").font(.headline)
                     Text("这是原文资料页，可能包含相邻题目与答案；查阅资料不计做对。").font(.caption).foregroundStyle(.secondary)
-                    ProfessionalSourceImageView(visual:.init(id:documentID+"-page-\(page)",kind:"sourceFile",sourceFile:source.asset),assetRoot:FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("KnowledgeSources",isDirectory:true))
+                    ProfessionalSourceImageView(visual:.init(id:documentID+"-page-\(page)",kind:"sourceFile",sourceFile:source.asset),assetRoot:(baseDirectory ?? FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]).appendingPathComponent("KnowledgeSources",isDirectory:true))
                 }.padding()
             } else{Text("该资料页尚未配套放入手机。知识点学习与原记录保留，请检查新版资料页资产。").padding()}
         }.navigationTitle("资料原页")
+        .task {
+            do {
+                try KnowledgeExposureLedger.record(course:course,pointIDs:course.affectedPoints(documentID:documentID,page:page),kind:"source",reference:documentID+"/"+String(page),baseDirectory:baseDirectory)
+                exposureSaved=true
+            } catch{self.error="查阅事件未保存，资料暂未打开；诊断记录保留。"+error.localizedDescription}
+        }
     }
 }
 private struct KnowledgeRecordDocument:FileDocument {

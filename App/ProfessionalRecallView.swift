@@ -11,11 +11,14 @@ struct ProfessionalRecallView: View {
     @State private var lastReviewedCardID: String?
     @State private var lastFeedback: String?
     @State private var checking: ProfessionalRecallCheckRequest?
+    @State private var exposedKnowledgeAnswers=Set<UUID>()
+    @State private var knowledgeExposureError:String?
     private let subject: ConceptSubject
     private let bank: ConceptBank
     private let teaching: ConceptTeaching
     private let scope: ProfessionalRecallScope
     private let practiceStore: ConceptStore?
+    private let knowledgeBaseDirectory:URL?
     #if DEBUG
     @Environment(\.professionalRecallPreview) private var preview
     #endif
@@ -25,6 +28,7 @@ struct ProfessionalRecallView: View {
          practiceStore: ConceptStore? = nil) {
         self.subject = subject; self.bank = bank; self.teaching = teaching
         self.scope = scope; self.practiceStore = practiceStore
+        self.knowledgeBaseDirectory=baseDirectory
         _store = StateObject(wrappedValue: ProfessionalRecallStore(subject:subject,bank:bank,
             teaching:teaching,scope:scope,baseDirectory:baseDirectory))
     }
@@ -50,13 +54,17 @@ struct ProfessionalRecallView: View {
                             Text(item.card.prompt).font(.title2.weight(.semibold)).textSelection(.enabled)
                                 .accessibilityIdentifier("professional-recall-prompt")
                             if presentation.revealed {
-                                answer(item.card)
+                                if teaching.knowledgeCourse==nil || exposedKnowledgeAnswers.contains(presentation.id){answer(item.card)}
+                                else{ProgressView("正在保存答案查阅事件…")}
                                 Text("按翻答案前的回忆自评：说对关键条件和方法即可，不要求逐字一致。")
                                     .font(.footnote).foregroundStyle(.secondary)
                             } else {
                                 Text("先自己说出答案，再翻面核对。").foregroundStyle(.secondary)
                             }
                         }.id(presentation.id)
+                        .task(id:"knowledge-help-\(presentation.id)-\(presentation.revealed)") {
+                            if presentation.revealed{_ = recordKnowledgeAnswer(item:item,token:presentation.id)}
+                        }
                         #if DEBUG
                         .task(id:"\(presentation.id):\(presentation.revealed)") {
                             preview.didRender(ProfessionalRecallPreviewObservation(cardID:item.id,revealed:presentation.revealed,scope:scope))
@@ -90,6 +98,10 @@ struct ProfessionalRecallView: View {
                         description:Text(store.error ?? "请返回课程首页检查已导入的主线课程。"))
                 }
                 if let error=store.error { Text(error).foregroundStyle(.red) }
+                if let knowledgeExposureError {
+                    Text(knowledgeExposureError).foregroundStyle(.red)
+                    if let item=store.engine?.currentItem,let p=store.engine?.record.presentation{Button("重试保存查阅事件"){_ = recordKnowledgeAnswer(item:item,token:p.id)}}
+                }
             }.padding(22).frame(maxWidth:700,alignment:.leading).frame(maxWidth:.infinity)
         }
         .navigationTitle(teaching.knowledgeCourse != nil ? "知识点卡复习" : (scope == .mainline ? "必学背卡" : "拓展选学"))
@@ -114,7 +126,12 @@ struct ProfessionalRecallView: View {
         .onChange(of:scenePhase) { _,phase in
             // Resuming the foreground must not silently admit another lesson
             // after the completion screen has been reached.
-            if phase == .active, store.engine?.currentItem != nil { store.start() }
+            if phase == .active, store.engine?.currentItem != nil {
+                store.start()
+                if let item=store.engine?.currentItem,let p=store.engine?.record.presentation,p.revealed {
+                    exposedKnowledgeAnswers.remove(p.id);_ = recordKnowledgeAnswer(item:item,token:p.id)
+                }
+            }
         }
         #if DEBUG
         .task(id:preview.lessonScrollTarget) {
@@ -165,7 +182,7 @@ struct ProfessionalRecallView: View {
                             .accessibilityIdentifier("professional-recall-remembered")
                     }
                 } else {
-                    Button("翻答案") { store.reveal(token:p.id) }
+                    Button("翻答案") { if recordKnowledgeAnswer(item:item,token:p.id){store.reveal(token:p.id)} }
                         .buttonStyle(.borderedProminent).frame(maxWidth:.infinity,minHeight:44)
                         .accessibilityIdentifier("professional-recall-reveal")
                 }
@@ -182,7 +199,8 @@ struct ProfessionalRecallView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("professional-recall-postpone-last-card")
                 }
-            }.controlSize(.large).padding(.horizontal,20).padding(.vertical,10).background(.bar).disabled(store.blocked)
+            }.controlSize(.large).padding(.horizontal,20).padding(.vertical,10).background(.bar)
+                .disabled(store.blocked || (p.revealed && teaching.knowledgeCourse != nil && !exposedKnowledgeAnswers.contains(p.id)))
         }
     }
 
@@ -191,6 +209,14 @@ struct ProfessionalRecallView: View {
         guard !store.blocked,store.error == nil,store.engine?.record.presentation?.id != token else { return }
         lastReviewedCardID=item.id
         lastFeedback=remembered ? "上一张已保存：记住了" : "上一张已保存：没记住，已按单词规则安排重现"
+    }
+    private func recordKnowledgeAnswer(item:RecallDeck.Item,token:UUID)->Bool {
+        guard let course=teaching.knowledgeCourse else{return true}
+        if exposedKnowledgeAnswers.contains(token){return true}
+        do {
+            try KnowledgeExposureLedger.record(course:course,pointIDs:[item.conceptID],kind:"recall",reference:item.id,baseDirectory:knowledgeBaseDirectory)
+            exposedKnowledgeAnswers.insert(token);knowledgeExposureError=nil;return true
+        } catch{knowledgeExposureError="答案查阅事件未保存，暂不显示；原自评记录保留。"+error.localizedDescription;return false}
     }
     private func priority(_ card:RecallCard)->ProfessionalCardPriority? {
         teaching.cardPriorities?.first { $0.cardID == card.id && $0.sourceCardDigest == card.professionalDigest }

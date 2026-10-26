@@ -3,17 +3,58 @@ import StudyCore
 
 /// A new knowledge-point curriculum. Legacy recall IDs/grades are archival only.
 struct KnowledgeCourse: Codable, Equatable {
-    struct Section: Codable, Equatable { let title: String; let body: String }
+    struct Section: Codable, Equatable {
+        let title: String; let body: String
+        var id:String? = nil
+        var example:ProfessionalCardLesson.Example? = nil
+        var diagram:ConceptDiagram? = nil
+        var checkpointID:String? = nil
+    }
     struct Source: Codable, Equatable { let documentID: String; let title: String; let page: Int }
     struct Check: Codable, Equatable, Identifiable {
-        struct Choice: Codable, Equatable, Identifiable { let id: String; let text: String; let feedback: String }
+        struct Choice: Codable, Equatable, Identifiable {
+            let id: String; let text: String; let feedback: String
+            var errorTag:String? = nil
+            var repairSectionID:String? = nil
+            var repairPointID:String? = nil
+        }
+        struct Numeric:Codable,Equatable {
+            let value:Double;let tolerance:Double;let unit:String
+            var unitFactors:[String:Double]? = nil
+            var requiresUnit:Bool? = nil
+        }
+        struct CommonError:Codable,Equatable {
+            let value:Double;let feedback:String;let errorTag:String
+            var repairSectionID:String? = nil
+        }
         let id: String; let prompt: String; let choices: [Choice]; let answerID: String; let explanation: String
+        var purpose:String? = nil
+        var skillID:String? = nil
+        var family:String? = nil
+        var hint:String? = nil
+        var responseType:String? = nil
+        var correctChoiceIDs:[String]? = nil
+        var numeric:Numeric? = nil
+        var commonErrors:[CommonError]? = nil
+        var repairSectionID:String? = nil
+        var relatedKnowledgeIDs:[String]? = nil
+        var originalQuestionID:String? = nil
+    }
+    struct Skill:Codable,Equatable,Identifiable {
+        let id:String;let title:String;let lessonSectionID:String
+    }
+    struct LegacyBaseline:Codable,Equatable {
+        let checks:[Check];let sectionCount:Int
+        var digest:String? = nil
     }
     struct Point: Codable, Equatable, Identifiable {
         let id: String; let title: String; let goal: String
         let prerequisites: [String]; let sections: [Section]; let keyFacts: [String]
         let example: ProfessionalCardLesson.Example; let checks: [Check]; let sources: [Source]
         let legacyEvidenceCardIDs: [String]
+        var skills:[Skill]? = nil
+        var retiredChecks:[Check]? = nil
+        var legacyBaseline:LegacyBaseline? = nil
     }
     struct QuestionMapping: Codable, Equatable, Identifiable {
         let id: String; let documentID: String; let book: String; let page: Int
@@ -32,7 +73,7 @@ struct KnowledgeCourse: Codable, Equatable {
 
     func validate(bank: ConceptBank, teaching: ConceptTeaching) throws {
         func valid(_ s: String,_ max: Int)->Bool { !s.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && s.count<=max }
-        guard format=="knowledge-course-v1", retiredLegacyCards, subject.bankID==bank.id,
+        guard ["knowledge-course-v1","knowledge-course-v2"].contains(format), retiredLegacyCards, subject.bankID==bank.id,
               bankSHA256==teaching.bankSHA256, valid(id,100), (1...256).contains(points.count),
               Set(points.map(\.id)).count==points.count else { throw ExamError.invalid("知识点课程身份不一致；旧记录保留。") }
         let old=Set((teaching.primaryRecallDeck?.cards.map(\.id) ?? [])+(teaching.recallGroups ?? []).flatMap { $0.recallCards.map(\.id) })
@@ -41,16 +82,41 @@ struct KnowledgeCourse: Codable, Equatable {
         for p in points {
             guard valid(p.id,120),valid(p.title,120),valid(p.goal,600),
                   Set(p.prerequisites).count==p.prerequisites.count,Set(p.prerequisites).isSubset(of:pointIDs),!p.prerequisites.contains(p.id),
-                  (2...8).contains(p.sections.count),p.sections.allSatisfy({ valid($0.title,120) && valid($0.body,1800) }),
+                  (2...48).contains(p.sections.count),p.sections.allSatisfy({ valid($0.title,120) && valid($0.body,2400) }),
                   (1...24).contains(p.keyFacts.count),p.keyFacts.allSatisfy({valid($0,1500)}),
                   valid(p.example.prompt,1600),(2...10).contains(p.example.steps.count),p.example.steps.allSatisfy({valid($0,1600)}),valid(p.example.answer,1600),
-                  (2...6).contains(p.checks.count),!p.sources.isEmpty,p.sources.allSatisfy({valid($0.documentID,30) && valid($0.title,300) && $0.page>0}),
+                  (2...96).contains(p.checks.count),!p.sources.isEmpty,p.sources.allSatisfy({valid($0.documentID,30) && valid($0.title,300) && $0.page>0}),
                   Set(p.legacyEvidenceCardIDs).isSubset(of:old) else { throw ExamError.invalid("知识点缺少可读讲解、前置关系、例题或来源。") }
-            for q in p.checks {
+            let sectionIDs=Set(p.sections.enumerated().map { $0.element.id ?? "section-\($0.offset)" })
+            guard sectionIDs.count==p.sections.count else{throw ExamError.invalid("教学小节身份重复。")}
+            let skills=p.skills ?? []
+            guard (p.skills==nil || (1...48).contains(skills.count)),Set(skills.map(\.id)).count==skills.count,skills.allSatisfy({valid($0.id,160) && valid($0.title,160) && sectionIDs.contains($0.lessonSectionID)}) else{throw ExamError.invalid("知识点内方法身份不完整。")}
+            if format=="knowledge-course-v2" {
+                guard !skills.isEmpty,p.checks.allSatisfy({$0.skillID != nil && $0.purpose != nil}),
+                      p.checks.filter({$0.purpose != "guided"}).count>=2,p.checks.contains(where:{["transfer","original"].contains($0.purpose ?? "")}),
+                      skills.allSatisfy({skill in p.checks.contains(where:{$0.skillID==skill.id && $0.purpose=="guided"}) && p.checks.contains(where:{$0.skillID==skill.id && $0.purpose != "guided"})}) else{throw ExamError.invalid("新课程每种方法需有练习和独立题，并含换条件或原题检验。")}
+            }
+            for section in p.sections {
+                if let diagram=section.diagram{try diagram.validate()}
+                if let e=section.example{guard valid(e.prompt,1600),(2...10).contains(e.steps.count),e.steps.allSatisfy({valid($0,1600)}),valid(e.answer,1600) else{throw ExamError.invalid("分步例题不完整。")}}
+                if let id=section.checkpointID{guard p.checks.contains(where:{$0.id==id}) else{throw ExamError.invalid("补步骤题不属于本知识点。")}}
+            }
+            for q in p.checks+(p.retiredChecks ?? []) {
                 guard valid(q.id,140),checkIDs.insert(q.id).inserted,valid(q.prompt,2000),
-                      (2...6).contains(q.choices.count),Set(q.choices.map(\.id)).count==q.choices.count,
-                      q.choices.contains(where:{$0.id==q.answerID}),q.choices.allSatisfy({valid($0.id,30) && valid($0.text,800) && valid($0.feedback,1500)}),
                       valid(q.explanation,2000) else { throw ExamError.invalid("知识点诊断题不完整或重复。") }
+                try q.validateResponse()
+                guard q.skillID==nil || skills.contains(where:{$0.id==q.skillID}),
+                      q.repairSectionID==nil || sectionIDs.contains(q.repairSectionID!),
+                      Set(q.relatedKnowledgeIDs ?? []).isSubset(of:pointIDs) else{throw ExamError.invalid("小题的方法或回补位置不存在。")}
+                for choice in q.choices {
+                    guard choice.repairSectionID==nil || sectionIDs.contains(choice.repairSectionID!),choice.repairPointID==nil || pointIDs.contains(choice.repairPointID!) else{throw ExamError.invalid("错误回补入口不存在。")}
+                }
+                if let id=q.originalQuestionID{guard q.purpose=="original",questionMappings.contains(where:{$0.id==id && $0.status=="supported" && $0.knowledgeIDs.contains(p.id)}) else{throw ExamError.invalid("原题检验缺少可靠题源绑定。")}}
+            }
+            if let baseline=p.legacyBaseline {
+                guard baseline.sectionCount>=2,(2...6).contains(baseline.checks.count),
+                      baseline.checks.allSatisfy({old in (p.checks+(p.retiredChecks ?? [])).contains(where:{$0.id==old.id && (try? $0.gradingDigest()) == (try? old.gradingDigest())})}) else{throw ExamError.invalid("旧版诊断身份基线不匹配；原记录保留。")}
+                if let digest=baseline.digest{guard ExamContent.isHash(digest),try KnowledgeLearningEngine.legacyDigest(pointID:p.id,checks:baseline.checks)==digest else{throw ExamError.invalid("旧题摘要与本机原算法不一致。")}}
             }
             earlier.insert(p.id)
         }
@@ -80,6 +146,9 @@ struct KnowledgeCourse: Codable, Equatable {
         try recallDeck(bankID:bank.id).validate()
     }
     func point(_ id:String)->Point? { points.first {$0.id==id} }
+    func affectedPoints(documentID:String,page:Int)->[String] {
+        Array(Set(points.filter{$0.sources.contains{$0.documentID==documentID && $0.page==page}}.map(\.id)+questionMappings.filter{$0.documentID==documentID && $0.page==page}.flatMap(\.knowledgeIDs))).sorted()
+    }
     func recallDeck(bankID:String)->RecallDeck {
         RecallDeck(subject:subject,bankID:bankID,cards:points.map { p in
             RecallDeck.Item(conceptID:p.id,conceptTitle:p.title,card:RecallCard(id:p.id+":knowledge-v1",

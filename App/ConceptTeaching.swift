@@ -169,11 +169,12 @@ struct ConceptCourse: Codable {
     static func load(_ data: Data, subject: ConceptSubject) throws -> (ConceptCourse, ConceptBank) {
         guard data.count <= 50 * 1_024 * 1_024 else { throw ExamError.invalid("课程包过大。") }
         let course = try JSONDecoder().decode(Self.self, from: data)
-        guard ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5", "xkl-course-v6"].contains(course.format), course.subject == subject else {
+        guard ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5", "xkl-course-v6", "xkl-course-v7"].contains(course.format), course.subject == subject else {
             throw ExamError.invalid("请在对应科目中导入课程包。")
         }
-        guard ["xkl-course-v5","xkl-course-v6"].contains(course.format) == course.teaching.hasProfessionalExtension,
-              (course.format == "xkl-course-v6") == (course.teaching.knowledgeCourse != nil) else { throw ExamError.invalid("知识点重做课程需使用v6格式；旧课程与原记录保留。") }
+        guard ["xkl-course-v5","xkl-course-v6","xkl-course-v7"].contains(course.format) == course.teaching.hasProfessionalExtension,
+              ["xkl-course-v6","xkl-course-v7"].contains(course.format) == (course.teaching.knowledgeCourse != nil),
+              (course.format=="xkl-course-v7") == (course.teaching.knowledgeCourse?.format=="knowledge-course-v2") else { throw ExamError.invalid("请使用对应格式的讲义课程；旧课程与原记录保留。") }
         let (pack, bank) = try ConceptContent.load(course.bankContent)
         guard bank.id == subject.bankID else { throw ExamError.invalid("课程科目标识不一致。") }
         try course.teaching.validate(bank: bank, hash: pack.bankSHA256)

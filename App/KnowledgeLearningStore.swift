@@ -25,20 +25,25 @@ import StudyCore
                 _=try KnowledgeLearningEngine(course:course,record:KnowledgeLearningEngine.appending(beginning,to:course))
                 guard Array(prior.events.prefix(beginning.events.count))==beginning.events else{throw ExamError.invalid("知识点初始事件与当前历史不连续。")}
                 let next=try KnowledgeLearningEngine.appending(prior,to:course)
-                let restored=try KnowledgeLearningEngine(course:course,record:next)
+                var restored=try KnowledgeLearningEngine(course:course,record:next)
+                try restored.ingest(KnowledgeExposureLedger.read(course:course,baseDirectory:baseDirectory))
+                _=try KnowledgeLearningEngine(course:course,record:restored.record)
+                let updated=restored.record
                 hash=StudySHA256.hex(data)
-                if next != prior {
+                if updated != prior {
                     let backup=root.appendingPathComponent("before-append-"+hash+".json")
                     if fm.fileExists(atPath:backup.path) {guard try read(backup)==data else{throw ExamError.invalid("追加前备份不一致。")}}
                     else{try writer(data,backup)}
                     guard try read(backup)==data,StudySHA256.hex(try read(current))==hash else{throw ExamError.invalid("追加期间出现新记录，原文件保留。")}
-                    let bytes=try encode(next);try writer(bytes,current);guard try read(current)==bytes else{throw ExamError.invalid("追加记录未保存完整。")}
+                    let bytes=try encode(updated);try writer(bytes,current);guard try read(current)==bytes else{throw ExamError.invalid("追加记录未保存完整。")}
                     hash=StudySHA256.hex(bytes)
                 }
                 engine=restored
             } else {
-                guard try fm.contentsOfDirectory(atPath:root.path).isEmpty else{throw ExamError.invalid("发现旧知识点档案但当前档缺失，不会清空重建。")}
-                let fresh=try KnowledgeLearningEngine.fresh(course),data=try encode(fresh.record)
+                guard try fm.contentsOfDirectory(atPath:root.path).allSatisfy({$0=="exposures"}) else{throw ExamError.invalid("发现旧知识点档案但当前档缺失，不会清空重建。")}
+                var fresh=try KnowledgeLearningEngine.fresh(course)
+                try fresh.ingest(KnowledgeExposureLedger.read(course:course,baseDirectory:baseDirectory))
+                let data=try encode(fresh.record)
                 try writer(data,initial);guard try read(initial)==data else{throw ExamError.invalid("新教学初始档未保存。")}
                 try writer(data,current);guard try read(current)==data else{throw ExamError.invalid("新教学当前档未保存。")}
                 hash=StudySHA256.hex(data);engine=fresh
@@ -49,9 +54,18 @@ import StudyCore
     func open(_ id:String,now:Date=Date()){change{try $0.open(id,now:now)}}
     func readNext(_ id:UUID){change{try $0.readNext(token:id)}}
     func hint(_ id:UUID){change{try $0.hint(token:id)}}
-    func answer(_ answer:String,token:UUID){change{try $0.answer(answer,token:token)}}
+    func answer(_ answer:String,token:UUID){
+        guard engine?.current?.id==token,let q=engine?.check else{return}
+        guard q.accepts(answer) else{error=q.type=="number" ? "请填写有限数值和题目要求的单位。":"请先选择完整答案。";return}
+        error=nil;change{try $0.answer(answer,token:token)}
+    }
     func finish(_ id:UUID){change{try $0.finish(token:id)}}
     func explain(){change{try $0.explainAgain()}}
+    func repairPrerequisite(_ id:String){change{try $0.repairPrerequisite(id)}}
+    func practiceAgain(){change{if let id=$0.current?.pointID{try $0.open(id,review:true)}}}
+    func errorNote(_ tag:String,token:UUID){change{try $0.noteError(tag,token:token)}}
+    func saveDraft(_ text:String,token:UUID){change{try $0.saveDraft(text,token:token)}}
+    func lessonPage(_ page:Int){change{try $0.lessonPage(page)}}
     func next(){change{try $0.next()}}
     func deferCurrent(){change{try $0.deferCurrent()}}
     func reference(){change{try $0.reference()}}
@@ -59,7 +73,10 @@ import StudyCore
         guard !blocked,var next=engine else{return}
         do {
             guard StudySHA256.hex(try read(current))==hash else{throw ExamError.invalid("另一页面已保存新记录，请重新打开；不会覆盖。")}
-            try body(&next);let bytes=try encode(next.record)
+            try next.ingest(KnowledgeExposureLedger.read(course:course,baseDirectory:root.deletingLastPathComponent().deletingLastPathComponent()))
+            try body(&next)
+            _=try KnowledgeLearningEngine(course:course,record:next.record)
+            let bytes=try encode(next.record)
             guard StudySHA256.hex(bytes) != hash else{return}
             try writer(bytes,current);guard try read(current)==bytes else{throw ExamError.invalid("本次记录未完整落盘。")}
             hash=StudySHA256.hex(bytes);engine=next

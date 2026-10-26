@@ -123,7 +123,7 @@ final class ConceptStore: ObservableObject {
             let header = try JSONDecoder().decode(Header.self, from: input)
             let bytes: Data
             let importedTeaching: ConceptTeaching?
-            if ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5", "xkl-course-v6"].contains(header.format) {
+            if ["xkl-course-v1", "xkl-course-v2", "xkl-course-v3", "xkl-course-v4", "xkl-course-v5", "xkl-course-v6", "xkl-course-v7"].contains(header.format) {
                 let (course, _) = try ConceptCourse.load(input, subject: subject)
                 bytes = course.bankContent
                 importedTeaching = course.teaching

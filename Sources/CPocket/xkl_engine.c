@@ -1,7 +1,12 @@
 #include "include/xkl_engine.h"
 #include "internal/pocket_word_recording.h"
+#include "internal/pocket_review_intervals.h"
 #include <stdlib.h>
 #include <string.h>
+
+uint16_t xkl_word_review_interval_days(uint32_t level) {
+    return pocket_review_interval_days(level);
+}
 
 #define SNAP_MAGIC UINT32_C(0x534c4b58)
 #define SNAP_VERSION 1u
