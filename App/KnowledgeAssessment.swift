@@ -7,6 +7,10 @@ struct KnowledgeStepScore:Codable,Equatable {
 }
 
 extension KnowledgeCourse.Point {
+    func inheritedPriorityTitles(_ values:[ProfessionalCardPriority])->[String] {
+        let linked=values.filter{legacyEvidenceCardIDs.contains($0.cardID)}
+        return ["priority","regular","extension"].compactMap{level in linked.first{$0.level==level}?.title}
+    }
     var allChecks:[KnowledgeCourse.Check]{checks+(retiredChecks ?? [])}
     var lessonPageCount:Int{sections.count+2}
     var requiredSkillIDs:[String]{skills?.map(\.id) ?? [id]}

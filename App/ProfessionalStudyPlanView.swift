@@ -882,7 +882,7 @@ struct ProfessionalPriorityPreview: View {
                 } else if fixture.selectedCase == "knowledge-recall" {
                     ProfessionalRecallView(subject:fixture.subject,bank:bank,teaching:teaching,baseDirectory:fixture.root)
                 } else if fixture.selectedCase.hasPrefix("knowledge-"),let course=teaching.knowledgeCourse {
-                    KnowledgeLearningView(course:course,baseDirectory:fixture.root)
+                    KnowledgeLearningView(course:course,baseDirectory:fixture.root,priorities:teaching.cardPriorities ?? [])
                 } else if fixture.selectedCase == "unified-home" {
                     ConceptView(store:fixture.store,practicing:.constant(false),recalling:.constant(false))
                 } else if fixture.selectedCase == "unified-assisted-resume" {

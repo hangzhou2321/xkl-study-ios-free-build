@@ -51,6 +51,7 @@ struct ProfessionalRecallView: View {
                         VStack(alignment:.leading,spacing:18) {
                             Text(item.conceptTitle).font(.subheadline).foregroundStyle(.secondary)
                             if let priority=priority(item.card) { ProfessionalCardPriorityLabel(value:priority) }
+                            else if let point=teaching.knowledgeCourse?.point(item.card.id),!point.inheritedPriorityTitles(teaching.cardPriorities ?? []).isEmpty{Text("关联原标注："+point.inheritedPriorityTitles(teaching.cardPriorities ?? []).joined(separator:"、")+" · 非考频").font(.caption).foregroundStyle(.secondary)}
                             Text(item.card.prompt).font(.title2.weight(.semibold)).textSelection(.enabled)
                                 .accessibilityIdentifier("professional-recall-prompt")
                             if presentation.revealed {

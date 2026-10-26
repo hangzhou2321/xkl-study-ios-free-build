@@ -4,6 +4,7 @@ import StudyCore
 
 struct KnowledgeLearningView:View {
     let course:KnowledgeCourse
+    let priorities:[ProfessionalCardPriority]
     var baseDirectory:URL?=nil
     @StateObject private var store:KnowledgeLearningStore
     @State private var outline=false
@@ -16,8 +17,8 @@ struct KnowledgeLearningView:View {
     @State private var draftTask:Task<Void,Never>?
     @State private var inputToken:UUID?
     @Environment(\.scenePhase) private var scenePhase
-    init(course:KnowledgeCourse,baseDirectory:URL?=nil) {
-        self.course=course;self.baseDirectory=baseDirectory
+    init(course:KnowledgeCourse,baseDirectory:URL?=nil,priorities:[ProfessionalCardPriority]=[]) {
+        self.course=course;self.baseDirectory=baseDirectory;self.priorities=priorities
         _store=StateObject(wrappedValue:KnowledgeLearningStore(course:course,baseDirectory:baseDirectory))
     }
     var body:some View {
@@ -28,6 +29,7 @@ struct KnowledgeLearningView:View {
                     if let p=engine.current,let point=engine.displayPoint {
                         Text(engine.check?.purpose=="mixed" && p.phase != "lesson" ? "组合问题":point.title).font(p.phase=="question" || p.phase=="feedback" ? .headline:.title2.bold()).accessibilityIdentifier("knowledge-point-title")
                         if p.phase=="lesson" || p.phase=="complete"{Text(point.goal).font(.subheadline).foregroundStyle(.secondary)}
+                        if p.phase=="lesson",!point.inheritedPriorityTitles(priorities).isEmpty{Text("关联原标注："+point.inheritedPriorityTitles(priorities).joined(separator:"、")+" · 学习优先级，非考频").font(.caption).foregroundStyle(.secondary)}
                         content(engine,p,point)
                         Button("讲义、基础题与强化题对应") {store.reference();references=true}
                             .buttonStyle(.bordered).accessibilityIdentifier("knowledge-source-mapping")
@@ -208,6 +210,7 @@ struct KnowledgeLearningView:View {
             ForEach(course.points){point in
                 Button{store.open(point.id);outline=false}label:{
                     VStack(alignment:.leading,spacing:5){Text(point.title);Text(store.engine?.reviewPassed(point.id)==true ? "有独立检验证据，仍会到期复核":(store.engine?.trainedDay(point.id) != nil ? "方法练习已完成，待独立检验":"方法小节仍待练习")).font(.caption).foregroundStyle(.secondary)}
+                    if !point.inheritedPriorityTitles(priorities).isEmpty{Text("原标注："+point.inheritedPriorityTitles(priorities).joined(separator:"、")).font(.caption).foregroundStyle(.secondary)}
                 }
             }
             NavigationLink("查看全部基础／强化题对应与待校勘项"){KnowledgeSourcesView(course:course,baseDirectory:baseDirectory)}
