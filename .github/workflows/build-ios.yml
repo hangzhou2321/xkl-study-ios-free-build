@@ -24,6 +24,7 @@ jobs:
           assert not any(Path(p).exists() for p in forbidden), 'Private content must be imported on the phone, not uploaded'
           assert not list(Path('.').rglob('*.xklcontent')), 'Private import packages must stay local'
           assert not list(Path('.').rglob('*.xklquestions')), 'Question bank packages must stay local'
+          assert not list(Path('.').rglob('*.xklqbank')), 'Professional original-question packages must stay local'
           assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
           assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
           assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
@@ -54,6 +55,7 @@ jobs:
           assert not any(Path(p).exists() for p in forbidden), 'Private content must be imported on the phone, not uploaded'
           assert not list(Path('.').rglob('*.xklcontent')), 'Private import packages must stay local'
           assert not list(Path('.').rglob('*.xklquestions')), 'Question bank packages must stay local'
+          assert not list(Path('.').rglob('*.xklqbank')), 'Professional original-question packages must stay local'
           assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
           assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
           assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
@@ -63,12 +65,12 @@ jobs:
           assert not list(Path('.').rglob('*math-guide*.json')), 'Private math guide payloads must stay local'
           assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
           PY
-      - name: Capture native synthetic math experience v2 previews
-        run: python3 tools/capture_math_reader_previews.py
+      - name: Capture native synthetic original-question previews
+        run: python3 tools/capture_professional_question_previews.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: math-experience-v2-native-simulator-previews
-          path: build/math-experience-previews/
+          name: professional-question-native-simulator-previews
+          path: build/professional-question-previews/
           if-no-files-found: error
           retention-days: 3

@@ -10,6 +10,8 @@ struct ProfessionalCoursesView: View {
     @Binding var recalling: Bool
     var onStart: () -> Void = {}
     var onOverlayChanged: (Bool) -> Void = { _ in }
+    var objectiveComputer: ProfessionalQuestionStore? = nil
+    var objectivePower: ProfessionalQuestionStore? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,8 +26,10 @@ struct ProfessionalCoursesView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
-            ConceptView(store: subject == .computer ? computer : power,
-                        practicing: $practicing, recalling: $recalling, onStart: onStart, onOverlayChanged: onOverlayChanged)
+            ProfessionalQuestionView(subject: subject, injectedStore: subject == .computer ? objectiveComputer : objectivePower,
+                                     legacyStore: subject == .computer ? computer : power,
+                                     practicing: $practicing, recalling: $recalling,
+                                     onStart: onStart, onOverlayChanged: onOverlayChanged)
                 .id(subject.rawValue)
         }
     }

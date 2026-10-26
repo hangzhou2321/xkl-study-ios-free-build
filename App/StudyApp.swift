@@ -8,7 +8,9 @@ import StudyCore
 struct StudyApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--professional-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--professional-question-preview") {
+                ProfessionalQuestionPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--professional-preview") {
                 ProfessionalPriorityPreview()
             } else if ProcessInfo.processInfo.arguments.contains("--math-experience-preview") {
                 MathExperiencePreview()
@@ -63,6 +65,8 @@ struct RootView: View {
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var math: MathStore
     @ObservedObject var mathExperience: MathExperienceStore
+    @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
+    @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @State private var importing = false
     @State private var selectedTab = 5
     @State private var examPracticing = false
@@ -78,6 +82,7 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             StudyHomeView(store: store, exams: exams, computer: concepts, power: power,
+                          professionalComputer: professionalComputer, professionalPower: professionalPower,
                           flow: flow, launch: launch)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
@@ -93,7 +98,8 @@ struct RootView: View {
             ProfessionalCoursesView(computer: concepts, power: power, subject: $subject,
                                     practicing: $professionalPracticing, recalling: $professionalRecalling,
                                     onStart: { began(subject == .computer ? .computer : .power) },
-                                    onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() })
+                                    onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() },
+                                    objectiveComputer: professionalComputer, objectivePower: professionalPower)
                 .disabled(flow.state.activeArea == (subject == .computer ? StudyArea.computer : .power)
                           && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
@@ -192,10 +198,9 @@ struct RootView: View {
     private var currentPracticeArea: StudyArea? {
         if selectedTab == 0, store.sessionStarted, store.currentWord != nil { return .vocabulary }
         if selectedTab == 3, examPracticing, exams.currentQuestion != nil { return .publicQuestions }
-        if selectedTab == 4, professionalRecalling { return subject == .computer ? .computer : .power }
         if selectedTab == 4, professionalPracticing {
-            let selected = subject == .computer ? concepts : power
-            if selected.engine?.shown != nil { return subject == .computer ? .computer : .power }
+            let selected = subject == .computer ? professionalComputer : professionalPower
+            if selected.engine?.presentation != nil { return subject == .computer ? .computer : .power }
         }
         return nil
     }
@@ -220,11 +225,17 @@ struct RootView: View {
             guard exams.error == nil else { selectedTab = 3; return }
             examPracticing = true
         case .computer, .power:
-            let target = area == .computer ? concepts : power
+            let target = area == .computer ? professionalComputer : professionalPower
             subject = area == .computer ? .computer : .power
-            guard target.engine != nil, target.teaching?.studyPlan != nil, !target.blocked else { selectedTab = 4; return }
-            professionalPracticing = false
-            professionalRecalling = true
+            professionalRecalling = false
+            guard target.engine != nil, !target.blocked else {
+                professionalPracticing = false
+                selectedTab = 4
+                return
+            }
+            target.start()
+            guard target.error == nil, !target.blocked else { selectedTab = 4; return }
+            professionalPracticing = true
         }
         flow.begin(area: area, mode: mode)
         guard flow.error == nil, flow.state.activeArea == area else { selectedTab = 5; return }

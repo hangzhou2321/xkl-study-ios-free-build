@@ -7,6 +7,8 @@ struct StudyHomeView: View {
     @ObservedObject var exams: ExamStore
     @ObservedObject var computer: ConceptStore
     @ObservedObject var power: ConceptStore
+    @ObservedObject var professionalComputer: ProfessionalQuestionStore
+    @ObservedObject var professionalPower: ProfessionalQuestionStore
     @ObservedObject var flow: StudyFlowStore
     var launch: (StudyArea, StudySegmentMode) -> Void
     @State private var selectedArea: StudyArea = .vocabulary
@@ -40,7 +42,7 @@ struct StudyHomeView: View {
                         Button {
                             launch(selectedArea, continueMode)
                         } label: {
-                            Label(selectedArea == .computer || selectedArea == .power ? (knowledgeMode(selectedArea) ? "继续学习":"继续背卡") : (hasSavedPosition(selectedArea) ? "接着学" : "开始学习"), systemImage: "play.fill")
+                            Label(primaryActionTitle(selectedArea), systemImage: "play.fill")
                                 .frame(maxWidth: .infinity, minHeight: 42)
                         }.buttonStyle(.borderedProminent).disabled(!available(selectedArea))
                         Button {
@@ -58,7 +60,8 @@ struct StudyHomeView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("保留原来的学习节奏").font(.headline)
-                        Text("单词每课仍是 25 个新词，允许分段完成；到期复习不设总量上限。计算机与电力系统进入必学背卡主线，主卡和必要补卡自动衔接。")
+                        Text("单词每课仍是 25 个新词，允许分段完成；到期复习不设总量上限。计算机与电力系统直接做基础、强化原题，按所给参考答案判对错。")
+                        Text("专业原题答错隔天再测，答对至少隔 3 天；同题不在本轮立即重现，提前参考过答案会单独记录。")
                         Text("暂停只保存断点，不算答对、不推迟到期，也不清空剩余任务。")
                     }.font(.subheadline).foregroundStyle(.secondary)
 
@@ -89,8 +92,8 @@ struct StudyHomeView: View {
         switch area {
         case .vocabulary: return store.deck != nil && store.canLearn
         case .publicQuestions: return exams.bank != nil && !exams.storageBlocked
-        case .computer: return computer.engine != nil && computer.teaching?.knowledgeCourse != nil && !computer.blocked
-        case .power: return power.engine != nil && power.teaching?.knowledgeCourse != nil && !power.blocked
+        case .computer: return !professionalComputer.blocked
+        case .power: return !professionalPower.blocked
         }
     }
 
@@ -98,13 +101,16 @@ struct StudyHomeView: View {
         switch area {
         case .vocabulary: return store.info.has_task != 0
         case .publicQuestions: return exams.currentQuestion != nil || exams.isShowingResult
-        case .computer: return computer.teaching?.studyPlan != nil
-        case .power: return power.teaching?.studyPlan != nil
+        case .computer: return professionalComputer.engine?.presentation != nil
+        case .power: return professionalPower.engine?.presentation != nil
         }
     }
 
     private func resumeDescription(_ area: StudyArea) -> String {
-        guard available(area) else { return "先到对应科目导入内容" }
+        guard available(area) else {
+            return area == .computer || area == .power
+                ? "专业原题记录保护中，请到专业课页查看提示" : "先到对应科目导入内容"
+        }
         switch area {
         case .vocabulary:
             if store.info.has_task != 0, let deck = store.deck,
@@ -116,7 +122,10 @@ struct StudyHomeView: View {
             if exams.isShowingResult { return "继续查看刚才的答案与解析" }
             return exams.currentQuestion != nil ? "继续刚才的题，已选选项保留" : "先复习，再做新题"
         case .computer, .power:
-            return knowledgeMode(area) ? "按知识点学习 · 先讲懂，再诊断":"继续必学背卡 · 自动保存与续学"
+            let target = area == .computer ? professionalComputer : professionalPower
+            guard let engine = target.engine else { return "先导入本科目的基础、强化原题" }
+            if engine.result != nil { return "继续查看刚才的答案与解析" }
+            return engine.presentation != nil ? "继续刚才的原题，已选选项保留" : "先复测到期原题，再做新题"
         }
     }
 
@@ -131,14 +140,17 @@ struct StudyHomeView: View {
                 ? "当前任务待复习 \(exams.reviewRemaining) 题，可分段完成"
                 : "今天到期 \(exams.dueTodayCount) 题，开始后优先复习"
         case .computer, .power:
-            let target = area == .computer ? computer : power
-            if let course=target.teaching?.knowledgeCourse {return "\(course.points.count) 个知识点；新诊断与记忆复习分别记录，旧卡已归档"}
-            guard let plan = target.teaching?.studyPlan else { return "" }
-            let count = plan.mainlineCardIDs.count + plan.supplementSelections.reduce(0) { $0 + $1.mainlineCardIDs.count }
-            return "必学 \(count) 张；进入后显示已学、到期和本轮进度"
+            let target = area == .computer ? professionalComputer : professionalPower
+            guard let engine = target.engine else { return "进入专业课页，导入手机中已准备的原题题库" }
+            let stats = engine.stats(on: Date())
+            return "主线 \(stats.total) 题 · 已作答 \(stats.answered) · 到期 \(stats.due) · 未做 \(stats.unseen)"
         }
     }
-    private func knowledgeMode(_ area:StudyArea)->Bool {
-        (area == .computer && computer.teaching?.knowledgeCourse != nil) || (area == .power && power.teaching?.knowledgeCourse != nil)
+    private func primaryActionTitle(_ area: StudyArea) -> String {
+        if area == .computer || area == .power {
+            let target = area == .computer ? professionalComputer : professionalPower
+            return target.engine == nil ? "导入原题" : "继续做题"
+        }
+        return hasSavedPosition(area) ? "接着学" : "开始学习"
     }
 }
