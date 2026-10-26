@@ -733,22 +733,27 @@ import UIKit
                         expectedKnowledgeAnswers=1;expectedKnowledgePhase="question"
                     } else {
                         if ["knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair"].contains(selectedCase) {
-                            learning.lessonPage(2)
-                            if selectedCase != "knowledge-checkpoint",let token=learning.engine?.current?.id {
-                                learning.readNext(token);expectedKnowledgePhase="question"
-                                if selectedCase == "knowledge-number",let question=learning.engine?.current{learning.saveDraft("2",token:question.id)}
-                                if selectedCase == "knowledge-multiple",let question=learning.engine?.current {
-                                    learning.answer("4h",token:question.id);learning.finish(question.id)
+                            // Prepare the synthetic history with production transitions,
+                            // then cold-open one durable archive. UI readiness does not
+                            // measure a sequence of fixture-only fsync operations.
+                            var adaptive=learning.engine!;try adaptive.lessonPage(2)
+                            if selectedCase != "knowledge-checkpoint",let token=adaptive.current?.id {
+                                try adaptive.readNext(token:token);expectedKnowledgePhase="question"
+                                if selectedCase == "knowledge-number",let question=adaptive.current{try adaptive.saveDraft("2",token:question.id)}
+                                if selectedCase == "knowledge-multiple",let question=adaptive.current {
+                                    try adaptive.answer("4h",token:question.id);try adaptive.finish(token:question.id)
                                     var steps=0
-                                    while let p=learning.engine?.current,p.phase=="lesson",steps<12{learning.readNext(p.id);steps+=1}
-                                    learning.practiceAgain();expectedKnowledgeAnswers=1
-                                    precondition(learning.engine?.check?.type=="multiple","Adaptive fixture must show the real multiple response UI")
+                                    while let p=adaptive.current,p.phase=="lesson",steps<12{try adaptive.readNext(token:p.id);steps+=1}
+                                    try adaptive.open(adaptive.current!.pointID,review:true);expectedKnowledgeAnswers=1
+                                    precondition(adaptive.check?.type=="multiple","Adaptive fixture must show the real multiple response UI")
                                 }
-                                if selectedCase == "knowledge-repair",let question=learning.engine?.current {
-                                    learning.answer("36h",token:question.id);learning.finish(question.id);expectedKnowledgePhase="lesson";expectedKnowledgeAnswers=1
-                                    precondition(learning.engine?.current?.page==2,"Wrong calculation must return to its exact method")
+                                if selectedCase == "knowledge-repair",let question=adaptive.current {
+                                    try adaptive.answer("36h",token:question.id);try adaptive.finish(token:question.id);expectedKnowledgePhase="lesson";expectedKnowledgeAnswers=1
+                                    precondition(adaptive.current?.page==2,"Wrong calculation must return to its exact method")
                                 }
                             }
+                            _=try KnowledgeLearningEngine(course:knowledge,record:adaptive.record)
+                            try DurableFile.write(JSONEncoder().encode(adaptive.record),to:root.appendingPathComponent("KnowledgeLearning/"+subject.rawValue+"/current.json"))
                         }
                         if selectedCase == "knowledge-example" {
                             for _ in 0..<2 {if let p=learning.engine?.current{learning.readNext(p.id)}}
