@@ -18,6 +18,7 @@ import StudyCore
         let ids=Array(Set(pointIDs)).sorted();if ids.isEmpty{return nil}
         guard Set(ids).isSubset(of:Set(course.points.map(\.id))),["source","recall","lesson","hint"].contains(kind),
               now.timeIntervalSinceReferenceDate.isFinite,!reference.isEmpty,reference.count<=400 else{throw ExamError.invalid("资料查阅身份无效。")}
+        guard now >= (try read(course:course,baseDirectory:baseDirectory).map(\.at).max() ?? now) else{throw ExamError.invalid("日期早于已有查阅事实，原记录保留。")}
         let parent=root(course.subject,baseDirectory:baseDirectory),current=parent.appendingPathComponent("current.json")
         if FileManager.default.fileExists(atPath:current.path) {
             let prior=try JSONDecoder().decode(KnowledgeLearningRecord.self,from:Data(contentsOf:current))

@@ -27,7 +27,7 @@ final class KnowledgeAdaptiveTests:XCTestCase {
     func testUnindexedContinuationPageStillRecordsDocumentHelpInsteadOfBypassingIt() {
         let c=course()
         XCTAssertEqual(Set(c.affectedPoints(documentID:"synthetic",page:99)),Set(c.points.map(\.id)))
-        XCTAssertEqual(c.affectedPoints(documentID:"synthetic",page:1),[c.points[0].id])
+        XCTAssertEqual(Set(c.affectedPoints(documentID:"synthetic",page:1)),Set(c.points.map(\.id))) // The page's mapped composite question also exposes point two.
     }
     func testV2InlineNumberThenMultipleAndTransferRequireSeparateColdEvidence()throws {
         let c=KnowledgeCourse.adaptiveSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
@@ -62,6 +62,38 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         XCTAssertTrue(try XCTUnwrap(e.current).assisted)
         let p=e.current!,q=e.check!;try e.answer(q.answerID,token:p.id,now:date(day).addingTimeInterval(7200))
         XCTAssertFalse(e.reviewPassed(id));XCTAssertEqual(e.record.events.first(where:{$0.presentationID==p.id && $0.kind=="answer"})?.assisted,true)
+    }
+    func testOpeningTooEarlyThenWaitingDoesNotAcquireDelayedEligibility()throws {
+        var e=try KnowledgeLearningEngine.fresh(course());try train(&e,at:date(day));let id=e.point!.id
+        let opened=date(day).addingTimeInterval(7200);try e.open(id,review:true,now:opened)
+        let p=e.current!;XCTAssertEqual(p.shownAt,opened);XCTAssertEqual(p.eligibleAtShow,false)
+        try e.start(now:date(day+2));XCTAssertEqual(e.current?.shownAt,opened)
+        try e.answer(e.check!.answerID,token:p.id,now:date(day+2))
+        let a=e.record.events.last{$0.kind=="answer"}!
+        XCTAssertTrue(a.assisted);XCTAssertEqual(a.eligibleAtShow,false);XCTAssertFalse(e.reviewPassed(id))
+        _=try KnowledgeLearningEngine(course:course(),record:e.record)
+    }
+    func testHelpDuringAttemptCannotExpireWhileQuestionRemainsOpen()throws {
+        var e=try KnowledgeLearningEngine.fresh(course());try train(&e,at:date(day));let id=e.point!.id
+        try e.open(id,review:true,now:date(day+2));let p=e.current!
+        try e.ingest([.init(id:UUID(),courseID:course().id,at:date(day+2).addingTimeInterval(1),pointIDs:[id],kind:"source",reference:"synthetic/1")])
+        try e.answer(e.check!.answerID,token:p.id,now:date(day+4))
+        XCTAssertTrue(e.record.events.last{$0.kind=="answer"}!.assisted)
+        _=try KnowledgeLearningEngine(course:course(),record:e.record)
+    }
+    func testDisplayWithoutAnswerConsumesNoveltyAndExhaustedPoolDoesNotInventTransfer()throws {
+        var e=try KnowledgeLearningEngine.fresh(course());try train(&e,at:date(day));let id=e.point!.id
+        try e.open(id,review:true,now:date(day));let first=e.check!.id
+        XCTAssertEqual(e.current?.familiarity,"unseen-in-app")
+        try e.open(id,review:true,now:date(day));XCTAssertNotEqual(e.check?.id,first)
+        let exposed=e.check!.id;XCTAssertEqual(e.current?.familiarity,"unseen-in-app")
+        try e.answer(e.check!.answerID,token:e.current!.id,now:date(day));try e.finish(token:e.current!.id,now:date(day))
+        XCTAssertTrue(e.unseenTransferPoolEmpty(id))
+        try e.open(id,review:true,now:date(day+2));XCTAssertEqual(e.check?.id,first);XCTAssertEqual(e.current?.familiarity,"seen-question")
+        try e.answer(e.check!.answerID,token:e.current!.id,now:date(day+2));try e.finish(token:e.current!.id,now:date(day+2))
+        try e.start(now:date(day+3));XCTAssertEqual(e.check?.id,exposed);XCTAssertEqual(e.current?.familiarity,"seen-answer")
+        try e.answer(e.check!.answerID,token:e.current!.id,now:date(day+3));XCTAssertFalse(e.reviewPassed(id));XCTAssertEqual(e.reviewStatus(id)?.hasTransfer,false)
+        _=try KnowledgeLearningEngine(course:course(),record:e.record)
     }
     func testReturningToOldQuestionAfterPrerequisiteReadingRefreshesHelpBeforeGrade()throws {
         var e=try KnowledgeLearningEngine.fresh(course());try train(&e,at:date(day));let parent=try XCTUnwrap(e.point?.id)

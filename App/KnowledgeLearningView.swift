@@ -103,8 +103,8 @@ struct KnowledgeLearningView:View {
             Button("这会儿先学其他知识点"){store.deferCurrent()}.font(.subheadline)
         } else if let q=engine.check,p.phase=="question" || p.phase=="feedback" {
             Text(p.mode=="review" ? (p.assisted ? "复核练习 · 本次已有帮助":"独立检验 · 未记录App内帮助"):"补步骤／方法练习 · 不冒充独立成绩").font(.headline)
-            if let id=q.skillID,let skill=point.skills?.first(where:{$0.id==id}){Text("本题方法："+skill.title).font(.subheadline).foregroundStyle(.secondary)}
-            Text(engine.encounterCount(q.id)==0 ? "这是本题首次作答。":"此前本题已作答\(engine.encounterCount(q.id))次；这次用于练习或保持复核。")
+            if point.purpose(q)=="guided",p.mode != "review",let id=q.skillID,let skill=point.skills?.first(where:{$0.id==id}){Text("练习方法："+skill.title).font(.subheadline).foregroundStyle(.secondary)}
+            Text(familiarity(p))
                 .font(.caption).foregroundStyle(.secondary)
             Text(q.prompt).font(.system(size:24).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
             if q.type=="number" {
@@ -136,7 +136,7 @@ struct KnowledgeLearningView:View {
                     .font(.headline).foregroundStyle(correct ? .green:.orange)
                 if let response=p.selectedID,q.feedback(response) != q.explanation{Text(q.feedback(response)).font(.system(size:22))}
                 Text(q.explanation).font(.system(size:22)).accessibilityIdentifier("knowledge-check-feedback")
-                Text(p.assisted ? "本次按有帮助练习保存，不计独立检验。":"本次未记录相关App内帮助，且与学习或相关帮助至少间隔24小时；只代表本题表现。")
+                Text(p.assisted ? "本次按练习保存：可能刚学过、提前打开或使用过帮助，不计合格延迟检验。":"延迟资格在本题首次展示时已满足；此后未记录相关App内帮助。这里只说明本题表现，已见题保持不冒充未见迁移。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button(correct ? "保存了，继续":"回到讲解，拆小一步再学"){store.finish(p.id)}.buttonStyle(.borderedProminent)
                 if !correct {
@@ -155,7 +155,8 @@ struct KnowledgeLearningView:View {
             Text("这不是整套基础或强化题的掌握保证。可查看本知识点关联的原题，组合题还要一起用到其他知识点。")
             Button("继续下一个知识点"){store.next()}.buttonStyle(.borderedProminent)
             Button("再读一次这个知识点"){store.explain()}
-            Button("再练一道（看过帮助会按练习记录）"){store.practiceAgain()}
+            Button("再练一道（提前打开会成为已见练习题）"){store.practiceAgain()}
+            if engine.unseenTransferPoolEmpty(point.id){Text("本点暂缺App内尚未展示的变式。仍可继续已见题保持或学习其他知识，不能据此新增未见迁移通过。").font(.footnote).foregroundStyle(.secondary)}
             if let status=engine.reviewStatus(point.id) {
                 Text("下次独立复核：\(status.dueAt.formatted(date:.numeric,time:.shortened)) · 当前复核级别\(status.level)")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -187,6 +188,15 @@ struct KnowledgeLearningView:View {
     }
     private func saveDraft(_ p:KnowledgePresentation) {
         store.saveDraft(store.engine?.check?.type=="multiple" ? selectedChoices.sorted().joined(separator:"|"):numberInput,token:p.id)
+    }
+    private func familiarity(_ p:KnowledgePresentation)->String {
+        switch p.familiarity {
+        case "unseen-in-app":return "本次首次展示前，App没有本题的展示记录；外部是否见过未知。"
+        case "seen-answer":return "已见题与反馈：本次可检验保持，不冒充未见迁移。"
+        case "seen-question":return "此前已经展示过本题；即使没有提交，也不再算App内未见题。"
+        case "source-exposed":return "本题所在资料页已有查阅记录，熟悉度不能算未见。"
+        default:return "本题旧展示历史不完整，熟悉度标为未知，保留原记录。"
+        }
     }
 }
 
