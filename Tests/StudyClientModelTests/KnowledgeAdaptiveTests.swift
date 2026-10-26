@@ -94,11 +94,65 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         let multi=try JSONDecoder().decode(KnowledgeCourse.Check.self,from:JSONSerialization.data(withJSONObject:o));try multi.validateResponse()
         XCTAssertTrue(multi.correct("C|A"));XCTAssertFalse(multi.correct("A"));XCTAssertFalse(multi.correct("A|B|C"));XCTAssertFalse(multi.accepts("A|A"))
     }
+    func testRealV1ShapeMigratesWithoutConvertingOldGradesOrReplacingVisibleQuestion()throws {
+        let original=course(),point=original.points[0],token=UUID(),q=point.checks[1]
+        let mark=KnowledgePresentation(id:token,pointID:point.id,phase:"question",page:point.sections.count+1,checkIndex:1,order:Array(q.choices.map(\.id).reversed()),assisted:false,hintVisible:false,selectedID:nil)
+        let event=KnowledgeLearningEvent(id:UUID(),sequence:1,day:day,at:date(day),kind:"answer",pointID:point.id,presentationID:UUID(),checkID:point.checks[0].id,selectedID:point.checks[0].answerID,correct:true,assisted:true)
+        let old=KnowledgeLearningRecord(format:"knowledge-learning-v1",subject:original.subject,courseID:original.id,pointIDs:original.points.map(\.id),pointDigests:try Dictionary(uniqueKeysWithValues:original.points.map{($0.id,try KnowledgeLearningEngine.digest($0))}),currentID:point.id,bookmarks:[point.id:mark],events:[event],deferredIDs:[])
+        let updated=try edit(original){o in
+            o["format"]="knowledge-course-v2";var points=o["points"] as! [[String:Any]]
+            for i in points.indices {
+                let prior=points[i]["checks"] as! [[String:Any]],sections=points[i]["sections"] as! [[String:Any]]
+                points[i]["legacyBaseline"]=["checks":prior,"sectionCount":sections.count]
+                points[i]["retiredChecks"]=prior;points[i]["skills"]=[["id":"new-method-\(i)","title":"New method","lessonSectionID":"section-0"]]
+                points[i]["checks"]=prior.enumerated().map{n,q -> [String:Any] in var q=q;q["id"]=(q["id"] as! String)+"-v2";q["skillID"]="new-method-\(i)";q["purpose"]=n==0 ? "guided":(n==1 ? "independent":"transfer");return q}
+                points[i]["sections"]=sections+[["title":"A new worked method","body":"A complete explanation"]]
+            };o["points"]=points
+        }
+        let migrated=try KnowledgeLearningEngine.appending(old,to:updated),restored=try KnowledgeLearningEngine(course:updated,record:migrated)
+        XCTAssertEqual(migrated.events,old.events);XCTAssertEqual(migrated.pointDigests,old.pointDigests)
+        XCTAssertEqual(restored.current?.id,token);XCTAssertEqual(restored.current?.order,mark.order);XCTAssertEqual(restored.check,q)
+        XCTAssertEqual(restored.current?.page,mark.page+1);XCTAssertNil(restored.trainedAt(point.id));XCTAssertFalse(restored.reviewPassed(point.id))
+        XCTAssertEqual(try KnowledgeLearningEngine.appending(migrated,to:updated),migrated)
+    }
+    func testDraftAndWrongAnswerRepairSectionSurviveColdResume()throws {
+        let c=try edit(course()){o in
+            var points=o["points"] as! [[String:Any]],checks=points[0]["checks"] as! [[String:Any]],choices=checks[0]["choices"] as! [[String:Any]]
+            choices[1]["repairSectionID"]="section-1";choices[1]["errorTag"]="conditions";checks[0]["choices"]=choices;points[0]["checks"]=checks;o["points"]=points
+        }
+        var e=try KnowledgeLearningEngine.fresh(c);try e.start(now:date(day));try read(&e,at:date(day));let p=e.current!
+        try e.saveDraft("B",token:p.id);e=try KnowledgeLearningEngine(course:c,record:e.record);XCTAssertEqual(e.current?.draftResponse,"B")
+        try e.answer(e.check!.choices[1].id,token:p.id,now:date(day));try e.finish(token:p.id,now:date(day))
+        XCTAssertEqual(e.current?.phase,"lesson");XCTAssertEqual(e.current?.page,1)
+        XCTAssertEqual(e.record.events.last(where:{$0.kind=="answer"})?.errorTag,"conditions")
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
 }
 
 #if os(macOS)
 final class KnowledgeUpgradeStoreTests:XCTestCase {
     private func root()throws->URL{let u=FileManager.default.temporaryDirectory.appendingPathComponent("knowledge-upgrade-"+UUID().uuidString);try FileManager.default.createDirectory(at:u,withIntermediateDirectories:true);return u}
+    @MainActor func testV1MigrationBacksUpExactBytesAndReimportDoesNotRewriteHistory()throws {
+        let r=try root();defer{try? FileManager.default.removeItem(at:r)}
+        let c=KnowledgeCourse.synthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
+        var e=try KnowledgeLearningEngine.fresh(c);try e.start()
+        var object=try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(e.record)) as? [String:Any])
+        object["format"]="knowledge-learning-v1"
+        for key in ["questionVersions","legacyOrder","exposures","returnPoints"]{object.removeValue(forKey:key)}
+        var bookmarks=object["bookmarks"] as! [String:[String:Any]]
+        for id in bookmarks.keys {for key in ["definitionID","mode","resumePage","retrySkillID","draftResponse"]{bookmarks[id]!.removeValue(forKey:key)}}
+        object["bookmarks"]=bookmarks
+        let bytes=try JSONSerialization.data(withJSONObject:object,options:[.sortedKeys,.prettyPrinted])
+        let folder=r.appendingPathComponent("KnowledgeLearning/power"),current=folder.appendingPathComponent("current.json"),initial=folder.appendingPathComponent("initial.json")
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true);try bytes.write(to:initial);try bytes.write(to:current)
+        let store=KnowledgeLearningStore(course:c,baseDirectory:r);XCTAssertFalse(store.blocked,store.error ?? "")
+        XCTAssertEqual(try Data(contentsOf:initial),bytes)
+        XCTAssertEqual(try Data(contentsOf:folder.appendingPathComponent("before-append-"+StudySHA256.hex(bytes)+".json")),bytes)
+        XCTAssertEqual(store.engine?.current?.id,e.current?.id);XCTAssertEqual(store.engine?.record.events,e.record.events)
+        let migrated=try Data(contentsOf:current),again=KnowledgeLearningStore(course:c,baseDirectory:r)
+        XCTAssertFalse(again.blocked,again.error ?? "");XCTAssertEqual(try Data(contentsOf:current),migrated)
+        XCTAssertEqual(try Data(contentsOf:initial),bytes)
+    }
     @MainActor func testGlobalSourceLedgerIsIndependentAndNeverFabricatesQuestionAnswers()throws {
         let r=try root();defer{try? FileManager.default.removeItem(at:r)}
         let c=KnowledgeCourse.synthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[]),store=KnowledgeLearningStore(course:c,baseDirectory:r)

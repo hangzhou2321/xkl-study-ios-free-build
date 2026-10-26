@@ -31,7 +31,7 @@ final class KnowledgeLearningTests:XCTestCase {
         try engine.start(now:date(day+2));let delayed=try XCTUnwrap(engine.current)
         try engine.answer(try XCTUnwrap(engine.check?.answerID),token:delayed.id,now:date(day+2))
         XCTAssertFalse(engine.reviewPassed(id))
-        try engine.finish(delayed.id,now:date(day+2))
+        try engine.finish(token:delayed.id,now:date(day+2))
         try engine.start(now:date(day+3));let transfer=try XCTUnwrap(engine.current)
         XCTAssertNotEqual(transfer.definitionID,delayed.definitionID)
         try engine.answer(try XCTUnwrap(engine.check?.answerID),token:transfer.id,now:date(day+3))
