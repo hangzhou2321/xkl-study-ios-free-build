@@ -118,6 +118,7 @@ struct KnowledgeLearningView:View {
             Text(familiarity(p))
                 .font(.caption).foregroundStyle(.secondary)
             Text(q.prompt).font(.system(size:22).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
+            if p.phase=="question" {
             if q.type=="structured",let steps=q.steps {
                 Text("逐步作答，最后一起提交。").font(.footnote).foregroundStyle(.secondary)
                 ForEach(steps){step in
@@ -145,6 +146,7 @@ struct KnowledgeLearningView:View {
                 }
             }
                 if q.type=="multiple",p.phase=="question"{Button("提交多选答案"){store.answer(selectedChoices.sorted().joined(separator:"|"),token:p.id)}.buttonStyle(.borderedProminent).disabled(inputToken != p.id)}
+            }
             }
             if p.phase=="question" {
                 if p.hintVisible {Text("提示："+(q.hint ?? point.keyFacts.first ?? point.sections[0].body)).font(.system(size:21)).foregroundStyle(.secondary)}

@@ -58,6 +58,19 @@ final class KnowledgeStructuredTests:XCTestCase {
         if e.check?.id==checks[2].id{XCTAssertNotEqual(e.current?.familiarity,"unseen-in-app")}
         _=try KnowledgeLearningEngine(course:c,record:e.record)
     }
+    func testContentRollbackInNewRuntimeRetainsNewAnswersAndPendingProcessDefinition()throws {
+        let c=course();var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day))
+        try e.open(c.points[0].id,review:true,now:date(day+1));let pending=e.current!,question=e.check!
+        try e.saveDraft(question.syntheticCorrectResponse,token:pending.id)
+        let old=KnowledgeCourse.synthetic(subject:c.subject,hash:c.bankSHA256,legacyIDs:[])
+        var rolled=try KnowledgeLearningEngine(course:old,record:KnowledgeLearningEngine.appending(e.record,to:old))
+        XCTAssertEqual(rolled.record.events,e.record.events);XCTAssertEqual(rolled.current,e.current);XCTAssertEqual(rolled.check,question)
+        XCTAssertEqual(rolled.displayPoint?.sections,e.displayPoint?.sections)
+        try rolled.answer(question.syntheticCorrectResponse,token:pending.id,now:date(day+1))
+        let forward=try KnowledgeLearningEngine(course:c,record:KnowledgeLearningEngine.appending(rolled.record,to:c))
+        XCTAssertEqual(forward.record.events,rolled.record.events);XCTAssertEqual(forward.current?.selectedID,question.syntheticCorrectResponse)
+        XCTAssertEqual(forward.record.events.filter{$0.kind=="answer"}.count,3)
+    }
     func testHighScaffoldAloneDoesNotCompleteMethodAndAllStagesColdRestore()throws {
         let c=course();var e=try KnowledgeLearningEngine.fresh(c);try e.start(now:date(day))
         while e.current?.phase=="lesson"{try e.readNext(token:e.current!.id,now:date(day))}
