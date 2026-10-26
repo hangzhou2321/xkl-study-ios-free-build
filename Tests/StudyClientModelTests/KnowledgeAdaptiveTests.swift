@@ -24,6 +24,21 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         XCTAssertEqual((0...10).map{xkl_word_review_interval_days(UInt32($0))},[0,1,2,3,5,7,10,15,30,90,180])
         XCTAssertEqual(xkl_word_review_interval_days(11),0)
     }
+    func testOriginalTypeIsCountedWithoutInventingUnseenTransferOrSeenHistory()throws {
+        let c=try edit(course()){object in
+            var points=object["points"] as! [[String:Any]],checks=points[0]["checks"] as! [[String:Any]]
+            checks[1]["purpose"]="original";checks[1]["originalQuestionID"]="synthetic-basic-1"
+            points[0]["checks"]=checks;object["points"]=points
+        }
+        var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day));let id=try XCTUnwrap(e.point?.id)
+        try e.open(id,review:true,now:date(day+1));XCTAssertEqual(e.check?.purpose,"original")
+        XCTAssertEqual(e.current?.familiarity,"history-unknown")
+        try e.answer(e.check!.answerID,token:e.current!.id,now:date(day+1))
+        XCTAssertEqual(e.evidenceCounts(id)["original"],1);XCTAssertNil(e.evidenceCounts(id)["retention"])
+        XCTAssertFalse(e.reviewStatus(id)?.hasTransfer ?? true);XCTAssertFalse(e.reviewPassed(id))
+        let restored=try KnowledgeLearningEngine(course:c,record:e.record)
+        XCTAssertEqual(restored.evidenceCounts(id),e.evidenceCounts(id));XCTAssertEqual(restored.record.events,e.record.events)
+    }
     func testUnindexedContinuationPageStillRecordsDocumentHelpInsteadOfBypassingIt() {
         let c=course()
         XCTAssertEqual(Set(c.affectedPoints(documentID:"synthetic",page:99)),Set(c.points.map(\.id)))

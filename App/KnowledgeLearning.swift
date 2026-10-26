@@ -549,7 +549,12 @@ struct KnowledgeLearningEngine {
         var counts:[String:Int]=[:]
         for e in record.events where e.pointID==id && e.kind=="answer" && e.correct==true && !e.assisted && e.eligibleAtShow==true {
             guard let q=Self.question(e,in:record) else{continue}
-            let kind=q.evidence=="result" ? "result":(e.familiarity=="unseen-in-app" ? (q.purpose ?? "independent"):"retention")
+            let kind:String
+            if q.purpose=="original"{kind="original"}
+            else if q.evidence=="result"{kind="result"}
+            else if e.familiarity=="unseen-in-app"{kind=q.purpose ?? "independent"}
+            else if ["seen-question","seen-answer"].contains(e.familiarity ?? ""){kind="retention"}
+            else{kind="unknown"}
             counts[kind,default:0]+=1
         }
         return counts

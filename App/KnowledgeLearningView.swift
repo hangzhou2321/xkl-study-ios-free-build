@@ -196,7 +196,9 @@ struct KnowledgeLearningView:View {
             let gaps=engine.independentEvidenceGaps(point.id)
             if !gaps.isEmpty{Text("仍缺可核对过程的独立任务："+gaps.joined(separator:"、")+"。现有最终数值练习不能替代方法证据，可先继续学习其他点。").font(.footnote).foregroundStyle(.secondary)}
             let evidence=engine.evidenceCounts(point.id)
-            Text("符合首次展示延迟与无帮助条件的正确记录：原题 \(evidence["original",default:0]) · 变式 \(evidence["transfer",default:0]) · 组合 \(evidence["mixed",default:0]) · 已见保持 \(evidence["retention",default:0]) · 仅结果 \(evidence["result",default:0])。这些是个人作答记录，不是题库覆盖率。").font(.caption).foregroundStyle(.secondary)
+            let labels=[("original","原题"),("independent","独立小题"),("transfer","换条件"),("mixed","组合"),("retention","已见保持"),("unknown","熟悉度未知"),("result","只核对结果")]
+            let summary=labels.compactMap{key,title -> String? in let count=evidence[key,default:0];return count>0 ? title+" \(count)":nil}.joined(separator:" · ")
+            Text(summary.isEmpty ? "尚无符合延迟与无帮助条件的正确记录。":"符合延迟与无帮助条件的正确记录："+summary+"。原题类型不代表首次见过，次数也不等于掌握或题库覆盖率。").font(.caption).foregroundStyle(.secondary)
             if let status=engine.reviewStatus(point.id) {
                 Text("下次独立复核：\(status.dueAt.formatted(date:.numeric,time:.shortened)) · 当前复核级别\(status.level)")
                     .font(.subheadline).foregroundStyle(.secondary)
