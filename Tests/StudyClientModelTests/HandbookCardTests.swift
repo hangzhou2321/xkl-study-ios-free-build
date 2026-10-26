@@ -41,6 +41,29 @@ final class HandbookCardTests: XCTestCase {
             object["cards"] = cards
         })
     }
+    func testOriginalTableBlankCellsAndUnlabelledHeadersRemainBlank() throws {
+        let pack = try changed(fixture()) { object in
+            var cards = object["cards"] as! [[String: Any]]
+            cards[0]["blocks"] = [
+                ["title": "Synthetic original continuation", "kind": "table", "columns": ["", "", ""],
+                 "rows": [["", "Synthetic original cell", ""], ["Synthetic group", "", "Synthetic value"]], "collapsed": false],
+                ["title": "Synthetic original pair", "kind": "keyValues", "rows": [["", "Synthetic original value"]], "collapsed": true]
+            ];object["cards"] = cards
+        }
+        XCTAssertEqual(pack.cards[0].blocks[0].columns, ["", "", ""])
+        XCTAssertEqual(pack.cards[0].blocks[0].rows?[0], ["", "Synthetic original cell", ""])
+        XCTAssertEqual(try HandbookCardPackage.load(JSONEncoder().encode(pack)), pack)
+        XCTAssertThrowsError(try changed(fixture()) { object in
+            var cards = object["cards"] as! [[String: Any]]
+            cards[0]["blocks"] = [["title": "No source content", "kind": "table", "columns": ["", ""], "rows": [["", ""]], "collapsed": false]]
+            object["cards"] = cards
+        })
+        XCTAssertThrowsError(try changed(fixture()) { object in
+            var cards = object["cards"] as! [[String: Any]]
+            cards[0]["blocks"] = [["title": "Whitespace is not a source cell", "kind": "table", "columns": ["a", "b"], "rows": [["   ", "value"]], "collapsed": false]]
+            object["cards"] = cards
+        })
+    }
     func testRevealIsNotASelfRatingAndBackSideRestores() throws {
         var e = try HandbookRecallEngine.fresh(fixture()); try e.start(now: now)
         let p = try XCTUnwrap(e.presentation); try e.reveal(token: p.id, now: now)

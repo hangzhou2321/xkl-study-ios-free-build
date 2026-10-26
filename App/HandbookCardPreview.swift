@@ -77,9 +77,9 @@ extension EnvironmentValues {
             }
             if power {
                 if table {
-                    blocks = [["title": "纯合成符号对照", "kind": "table", "columns": ["合成情形", "字面记录"],
-                               "rows": [["情形甲", "U_* = A_1 * B_2"], ["情形乙", "**双星号**"],
-                                        ["情形丙", "_下划线_"], ["情形丁", "A_* 与 B_2 原样保留"]], "collapsed": false]]
+                    blocks = [["title": "纯合成原表留空与符号", "kind": "table", "columns": ["", "", ""],
+                               "rows": [["情形甲", "U_*", ""], ["", "A_1 * B_2", "**双星号**"],
+                                        ["情形乙", "_下划线_", "原样保留"]], "collapsed": false]]
                 } else if long {
                     blocks = [["title": "纯合成文字 · 不是讲义", "kind": "bullets", "items": [
                         "这一段只检查电力系统页面排版，不提供真实电力知识。",
@@ -236,6 +236,9 @@ struct HandbookCardPreview: View {
                 "sourceFilesPresent": observation!.sourceFilesPresent,
                 "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
                 "literalSymbolsFixture": fixture.subject == .power,
+                "sourceBlankCellsPreserved": fixture.store.package?.cards.contains { card in
+                    card.blocks.contains { $0.kind == "table" && $0.columns?.allSatisfy(\.isEmpty) == true && $0.rows?.contains(where: { $0.contains("") }) == true }
+                } == true,
                 "cardSourcePageNumbers": fixture.store.engine?.currentCard?.sourcePages ?? [],
                 "allSourcePageNumbers": (fixture.store.package?.sourcePages ?? []).map(\.number).sorted(),
                 "archivalSourcePageNumbers": (fixture.store.package?.sourcePages ?? []).map(\.number).filter { number in

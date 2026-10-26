@@ -523,7 +523,7 @@ private struct HandbookCardBlockView: View {
     }
     private var table: some View {
         VStack(spacing: 0) {
-            if block.kind == "table", let columns = block.columns, !columns.isEmpty, !dynamicType.isAccessibilitySize {
+            if block.kind == "table", let columns = block.columns, columns.contains(where: { !$0.isEmpty }), !dynamicType.isAccessibilitySize {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(Array(columns.enumerated()), id: \.offset) { index, title in
                         Text(verbatim: title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)

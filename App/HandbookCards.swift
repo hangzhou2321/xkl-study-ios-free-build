@@ -53,12 +53,14 @@ struct HandbookCard: Codable, Equatable, Identifiable {
                     throw ExamError.invalid("宝典分行答案不完整。")
                 }
             case "keyValues":
-                guard let rows = block.rows, (1...30).contains(rows.count), rows.allSatisfy({ $0.count == 2 && $0.allSatisfy { handbookText($0, 1_600) } }) else {
+                guard let rows = block.rows, (1...30).contains(rows.count), rows.allSatisfy({ $0.count == 2 && $0.allSatisfy { $0.isEmpty || handbookText($0, 1_600) } }),
+                      rows.joined().contains(where: { !$0.isEmpty }) else {
                     throw ExamError.invalid("宝典对照答案须为两列。")
                 }
             case "table":
-                guard let columns = block.columns, (1...3).contains(columns.count), columns.allSatisfy({ handbookText($0, 200) }),
-                      let rows = block.rows, (1...30).contains(rows.count), rows.allSatisfy({ $0.count == columns.count && $0.allSatisfy { handbookText($0, 1_600) } }) else {
+                guard let columns = block.columns, (1...3).contains(columns.count), columns.allSatisfy({ $0.isEmpty || handbookText($0, 200) }),
+                      let rows = block.rows, (1...30).contains(rows.count), rows.allSatisfy({ $0.count == columns.count && $0.allSatisfy { $0.isEmpty || handbookText($0, 1_600) } }),
+                      rows.joined().contains(where: { !$0.isEmpty }) else {
                     throw ExamError.invalid("宝典表格行列不匹配，或超过手机支持的三列。")
                 }
             default: throw ExamError.invalid("未知宝典答案分块：\(block.kind)")

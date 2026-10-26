@@ -59,6 +59,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "cardID": None if case == "completed" else ("synthetic-handbook-second" if case == "postponed" else "synthetic-handbook-first"),
         "sourceFilesPresent": False, "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
         "literalSymbolsFixture": subject == "power", "cardSourcePageNumbers": [] if case == "completed" else [page],
+        "sourceBlankCellsPreserved": subject == "power" and case == "table",
         "allSourcePageNumbers": [page, archive] if case == "missing-source" else [archive],
         "archivalSourcePageNumbers": [archive],
     }
