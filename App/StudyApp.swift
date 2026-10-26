@@ -8,7 +8,9 @@ import StudyCore
 struct StudyApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--professional-question-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--handbook-card-preview") {
+                HandbookCardPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--professional-question-preview") {
                 ProfessionalQuestionPreview()
             } else if ProcessInfo.processInfo.arguments.contains("--professional-preview") {
                 ProfessionalPriorityPreview()
@@ -65,6 +67,7 @@ struct RootView: View {
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var math: MathStore
     @ObservedObject var mathExperience: MathExperienceStore
+    @StateObject private var handbookComputer = HandbookCardStore(subject: .computer)
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @State private var importing = false
@@ -83,6 +86,7 @@ struct RootView: View {
         TabView(selection: $selectedTab) {
             StudyHomeView(store: store, exams: exams, computer: concepts, power: power,
                           professionalComputer: professionalComputer, professionalPower: professionalPower,
+                          handbookComputer: handbookComputer,
                           flow: flow, launch: launch)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
@@ -99,7 +103,8 @@ struct RootView: View {
                                     practicing: $professionalPracticing, recalling: $professionalRecalling,
                                     onStart: { began(subject == .computer ? .computer : .power) },
                                     onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() },
-                                    objectiveComputer: professionalComputer, objectivePower: professionalPower)
+                                    objectiveComputer: professionalComputer, objectivePower: professionalPower,
+                                    handbookComputer: handbookComputer)
                 .disabled(flow.state.activeArea == (subject == .computer ? StudyArea.computer : .power)
                           && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
@@ -198,6 +203,8 @@ struct RootView: View {
     private var currentPracticeArea: StudyArea? {
         if selectedTab == 0, store.sessionStarted, store.currentWord != nil { return .vocabulary }
         if selectedTab == 3, examPracticing, exams.currentQuestion != nil { return .publicQuestions }
+        if selectedTab == 4, subject == .computer, professionalRecalling,
+           handbookComputer.engine?.presentation != nil { return .computer }
         if selectedTab == 4, professionalPracticing {
             let selected = subject == .computer ? professionalComputer : professionalPower
             if selected.engine?.presentation != nil { return subject == .computer ? .computer : .power }
@@ -224,9 +231,18 @@ struct RootView: View {
             if !exams.sessionIsActive { exams.start() }
             guard exams.error == nil else { selectedTab = 3; return }
             examPracticing = true
-        case .computer, .power:
-            let target = area == .computer ? professionalComputer : professionalPower
-            subject = area == .computer ? .computer : .power
+        case .computer:
+            subject = .computer
+            professionalPracticing = false
+            guard handbookComputer.engine != nil, !handbookComputer.blocked else {
+                professionalRecalling = false; selectedTab = 4; return
+            }
+            handbookComputer.start()
+            guard handbookComputer.error == nil, !handbookComputer.blocked else { selectedTab = 4; return }
+            professionalRecalling = true
+        case .power:
+            let target = professionalPower
+            subject = .power
             professionalRecalling = false
             guard target.engine != nil, !target.blocked else {
                 professionalPracticing = false

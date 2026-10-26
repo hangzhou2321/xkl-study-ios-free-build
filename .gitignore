@@ -15,5 +15,8 @@ Resources/resource-manifest.json
 *.xklcourse
 *.xklsync
 *.xklbackup
+*.xklflashcards
+*.xklcards
+*.xklqbank
 __pycache__/
 *.py[cod]
