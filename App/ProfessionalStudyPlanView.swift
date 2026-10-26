@@ -113,6 +113,18 @@ private extension EnvironmentValues {
 }
 #endif
 
+struct KnowledgeInheritedPriorityLabel:View {
+    let point:KnowledgeCourse.Point;let values:[ProfessionalCardPriority]
+    #if DEBUG
+    @Environment(\.professionalPriorityPreview) private var preview
+    #endif
+    var body:some View {
+        Text("关联原标注："+point.inheritedPriorityTitles(values).joined(separator:"、")+" · 非考频").font(.caption).foregroundStyle(.secondary)
+        #if DEBUG
+            .onAppear{preview.didRender(point.id)}
+        #endif
+    }
+}
 struct ProfessionalCardPriorityLabel: View {
     let value: ProfessionalCardPriority
     #if DEBUG
@@ -911,7 +923,7 @@ struct ProfessionalPriorityPreview: View {
         .onChange(of:knowledgeRendered){_,value in if value != nil{reportWhenReady()}}
         .onChange(of:unifiedRendered) { _,value in if value != nil { reportWhenReady() } }
         .onAppear { if !["question-zoom","card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) && (!fixture.selectedCase.hasPrefix("unified-") || ["unified-home","unified-assisted-resume"].contains(fixture.selectedCase)) { reportWhenReady() } }
-        .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet"].contains(fixture.selectedCase) { reportWhenReady() } }
+        .onChange(of:priorityCardVisible) { _,id in if id != nil && ["card-priority-front","card-priority-sheet","knowledge-recall"].contains(fixture.selectedCase) { reportWhenReady() } }
         .onChange(of:zoomAppeared) { _,shown in if shown && fixture.selectedCase == "question-zoom" { reportWhenReady() } }
     }
     private func reportWhenReady() {
@@ -937,7 +949,7 @@ struct ProfessionalPriorityPreview: View {
             return true
         case "knowledge-recall":
             let stored=ProfessionalRecallStore(subject:fixture.subject,bank:engine.bank,teaching:teaching,baseDirectory:fixture.root)
-            return !stored.blocked && stored.engine?.currentItem?.id==fixture.expectedUnifiedCardID && unifiedRendered?.cardID==fixture.expectedUnifiedCardID && stored.engine?.record.attempts.isEmpty==true && stored.engine?.record.cardIDs.allSatisfy({$0.hasPrefix("kp-")})==true
+            return !stored.blocked && priorityCardVisible==teaching.knowledgeCourse?.points.first?.id && stored.engine?.currentItem?.id==fixture.expectedUnifiedCardID && unifiedRendered?.cardID==fixture.expectedUnifiedCardID && stored.engine?.record.attempts.isEmpty==true && stored.engine?.record.cardIDs.allSatisfy({$0.hasPrefix("kp-")})==true
         case "unified-home": return teaching.studyPlan != nil && engine.shown == nil && engine.record.attempts.isEmpty
         case "unified-assisted-resume":
             return engine.shown?.id == fixture.expectedSourceToken && engine.record.review == nil && engine.record.attempts.isEmpty && fixture.store.currentQuestionUsedCardHelp && fixture.exposedRecallCardID != nil
