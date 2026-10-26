@@ -2,6 +2,25 @@
 import Foundation
 
 extension KnowledgeCourse {
+    static func adaptiveSynthetic(subject:ConceptSubject,hash:String,legacyIDs:[String])->Self {
+        let base=synthetic(subject:subject,hash:hash,legacyIDs:legacyIDs)
+        let points=base.points.map { old -> Point in
+            let method=old.id+"-calculation",section="worked-method"
+            var numeric=Check(id:old.id+"-number-v2",prompt:"纯合成小题：允许使用12份水，每小时消耗3份，能持续多久？填写数值与h。",choices:[],answerID:"number",explanation:"时间=12÷3=4h。相乘得到36不能表示持续时长。")
+            numeric.responseType="number";numeric.numeric = .init(value:4,tolerance:0.001,unit:"h",unitFactors:["h":1,"min":1.0/60],requiresUnit:true)
+            numeric.purpose="guided";numeric.skillID=method;numeric.family="duration";numeric.repairSectionID=section
+            numeric.hint="用可用总量除以每小时的用量。";numeric.commonErrors=[.init(value:36,feedback:"把总量与每小时用量相乘了。时间应作除法。",errorTag:"method",repairSectionID:section)]
+            var multi=Check(id:old.id+"-multiple-v2",prompt:"纯合成多选：容量12份、每小时3份。哪些判断符合题定恒定用量模型？",choices:[.init(id:"A",text:"完整12份可用4小时",feedback:"12÷3=4h。"),.init(id:"B",text:"只允许用一半仍能用4小时",feedback:"只许用6份时为2h。",errorTag:"conditions",repairSectionID:section),.init(id:"C",text:"每小时用量翻倍，可用时间减半",feedback:"总量不变时，时间与每小时用量成反比。")],answerID:"multiple",explanation:"应选第一和第三项。先调整可用总量或每小时用量，再算时间。")
+            multi.responseType="multiple";multi.correctChoiceIDs=["A","C"];multi.purpose="independent";multi.skillID=method;multi.family="conditions";multi.repairSectionID=section
+            var transfer=old.checks[2];transfer=Check(id:old.id+"-transfer-v2",prompt:transfer.prompt,choices:transfer.choices,answerID:transfer.answerID,explanation:transfer.explanation)
+            transfer.purpose="transfer";transfer.skillID=method;transfer.family="changed-rate";transfer.repairSectionID=section
+            var sections=old.sections
+            for i in sections.indices{sections[i].id="original-\(i)"}
+            sections.append(.init(title:"先列条件，再补上计算步骤",body:"允许使用12份，每小时消耗3份。先检查可用范围，再计算12÷3，最后检查得到的是时间。",id:section,example:old.example,checkpointID:numeric.id))
+            return Point(id:old.id,title:old.title,goal:old.goal,prerequisites:old.prerequisites,sections:sections,keyFacts:old.keyFacts,example:old.example,checks:[numeric,multi,transfer],sources:old.sources,legacyEvidenceCardIDs:old.legacyEvidenceCardIDs,skills:[.init(id:method,title:"由可用量与速度求持续时间",lessonSectionID:section)],retiredChecks:old.checks,legacyBaseline:.init(checks:old.checks,sectionCount:old.sections.count))
+        }
+        return .init(format:"knowledge-course-v2",id:base.id,subject:subject,bankSHA256:hash,retiredLegacyCards:true,points:points,questionMappings:base.questionMappings)
+    }
     /// Entirely newly authored toy quantities, never copied from private books.
     static func synthetic(subject:ConceptSubject,hash:String,legacyIDs:[String])->Self {
         func check(_ id:String,_ prompt:String,_ right:String,_ wrong:String,_ why:String)->Check {

@@ -709,9 +709,10 @@ import UIKit
             }
             if selectedCase.hasPrefix("knowledge-") {
                 teaching.knowledgeCourse = .synthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))
+                if ["knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair"].contains(selectedCase){teaching.knowledgeCourse = .adaptiveSynthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))}
             }
             let package=ConceptContent(format:"xkl-concepts-v1",bankBytes:bankBytes,bankSHA256:hash)
-            let course=ConceptCourse(format:teaching.knowledgeCourse == nil ? "xkl-course-v5":"xkl-course-v6",subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)
+            let course=ConceptCourse(format:teaching.knowledgeCourse == nil ? "xkl-course-v5":(teaching.knowledgeCourse?.format=="knowledge-course-v2" ? "xkl-course-v7":"xkl-course-v6"),subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)
             let path=root.appendingPathComponent("synthetic.xklcourse")
             try JSONEncoder().encode(course).write(to:path)
             target.importContent(path)
@@ -731,6 +732,24 @@ import UIKit
                         try encoder.encode(practice.record).write(to:root.appendingPathComponent("KnowledgeLearning/"+subject.rawValue+"/current.json"),options:.atomic)
                         expectedKnowledgeAnswers=1;expectedKnowledgePhase="question"
                     } else {
+                        if ["knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair"].contains(selectedCase) {
+                            learning.lessonPage(2)
+                            if selectedCase != "knowledge-checkpoint",let token=learning.engine?.current?.id {
+                                learning.readNext(token);expectedKnowledgePhase="question"
+                                if selectedCase == "knowledge-number",let question=learning.engine?.current{learning.saveDraft("2",token:question.id)}
+                                if selectedCase == "knowledge-multiple",let question=learning.engine?.current {
+                                    learning.answer("4h",token:question.id);learning.finish(question.id)
+                                    var steps=0
+                                    while let p=learning.engine?.current,p.phase=="lesson",steps<12{learning.readNext(p.id);steps+=1}
+                                    learning.practiceAgain();expectedKnowledgeAnswers=1
+                                    precondition(learning.engine?.check?.type=="multiple","Adaptive fixture must show the real multiple response UI")
+                                }
+                                if selectedCase == "knowledge-repair",let question=learning.engine?.current {
+                                    learning.answer("36h",token:question.id);learning.finish(question.id);expectedKnowledgePhase="lesson";expectedKnowledgeAnswers=1
+                                    precondition(learning.engine?.current?.page==2,"Wrong calculation must return to its exact method")
+                                }
+                            }
+                        }
                         if selectedCase == "knowledge-example" {
                             for _ in 0..<2 {if let p=learning.engine?.current{learning.readNext(p.id)}}
                         }
@@ -871,7 +890,7 @@ struct ProfessionalPriorityPreview: View {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
         case "knowledge-home","knowledge-sources":return teaching.knowledgeCourse?.retiredLegacyCards==true && engine.record.attempts.isEmpty
-        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review":
+        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review","knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair":
             guard let course=teaching.knowledgeCourse,let expected=fixture.expectedKnowledgePointID,
                   knowledgeRendered==expected+"|"+fixture.expectedKnowledgePhase else{return false}
             let stored=KnowledgeLearningStore(course:course,baseDirectory:fixture.root)

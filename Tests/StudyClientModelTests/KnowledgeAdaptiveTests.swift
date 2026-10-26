@@ -24,6 +24,19 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         XCTAssertEqual((0...10).map{xkl_word_review_interval_days(UInt32($0))},[0,1,2,3,5,7,10,15,30,90,180])
         XCTAssertEqual(xkl_word_review_interval_days(11),0)
     }
+    func testV2InlineNumberThenMultipleAndTransferRequireSeparateColdEvidence()throws {
+        let c=KnowledgeCourse.adaptiveSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
+        var e=try KnowledgeLearningEngine.fresh(c);try e.start(now:date(day));try read(&e,at:date(day))
+        XCTAssertEqual(e.check?.type,"number");let token=e.current!.id
+        try e.answer("240min",token:token,now:date(day));try e.finish(token:token,now:date(day))
+        try read(&e,at:date(day));let id=e.point!.id
+        XCTAssertEqual(e.current?.phase,"complete");XCTAssertNotNil(e.trainedAt(id));XCTAssertFalse(e.reviewPassed(id))
+        try e.open(id,review:true,now:date(day+1));XCTAssertEqual(e.check?.type,"multiple")
+        let independent=e.current!.id;try e.answer("A|C",token:independent,now:date(day+1));try e.finish(token:independent,now:date(day+1))
+        XCTAssertFalse(e.reviewPassed(id));try e.start(now:date(day+2));XCTAssertEqual(e.check?.purpose,"transfer")
+        try e.answer(e.check!.answerID,token:e.current!.id,now:date(day+2));XCTAssertTrue(e.reviewPassed(id))
+        _=try KnowledgeLearningEngine(course:c,record:e.record)
+    }
     func testMoreThanTwoChecksAreUsedAndReviewContinuesAfterTransferEvidence()throws {
         var e=try KnowledgeLearningEngine.fresh(course());try train(&e,at:date(day));let id=try XCTUnwrap(e.point?.id)
         var seen=Set<String>()
