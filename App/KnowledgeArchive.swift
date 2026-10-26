@@ -7,20 +7,24 @@ struct KnowledgeArchive:Codable {
     let format:String;let courseID:String;let subject:ConceptSubject;let files:[File]
     static func make(course:KnowledgeCourse,root:URL)throws->Data {
         let fm=FileManager.default
-        let active=try Data(contentsOf:root.appendingPathComponent("current.json"))
-        guard let items=fm.enumerator(at:root,includingPropertiesForKeys:[.isRegularFileKey,.isSymbolicLinkKey],options:[]) else{throw ExamError.invalid("无法读取教学归档目录。")}
+        let directory=root.standardizedFileURL.resolvingSymlinksInPath()
+        var prefix=directory.path;while prefix.hasSuffix("/"){prefix.removeLast()};prefix+="/"
+        let active=try Data(contentsOf:directory.appendingPathComponent("current.json"))
+        guard let items=fm.enumerator(at:directory,includingPropertiesForKeys:[.isRegularFileKey,.isSymbolicLinkKey],options:[]) else{throw ExamError.invalid("无法读取教学归档目录。")}
         var files:[File]=[],size=0
         for case let path as URL in items {
             let info=try path.resourceValues(forKeys:[.isRegularFileKey,.isSymbolicLinkKey])
             guard info.isSymbolicLink != true else{throw ExamError.invalid("归档不读取符号链接。")}
             if info.isRegularFile != true{continue}
-            let name=String(path.path.dropFirst(root.path.count+1));try valid(name)
+            let absolute=path.standardizedFileURL.resolvingSymlinksInPath().path
+            guard absolute.hasPrefix(prefix) else{throw ExamError.invalid("教学归档文件越出课程目录。")}
+            let name=String(absolute.dropFirst(prefix.count));try valid(name)
             let data=try Data(contentsOf:path);size+=data.count
             guard size<=256*1024*1024,files.count<100_000 else{throw ExamError.invalid("教学归档过大；原文件保留。")}
             files.append(.init(name:name,sha256:StudySHA256.hex(data),bytes:data))
         }
         guard files.contains(where:{$0.name=="current.json"}),files.contains(where:{$0.name=="initial.json"}) else{throw ExamError.invalid("教学归档缺少当前档或初始档。")}
-        guard files.first(where:{$0.name=="current.json"})?.bytes==active,try Data(contentsOf:root.appendingPathComponent("current.json"))==active else{throw ExamError.invalid("导出期间出现新记录，请再次导出；原档保留。")}
+        guard files.first(where:{$0.name=="current.json"})?.bytes==active,try Data(contentsOf:directory.appendingPathComponent("current.json"))==active else{throw ExamError.invalid("导出期间出现新记录，请再次导出；原档保留。")}
         let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
         return try encoder.encode(Self(format:"knowledge-learning-archive-v1",courseID:course.id,subject:course.subject,files:files.sorted{$0.name<$1.name}))
     }

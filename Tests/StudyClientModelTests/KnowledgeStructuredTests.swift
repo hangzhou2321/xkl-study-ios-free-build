@@ -128,6 +128,8 @@ final class KnowledgeStructuredStoreTests:XCTestCase {
         let archive:Data
         do{archive=try cold.exportArchive()}catch{XCTFail("Source export: "+error.localizedDescription);return}
         let decoded=try JSONDecoder().decode(KnowledgeArchive.self,from:archive)
+        let alias=r.appendingPathComponent("KnowledgeLearning/power/.",isDirectory:true)
+        XCTAssertEqual(try KnowledgeArchive.make(course:c,root:alias),archive)
         XCTAssertTrue(decoded.files.contains{$0.bytes==raw && $0.name.hasPrefix("before-raw-")})
         do{try KnowledgeArchive.restore(archive,course:c,baseDirectory:target)}catch{XCTFail("Clean restore: "+error.localizedDescription);return}
         let restored=KnowledgeLearningStore(course:c,baseDirectory:target)
