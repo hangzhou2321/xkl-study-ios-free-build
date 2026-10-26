@@ -745,7 +745,7 @@ import UIKit
                             var values=q.stepResponses(q.syntheticCorrectResponse)!;values["relation"]="t=e*p"
                             let bytes=try JSONEncoder().encode(values)
                             try process.answer(String(data:bytes,encoding:.utf8)!,token:p.id)
-                            precondition(process.record.events.last?.stepScores?.map(\.status)==["correct","wrong","correct"],"A matching final value cannot hide a wrong relation")
+                            precondition(process.record.events.last(where:{$0.kind=="answer"})?.stepScores?.map(\.status)==["correct","wrong","correct"],"A matching final value cannot hide a wrong relation")
                         }
                         if selectedCase == "knowledge-steps-draft",let q=process.check,let p=process.current {
                             var values=q.stepResponses(q.syntheticCorrectResponse)!;values["relation"]="t^2=e^2/p^2"

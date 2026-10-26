@@ -26,8 +26,8 @@ struct KnowledgeLearningView:View {
                 if let engine=store.engine {
                     progress(engine)
                     if let p=engine.current,let point=engine.displayPoint {
-                        Text(engine.check?.purpose=="mixed" && p.phase != "lesson" ? "组合问题":point.title).font(.title2.bold()).accessibilityIdentifier("knowledge-point-title")
-                        if engine.check?.purpose != "mixed" || p.phase=="lesson"{Text(point.goal).font(.subheadline).foregroundStyle(.secondary)}
+                        Text(engine.check?.purpose=="mixed" && p.phase != "lesson" ? "组合问题":point.title).font(p.phase=="question" || p.phase=="feedback" ? .headline:.title2.bold()).accessibilityIdentifier("knowledge-point-title")
+                        if p.phase=="lesson" || p.phase=="complete"{Text(point.goal).font(.subheadline).foregroundStyle(.secondary)}
                         content(engine,p,point)
                         Button("讲义、基础题与强化题对应") {store.reference();references=true}
                             .buttonStyle(.bordered).accessibilityIdentifier("knowledge-source-mapping")
@@ -37,8 +37,9 @@ struct KnowledgeLearningView:View {
                         Button("继续已暂缓的知识点") {store.start()}.buttonStyle(.borderedProminent)
                         Button("查看知识点大纲") {outline=true}
                     }
-                    Text("旧版卡片已撤下，旧学习记录保留归档，没有换算成新版成绩。知识卡自评仍与小题作答分开。")
+                    if engine.current?.phase != "question" && engine.current?.phase != "feedback"{Text("旧版卡片和记录保留归档。知识卡自评与小题成绩分开。")
                         .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if let error=store.error {Text(error).foregroundStyle(.red)}
             }.padding(22).frame(maxWidth:720,alignment:.leading).frame(maxWidth:.infinity)
@@ -80,9 +81,11 @@ struct KnowledgeLearningView:View {
         let trained=course.points.filter{engine.trainedDay($0.id) != nil}.count
         let reviewed=course.points.filter{engine.reviewPassed($0.id)}.count
         return VStack(alignment:.leading,spacing:6){
-            Text("知识点 \(course.points.count) 个 · 练习完成 \(trained) · 独立检验有证据 \(reviewed)").font(.subheadline)
-            ProgressView(value:Double(trained),total:Double(course.points.count))
-            Text("练习完成与独立解题分开；独立检验通过后仍继续安排到期复核。").font(.caption).foregroundStyle(.secondary)
+            Text("方法练习 \(trained)/\(course.points.count) 点 · 独立检验有证据 \(reviewed) 点").font(.caption).foregroundStyle(.secondary)
+            if engine.current?.phase != "question" && engine.current?.phase != "feedback"{
+                ProgressView(value:Double(trained),total:Double(course.points.count))
+                Text("练习与独立检验分开；检验后仍安排复核。").font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
     @ViewBuilder private func content(_ engine:KnowledgeLearningEngine,_ p:KnowledgePresentation,_ point:KnowledgeCourse.Point)->some View {
@@ -110,13 +113,13 @@ struct KnowledgeLearningView:View {
             }
             Button("这会儿先学其他知识点"){store.deferCurrent()}.font(.subheadline)
         } else if let q=engine.check,p.phase=="question" || p.phase=="feedback" {
-            Text(p.mode=="review" ? (p.assisted ? "复核练习 · 本次已有帮助":"独立检验 · 未记录App内帮助"):"补步骤／方法练习 · 不冒充独立成绩").font(.headline)
+            Text(p.mode=="review" ? (p.assisted ? "复核练习 · 本次已有帮助":"隔时小检验"):((p.mode=="probe") ? "先补一个小检查":"方法练习")).font(.headline)
             if point.purpose(q)=="guided",p.mode != "review",let id=q.skillID,let skill=point.skills?.first(where:{$0.id==id}){Text("练习方法："+skill.title).font(.subheadline).foregroundStyle(.secondary)}
             Text(familiarity(p))
                 .font(.caption).foregroundStyle(.secondary)
-            Text(q.prompt).font(.system(size:24).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
+            Text(q.prompt).font(.system(size:22).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
             if q.type=="structured",let steps=q.steps {
-                Text("请分别提交条件、关系和结果。结果碰巧正确不能代替方法；未识别的写法保留待确认。").font(.footnote).foregroundStyle(.secondary)
+                Text("逐步作答，最后一起提交。").font(.footnote).foregroundStyle(.secondary)
                 ForEach(steps){step in
                     KnowledgeStepInputView(step:step,value:Binding(get:{stepInputs[step.id] ?? ""},set:{stepInputs[step.id]=$0}),disabled:p.phase=="feedback" || inputToken != p.id)
                 }
@@ -234,11 +237,11 @@ struct KnowledgeLearningView:View {
     }
     private func familiarity(_ p:KnowledgePresentation)->String {
         switch p.familiarity {
-        case "unseen-in-app":return "本次首次展示前，App没有本题的展示记录；外部是否见过未知。"
-        case "seen-answer":return "已见题与反馈：本次可检验保持，不冒充未见迁移。"
-        case "seen-question":return "此前已经展示过本题；即使没有提交，也不再算App内未见题。"
-        case "source-exposed":return "本题所在资料页已有查阅记录，熟悉度不能算未见。"
-        default:return "本题旧展示历史不完整，熟悉度标为未知，保留原记录。"
+        case "unseen-in-app":return "App内首次展示；App外是否见过未知。"
+        case "seen-answer":return "已见题 · 检查是否还记得。"
+        case "seen-question":return "此前展示过 · 按已见题记录。"
+        case "source-exposed":return "已查过相关原页 · 按有资料经历记录。"
+        default:return "旧展示历史不完整 · 熟悉度未知。"
         }
     }
 }
