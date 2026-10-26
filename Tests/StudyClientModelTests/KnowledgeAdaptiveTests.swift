@@ -102,6 +102,7 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         try e.open(child,review:true,now:date(day+2));let pending=e.current!
         XCTAssertFalse(pending.assisted)
         try e.repairPrerequisite(parent,now:date(day+2).addingTimeInterval(1))
+        try e.hint(token:e.current!.id,now:date(day+2).addingTimeInterval(1))
         try e.open(child,now:date(day+2).addingTimeInterval(2));XCTAssertEqual(e.current?.id,pending.id)
         XCTAssertTrue(e.current!.assisted)
         try e.answer(e.check!.answerID,token:pending.id,now:date(day+2).addingTimeInterval(3))
@@ -131,6 +132,39 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         XCTAssertGreaterThan(appended.questionVersions!.count,e.record.questionVersions!.count)
         XCTAssertEqual(try KnowledgeLearningEngine.appending(appended,to:updated),appended)
         XCTAssertEqual(restored.check,e.check) // A visible old question is not silently replaced.
+    }
+    func testAddedMethodAndChangedPrerequisitesDoNotRetroactivelyInvalidateOldEvidenceOrLesson()throws {
+        let old=course();var e=try KnowledgeLearningEngine.fresh(old);try train(&e,at:date(day))
+        let id=e.point!.id;try e.open(id,review:true,now:date(day+1));try e.answer(e.check!.answerID,token:e.current!.id,now:date(day+1))
+        let history=e.record.events,held=e.current!,oldLesson=e.displayPoint!.sections
+        let updated=try edit(old){o in
+            var ps=o["points"] as! [[String:Any]],qs=ps[0]["checks"] as! [[String:Any]],ss=ps[0]["sections"] as! [[String:Any]]
+            ps[0]["prerequisites"]=[ps[1]["id"] as! String];ps[1]["prerequisites"]=[] as [String]
+            let added=id+"-added-method"
+            for i in qs.indices{qs[i]["skillID"]=id;qs[i]["purpose"]=i==0 ? "guided":(i==1 ? "independent":"transfer")}
+            let new=qs.enumerated().map{i,q -> [String:Any] in var v=q;v["id"]=(q["id"] as! String)+"-new-method";v["prompt"]="A newly taught method with different conditions \(i)";v["skillID"]=added;return v}
+            ss[0]["body"]="A new revision must not replace the old visible explanation."
+            ss.append(["id":"new-method","title":"New method","body":"Additional instruction and worked example"])
+            ps[0]["sections"]=ss;ps[0]["checks"]=qs+new
+            ps[0]["skills"]=[["id":id,"title":"Original method","lessonSectionID":"section-0"],["id":added,"title":"Added method","lessonSectionID":"new-method"]]
+            o["points"]=ps
+        }
+        let migrated=try KnowledgeLearningEngine.appending(e.record,to:updated),restored=try KnowledgeLearningEngine(course:updated,record:migrated)
+        XCTAssertEqual(restored.record.events,history);XCTAssertEqual(restored.current,held);XCTAssertEqual(restored.displayPoint?.sections,oldLesson)
+        XCTAssertEqual(restored.learnedSkills(id),1);XCTAssertNil(restored.trainedAt(id)) // The added method is not fabricated as complete.
+        XCTAssertTrue(e.record.curriculumVersions!.allSatisfy{migrated.curriculumVersions?[$0.key]==$0.value})
+    }
+    func testMinimalPrerequisiteProbeRestoresBothPendingDraftsWithoutCompletingParent()throws {
+        var e=try KnowledgeLearningEngine.fresh(course());try e.start(now:date(day));try read(&e,at:date(day))
+        let parent=e.current!.pointID;try e.saveDraft("A pending parent response",token:e.current!.id);let parentMark=e.current!
+        let child=course().points[1].id;try e.open(child,now:date(day));try read(&e,at:date(day))
+        try e.saveDraft("A pending child response",token:e.current!.id);let childMark=e.current!
+        try e.repairPrerequisite(parent,now:date(day));XCTAssertEqual(e.current?.mode,"probe")
+        try e.answer(e.check!.answerID,token:e.current!.id,now:date(day));try e.finish(token:e.current!.id,now:date(day))
+        XCTAssertEqual(e.current?.id,childMark.id);XCTAssertEqual(e.current?.draftResponse,childMark.draftResponse)
+        XCTAssertEqual(e.record.bookmarks[parent],parentMark);XCTAssertNil(e.trainedAt(parent));XCTAssertNil(e.trainedAt(child))
+        XCTAssertTrue(e.record.events.contains{$0.kind=="answer" && $0.purpose=="probe"})
+        _=try KnowledgeLearningEngine(course:course(),record:e.record)
     }
     func testNumericUnitsNonfiniteAndIncompleteMultipleAnswersAreObjectivelyChecked()throws {
         var q=KnowledgeCourse.Check(id:"numeric",prompt:"In the stated ideal model, report the output voltage",choices:[],answerID:"number",explanation:"Use the specified ratio")

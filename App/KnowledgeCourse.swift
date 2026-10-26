@@ -39,13 +39,19 @@ struct KnowledgeCourse: Codable, Equatable {
         var repairSectionID:String? = nil
         var relatedKnowledgeIDs:[String]? = nil
         var originalQuestionID:String? = nil
+        var practiceStage:String? = nil
     }
     struct Skill:Codable,Equatable,Identifiable {
         let id:String;let title:String;let lessonSectionID:String
+        var practiceStages:[String]? = nil
     }
     struct LegacyBaseline:Codable,Equatable {
         let checks:[Check];let sectionCount:Int
         var digest:String? = nil
+        var sections:[Section]? = nil
+        var example:ProfessionalCardLesson.Example? = nil
+        var keyFacts:[String]? = nil
+        var prerequisites:[String]? = nil
     }
     struct Point: Codable, Equatable, Identifiable {
         let id: String; let title: String; let goal: String
@@ -91,10 +97,14 @@ struct KnowledgeCourse: Codable, Equatable {
             guard sectionIDs.count==p.sections.count else{throw ExamError.invalid("教学小节身份重复。")}
             let skills=p.skills ?? []
             guard (p.skills==nil || (1...48).contains(skills.count)),Set(skills.map(\.id)).count==skills.count,skills.allSatisfy({valid($0.id,160) && valid($0.title,160) && sectionIDs.contains($0.lessonSectionID)}) else{throw ExamError.invalid("知识点内方法身份不完整。")}
+            guard skills.allSatisfy({s in let stages=s.practiceStages ?? ["practice"];return !stages.isEmpty && Set(stages).count==stages.count && stages.allSatisfy{["practice","scaffold-high","scaffold-low"].contains($0)}}) else{throw ExamError.invalid("方法的练习梯度定义无效。")}
             if format=="knowledge-course-v2" {
                 guard !skills.isEmpty,p.checks.allSatisfy({$0.skillID != nil && $0.purpose != nil}),
                       p.checks.filter({$0.purpose != "guided"}).count>=2,p.checks.contains(where:{["transfer","original"].contains($0.purpose ?? "")}),
                       skills.allSatisfy({skill in p.checks.contains(where:{$0.skillID==skill.id && $0.purpose=="guided"}) && p.checks.contains(where:{$0.skillID==skill.id && $0.purpose != "guided"})}) else{throw ExamError.invalid("新课程每种方法需有练习和独立题，并含换条件或原题检验。")}
+                for skill in skills {for stage in skill.practiceStages ?? ["practice"] {
+                    guard p.checks.contains(where:{$0.skillID==skill.id && $0.purpose=="guided" && ($0.practiceStage ?? "practice")==stage}) else{throw ExamError.invalid("方法缺少所需梯度的练习。")}
+                }}
             }
             for section in p.sections {
                 if let diagram=section.diagram{try diagram.validate()}
@@ -117,6 +127,9 @@ struct KnowledgeCourse: Codable, Equatable {
                 guard baseline.sectionCount>=2,(2...6).contains(baseline.checks.count),
                       baseline.checks.allSatisfy({old in (p.checks+(p.retiredChecks ?? [])).contains(where:{$0.id==old.id && (try? $0.gradingDigest()) == (try? old.gradingDigest())})}) else{throw ExamError.invalid("旧版诊断身份基线不匹配；原记录保留。")}
                 if let digest=baseline.digest{guard ExamContent.isHash(digest),try KnowledgeLearningEngine.legacyDigest(pointID:p.id,checks:baseline.checks)==digest else{throw ExamError.invalid("旧题摘要与本机原算法不一致。")}}
+                if let sections=baseline.sections {
+                    guard sections.count==baseline.sectionCount,baseline.example != nil,baseline.keyFacts?.isEmpty==false,Set(baseline.prerequisites ?? []).isSubset(of:pointIDs) else{throw ExamError.invalid("旧讲解版本缺件，不能替换旧断点。")}
+                }
             }
             earlier.insert(p.id)
         }

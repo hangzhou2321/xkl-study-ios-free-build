@@ -22,7 +22,7 @@ struct KnowledgeLearningView:View {
             VStack(alignment:.leading,spacing:20) {
                 if let engine=store.engine {
                     progress(engine)
-                    if let p=engine.current,let point=engine.point {
+                    if let p=engine.current,let point=engine.displayPoint {
                         Text(point.title).font(.title2.bold()).accessibilityIdentifier("knowledge-point-title")
                         Text(point.goal).font(.subheadline).foregroundStyle(.secondary)
                         content(engine,p,point)
@@ -93,7 +93,7 @@ struct KnowledgeLearningView:View {
                 Text("现在再记这些结论").font(.headline)
                 ForEach(Array(point.keyFacts.enumerated()),id:\.offset){_,fact in Text("• "+fact).font(.system(size:22))}
             }
-            Text("第 \(p.page+1) / \(point.lessonPageCount) 小步 · 本点方法练习 \(engine.learnedSkills(point.id)) / \(point.requiredSkillIDs.count)").font(.caption).foregroundStyle(.secondary)
+            Text("第 \(p.page+1) / \(point.lessonPageCount) 小步 · 本点方法练习 \(engine.learnedSkills(point.id)) / \(course.point(point.id)?.requiredSkillIDs.count ?? point.requiredSkillIDs.count)").font(.caption).foregroundStyle(.secondary)
             Button(p.page<point.sections.count && point.sections[p.page].checkpointID != nil ? "我来补上这一步":(p.page<point.lessonPageCount-1 ? "明白这一小步，继续":"检查本点方法练习")){store.readNext(p.id)}
                 .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("knowledge-next-step")
             if p.page>0{Button("回看上一小步"){store.lessonPage(p.page-1)}}
@@ -153,7 +153,7 @@ struct KnowledgeLearningView:View {
         } else if p.phase=="complete" {
             Label(engine.reviewPassed(point.id) ? "已有不同任务与迁移的独立检验证据":"方法练习已完成，独立检验继续安排",systemImage:"checkmark.circle").font(.headline)
             Text("这不是整套基础或强化题的掌握保证。可查看本知识点关联的原题，组合题还要一起用到其他知识点。")
-            Button("继续下一个知识点"){store.next()}.buttonStyle(.borderedProminent)
+            Button(engine.hasPendingReturn ? "回到刚才的学习位置":"继续下一个知识点"){store.next()}.buttonStyle(.borderedProminent)
             Button("再读一次这个知识点"){store.explain()}
             Button("再练一道（提前打开会成为已见练习题）"){store.practiceAgain()}
             if engine.unseenTransferPoolEmpty(point.id){Text("本点暂缺App内尚未展示的变式。仍可继续已见题保持或学习其他知识，不能据此新增未见迁移通过。").font(.footnote).foregroundStyle(.secondary)}

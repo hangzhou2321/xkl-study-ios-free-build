@@ -64,7 +64,10 @@ final class KnowledgeLearningTests:XCTestCase {
         var sections=try XCTUnwrap(points[0]["sections"] as? [[String:Any]]);sections[0]["body"]="A clearer synthetic explanation of the same target."
         points[0]["sections"]=sections;object["points"]=points
         let clearer=try JSONDecoder().decode(KnowledgeCourse.self,from:JSONSerialization.data(withJSONObject:object))
-        XCTAssertEqual(try KnowledgeLearningEngine.appending(engine.record,to:clearer),engine.record)
+        let appended=try KnowledgeLearningEngine.appending(engine.record,to:clearer)
+        XCTAssertEqual(appended.events,engine.record.events);XCTAssertEqual(appended.bookmarks,engine.record.bookmarks)
+        XCTAssertTrue(engine.record.curriculumVersions!.allSatisfy{appended.curriculumVersions?[$0.key]==$0.value})
+        _=try KnowledgeLearningEngine(course:clearer,record:appended)
         var checks=try XCTUnwrap(points[0]["checks"] as? [[String:Any]]);checks[0]["prompt"]="A different assessment under the same ID"
         points[0]["checks"]=checks;object["points"]=points
         let changed=try JSONDecoder().decode(KnowledgeCourse.self,from:JSONSerialization.data(withJSONObject:object))

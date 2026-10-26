@@ -27,7 +27,7 @@ extension KnowledgeCourse.Check {
     func validateResponse()throws {
         func good(_ s:String,_ n:Int)->Bool{!s.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && s.count<=n}
         guard ["single","multiple","number"].contains(type),purpose==nil || ["guided","independent","transfer","original"].contains(purpose!),
-              hint==nil || good(hint!,1200),family==nil || good(family!,160) else{throw ExamError.invalid("诊断形式或提示无效。")}
+              hint==nil || good(hint!,1200),family==nil || good(family!,160),practiceStage==nil || ["practice","scaffold-high","scaffold-low"].contains(practiceStage!) else{throw ExamError.invalid("诊断形式或提示无效。")}
         if type=="number" {
             guard choices.isEmpty,let n=numeric,n.value.isFinite,n.tolerance.isFinite,n.tolerance>=0,n.unit.count<=30,
                   (n.unitFactors ?? [:]).allSatisfy({!$0.key.isEmpty && $0.key.count<=30 && $0.value.isFinite && $0.value>0}),

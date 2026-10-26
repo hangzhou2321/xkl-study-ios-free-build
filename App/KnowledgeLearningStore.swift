@@ -61,7 +61,7 @@ import StudyCore
     }
     func finish(_ id:UUID){change{try $0.finish(token:id)}}
     func explain(){change{try $0.explainAgain()}}
-    func repairPrerequisite(_ id:String){change{try $0.repairPrerequisite(id)}}
+    func repairPrerequisite(_ id:String,skillID:String?=nil){change{try $0.repairPrerequisite(id,skillID:skillID)}}
     func practiceAgain(){change{if let id=$0.current?.pointID{try $0.open(id,review:true)}}}
     func errorNote(_ tag:String,token:UUID){change{try $0.noteError(tag,token:token)}}
     func saveDraft(_ text:String,token:UUID){change{try $0.saveDraft(text,token:token)}}

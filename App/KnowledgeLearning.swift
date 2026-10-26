@@ -14,6 +14,8 @@ struct KnowledgePresentation:Codable,Equatable {
     var shownAt:Date?=nil
     var eligibleAtShow:Bool?=nil
     var familiarity:String?=nil
+    var curriculumID:String?=nil
+    var helpPointIDs:[String]?=nil
 }
 struct KnowledgeLearningEvent:Codable,Equatable {
     let id:UUID;let sequence:Int;let day:Int;let at:Date;let kind:String
@@ -26,6 +28,8 @@ struct KnowledgeLearningEvent:Codable,Equatable {
     var shownAt:Date?=nil
     var eligibleAtShow:Bool?=nil
     var familiarity:String?=nil
+    var curriculumID:String?=nil
+    var helpPointIDs:[String]?=nil
 }
 struct KnowledgeQuestionVersion:Codable,Equatable {
     let pointID:String;let check:KnowledgeCourse.Check
@@ -37,6 +41,27 @@ struct KnowledgeQuestionVersion:Codable,Equatable {
 struct KnowledgeExposure:Codable,Equatable,Identifiable {
     let id:UUID;let courseID:String;let at:Date;let pointIDs:[String];let kind:String;let reference:String
 }
+struct KnowledgePracticeToken:Hashable {let skillID:String;let stage:String}
+struct KnowledgeReturnFrame:Codable,Equatable {let returnPointID:String;let displacedPointID:String;let displaced:KnowledgePresentation?}
+struct KnowledgeCurriculumVersion:Codable,Equatable {
+    struct Requirement:Codable,Equatable {let skillID:String;let stages:[String]}
+    let pointID:String;let requirements:[Requirement];let legacyFirstCheckID:String?
+    var title:String?=nil;var goal:String?=nil
+    var sections:[KnowledgeCourse.Section]?=nil
+    var example:ProfessionalCardLesson.Example?=nil
+    var keyFacts:[String]?=nil
+    var prerequisites:[String]?=nil
+    var sources:[KnowledgeCourse.Source]?=nil
+    var skills:[KnowledgeCourse.Skill]?=nil
+    var checkVersions:[String]?=nil
+    var tokens:Set<KnowledgePracticeToken>{Set(requirements.flatMap{r in r.stages.map{KnowledgePracticeToken(skillID:r.skillID,stage:$0)}})}
+    var identity:String{get throws{let e=JSONEncoder();e.outputFormatting=[.sortedKeys];return StudySHA256.hex(try e.encode(self))}}
+    static func current(_ p:KnowledgeCourse.Point)->Self {
+        .init(pointID:p.id,requirements:p.skills?.map{.init(skillID:$0.id,stages:$0.practiceStages ?? ["practice"])} ?? [.init(skillID:p.id,stages:["practice"])],legacyFirstCheckID:p.skills==nil ? p.checks.first?.id:nil,
+            title:p.title,goal:p.goal,sections:p.sections,example:p.example,keyFacts:p.keyFacts,prerequisites:p.prerequisites,sources:p.sources,skills:p.skills,
+            checkVersions:p.checks.compactMap{try? KnowledgeQuestionVersion(pointID:p.id,check:$0).identity})
+    }
+}
 struct KnowledgeLearningRecord:Codable,Equatable {
     let format:String;let subject:ConceptSubject;let courseID:String
     let pointIDs:[String];let pointDigests:[String:String]
@@ -46,6 +71,9 @@ struct KnowledgeLearningRecord:Codable,Equatable {
     var legacyOrder:[String:[String]]?=nil
     var exposures:[KnowledgeExposure]?=nil
     var returnPoints:[String]?=nil
+    var curriculumVersions:[String:KnowledgeCurriculumVersion]?=nil
+    var returnFrames:[KnowledgeReturnFrame]?=nil
+    var presentationArchive:[String:KnowledgePresentation]?=nil
 }
 struct KnowledgeReviewStatus:Equatable {
     let level:Int;let dueAt:Date;let qualifiedFamilies:Int;let passedSkills:Set<String>;let hasTransfer:Bool;let lastWrong:Bool
@@ -58,6 +86,16 @@ struct KnowledgeLearningEngine {
     private(set) var record:KnowledgeLearningRecord
     var current:KnowledgePresentation?{record.currentID.flatMap{record.bookmarks[$0]}}
     var point:KnowledgeCourse.Point?{current.flatMap{course.point($0.pointID)}}
+    var displayPoint:KnowledgeCourse.Point?{current.flatMap{displayPoint($0)}}
+    private func displayPoint(_ presentation:KnowledgePresentation)->KnowledgeCourse.Point? {
+        guard let p=course.point(presentation.pointID) else{return nil}
+        if presentation.mode=="legacy",let b=p.legacyBaseline,let sections=b.sections,let example=b.example,let facts=b.keyFacts {
+            return .init(id:p.id,title:p.title,goal:"旧版讲解断点保留；结束本段后接续新版方法。",prerequisites:b.prerequisites ?? p.prerequisites,sections:sections,keyFacts:facts,example:example,checks:b.checks,sources:p.sources,legacyEvidenceCardIDs:p.legacyEvidenceCardIDs)
+        }
+        guard let key=presentation.curriculumID,let d=record.curriculumVersions?[key],let sections=d.sections,let example=d.example,let facts=d.keyFacts else{return p}
+        return .init(id:p.id,title:d.title ?? p.title,goal:d.goal ?? p.goal,prerequisites:d.prerequisites ?? p.prerequisites,sections:sections,keyFacts:facts,example:example,
+            checks:d.checkVersions?.compactMap{record.questionVersions?[$0]?.check} ?? p.checks,sources:d.sources ?? p.sources,legacyEvidenceCardIDs:p.legacyEvidenceCardIDs,skills:d.skills)
+    }
     var check:KnowledgeCourse.Check?{
         guard let p=current else{return nil}
         if let id=p.definitionID{return record.questionVersions?[id]?.check}
@@ -75,7 +113,7 @@ struct KnowledgeLearningEngine {
         guard !ids.isEmpty,Set(ids).count==ids.count,old.subject==course.subject,old.courseID==course.id,
               ["knowledge-learning-v1","knowledge-learning-v2"].contains(old.format),
               Set(old.pointIDs).count==old.pointIDs.count,Set(old.pointIDs).isSubset(of:Set(ids)) else{throw ExamError.invalid("知识点身份不一致，旧记录保留。")}
-        var versions=old.questionVersions ?? [:],order=old.legacyOrder ?? [:],bookmarks=old.bookmarks
+        var versions=old.questionVersions ?? [:],order=old.legacyOrder ?? [:],bookmarks=old.bookmarks,curricula=old.curriculumVersions ?? [:]
         var gradeMap:[String:(String,String)]=[:]
         for v in versions.values {
             let entry=(v.pointID,try v.check.gradingDigest())
@@ -98,7 +136,7 @@ struct KnowledgeLearningEngine {
                 if var mark=bookmarks[id] {
                     guard qs.indices.contains(mark.checkIndex) else{throw ExamError.invalid("旧断点题号无效。")}
                     mark.definitionID=order[id]![mark.checkIndex];mark.mode="legacy";mark.familiarity="history-unknown"
-                    if let count=baseline?.sectionCount,mark.page>=count{mark.page=p.sections.count+(mark.page-count)}
+                    if baseline?.sections==nil,let count=baseline?.sectionCount,mark.page>=count{mark.page=p.sections.count+(mark.page-count)}
                     bookmarks[id]=mark
                 }
             }
@@ -111,11 +149,12 @@ struct KnowledgeLearningEngine {
         for p in course.points {
             if order[p.id]==nil {order[p.id]=try (p.legacyBaseline?.checks ?? p.checks).map{try register(p.id,$0)}}
             for q in p.allChecks{_=try register(p.id,q)}
+            let definition=KnowledgeCurriculumVersion.current(p);curricula[try definition.identity]=definition
         }
         return .init(format:"knowledge-learning-v2",subject:old.subject,courseID:old.courseID,
             pointIDs:old.pointIDs+ids.filter{!old.pointIDs.contains($0)},pointDigests:old.pointDigests,
             currentID:old.currentID,bookmarks:bookmarks,events:old.events,deferredIDs:old.deferredIDs,
-            questionVersions:versions,legacyOrder:order,exposures:old.exposures ?? [],returnPoints:old.returnPoints ?? [])
+            questionVersions:versions,legacyOrder:order,exposures:old.exposures ?? [],returnPoints:old.returnPoints ?? [],curriculumVersions:curricula,returnFrames:old.returnFrames ?? [],presentationArchive:old.presentationArchive ?? [:])
     }
     static func fresh(_ course:KnowledgeCourse)throws->Self {
         let digests=try Dictionary(uniqueKeysWithValues:course.points.map{($0.id,try digest($0))})
@@ -131,6 +170,8 @@ struct KnowledgeLearningEngine {
               record.currentID==nil || record.bookmarks[record.currentID!] != nil,
               Set(record.bookmarks.keys).isSubset(of:pointIDs),Set(record.deferredIDs).isSubset(of:pointIDs),
               Set(record.returnPoints ?? []).isSubset(of:pointIDs),let versions=record.questionVersions,let legacy=record.legacyOrder else{throw ExamError.invalid("知识点档案身份或版本表不一致。")}
+        guard (record.returnFrames ?? []).allSatisfy({pointIDs.contains($0.returnPointID) && pointIDs.contains($0.displacedPointID) && ($0.displaced==nil || $0.displaced?.pointID==$0.displacedPointID)}) else{throw ExamError.invalid("前置探针返回断点不完整。")}
+        guard (record.presentationArchive ?? [:]).allSatisfy({$0.key==$0.value.id.uuidString && pointIDs.contains($0.value.pointID) && $0.value.definitionID.map{record.questionVersions?[$0] != nil}==true}) else{throw ExamError.invalid("已替换断点归档不完整。")}
         var grading:[String:String]=[:]
         for (key,v) in versions {
             guard pointIDs.contains(v.pointID),try v.identity==key else{throw ExamError.invalid("历史题目版本校验失败。")}
@@ -139,13 +180,20 @@ struct KnowledgeLearningEngine {
             grading[v.check.id]=hash
         }
         for p in course.points {for q in p.allChecks{guard grading[q.id]==(try q.gradingDigest()) else{throw ExamError.invalid("活动题缺少可信版本。")}}}
+        for (key,v) in record.curriculumVersions ?? [:] {
+            guard pointIDs.contains(v.pointID),try v.identity==key,!v.requirements.isEmpty,Set(v.requirements.map(\.skillID)).count==v.requirements.count,
+                  v.requirements.allSatisfy({!$0.stages.isEmpty && Set($0.stages).count==$0.stages.count}) else{throw ExamError.invalid("教学达标条件版本损坏。")}
+            if let keys=v.checkVersions{guard !keys.isEmpty,keys.allSatisfy({versions[$0]?.pointID==v.pointID}) else{throw ExamError.invalid("旧讲解的题目目录缺失。")}}
+        }
         let exposures=record.exposures ?? []
         guard Set(exposures.map(\.id)).count==exposures.count,exposures.allSatisfy({$0.courseID==course.id && !$0.pointIDs.isEmpty && Set($0.pointIDs).isSubset(of:pointIDs) && $0.at.timeIntervalSinceReferenceDate.isFinite}) else{throw ExamError.invalid("资料查阅事件不完整。")}
         let chronological=exposures.sorted{$0.at<$1.at};var exposureIndex=0
         var eventIDs=Set<UUID>(),answered=Set<UUID>(),hinted=Set<UUID>(),lastDay=18_000,lastTime=Date.distantPast
         var displayed:[UUID:KnowledgeLearningEvent]=[:]
         var seenChecks=Set<String>(),seenAnswers=Set<String>(),sourceReferences=Set<String>()
-        var helpAt:[String:Date]=[:],oldReads:[Int:Set<String>]=[:],learned:[String:Set<String>]=[:],trained:[String:Date]=[:]
+        let curricula=record.curriculumVersions ?? [:],byPoint=Dictionary(grouping:Array(curricula),by:{$0.value.pointID})
+        var practiceTokens:[String:Set<KnowledgePracticeToken>]=[:],trainedDefinitions:[String:Date]=[:]
+        var helpAt:[String:Date]=[:],oldReads:[Int:Set<String>]=[:]
         for (index,e) in record.events.enumerated() {
             guard e.sequence==index+1,eventIDs.insert(e.id).inserted,e.day>=lastDay,(18_000...50_000).contains(e.day),e.at.timeIntervalSinceReferenceDate.isFinite,
                   (e.evidenceVersion ?? 0)<2 || e.at>=lastTime,let p=course.point(e.pointID),
@@ -157,13 +205,22 @@ struct KnowledgeLearningEngine {
                 exposureIndex+=1
             }
             if e.kind=="present" {
-                guard e.evidenceVersion==3,e.shownAt==e.at,displayed[e.presentationID]==nil,
+                guard [3,4].contains(e.evidenceVersion ?? 0),e.shownAt==e.at,displayed[e.presentationID]==nil,
                       let definition=e.definitionID,let v=versions[definition],v.pointID==p.id,v.check.id==e.checkID,
                       ["unseen-in-app","seen-question","seen-answer","source-exposed","history-unknown"].contains(e.familiarity ?? ""),let eligible=e.eligibleAtShow else{throw ExamError.invalid("题目首次展示事实不完整。")}
-                let helpers=Self.helperIDs(course:course,pointID:p.id,check:v.check)
+                let helpers:Set<String>
+                if e.evidenceVersion==4 {
+                    guard let ids=e.helpPointIDs,Set(ids).count==ids.count,Set(ids).isSubset(of:pointIDs),ids.contains(p.id),Set(v.check.relatedKnowledgeIDs ?? []).isSubset(of:Set(ids)) else{throw ExamError.invalid("首次展示缺少当时帮助范围。")}
+                    helpers=Set(ids)
+                } else{helpers=Set([p.id]+(v.check.relatedKnowledgeIDs ?? []))}
                 let helped=helpers.contains{(helpAt[$0] ?? .distantPast)>e.at.addingTimeInterval(-86_400)}
-                let qualified=e.purpose=="review" && !helped && trained[p.id].map{e.at.timeIntervalSince($0)>=86_400}==true
-                guard !eligible || qualified,!eligible || !e.assisted else{throw ExamError.invalid("首次展示的延迟资格不一致。")}
+                if e.evidenceVersion==4 {
+                    guard let cid=e.curriculumID,let definition=curricula[cid],definition.pointID==p.id else{throw ExamError.invalid("首次展示缺少当时达标条件版本。")}
+                    guard Set(definition.prerequisites ?? []).isSubset(of:helpers) else{throw ExamError.invalid("首次展示遗漏当时前置帮助范围。")}
+                    let qualified=e.purpose=="review" && !helped && trainedDefinitions[cid].map{e.at.timeIntervalSince($0)>=86_400}==true
+                    guard !eligible || qualified else{throw ExamError.invalid("首次展示的延迟资格不一致。")}
+                }
+                guard !eligible || !e.assisted else{throw ExamError.invalid("首次展示帮助标记不一致。")}
                 let sourceSeen=v.check.originalQuestionID.flatMap{id in course.questionMappings.first{$0.id==id}}.map{sourceReferences.contains($0.documentID+"/"+String($0.page))} ?? false
                 let expected=seenAnswers.contains(v.check.id) ? "seen-answer":(seenChecks.contains(v.check.id) ? "seen-question":(sourceSeen ? "source-exposed":(v.check.originalQuestionID != nil ? "history-unknown":"unseen-in-app")))
                 guard e.familiarity==expected || e.familiarity=="history-unknown" else{throw ExamError.invalid("题目熟悉度与历史展示事实不一致。")}
@@ -176,26 +233,27 @@ struct KnowledgeLearningEngine {
                       answered.insert(e.presentationID).inserted,let response=e.selectedID,v.check.accepts(response),e.correct==v.check.correct(response) else{throw ExamError.invalid("历史作答与题目版本或判分不一致。")}
                 let q=v.check
                 seenChecks.insert(q.id);seenAnswers.insert(q.id)
-                if e.evidenceVersion==3 {
+                if [3,4].contains(e.evidenceVersion ?? 0) {
                     guard let opened=displayed[e.presentationID],opened.definitionID==e.definitionID,e.shownAt==opened.at,
-                          e.eligibleAtShow==opened.eligibleAtShow,e.familiarity==opened.familiarity else{throw ExamError.invalid("作答缺少相应首次展示事实。")}
-                    let helpers=Self.helperIDs(course:course,pointID:p.id,check:q)
+                          e.eligibleAtShow==opened.eligibleAtShow,e.familiarity==opened.familiarity,e.curriculumID==opened.curriculumID,e.helpPointIDs==opened.helpPointIDs else{throw ExamError.invalid("作答缺少相应首次展示事实。")}
+                    let helpers=Set(opened.helpPointIDs ?? ([p.id]+(q.relatedKnowledgeIDs ?? [])))
                     let helpedSinceShow=hinted.contains(e.presentationID) || helpers.contains{(helpAt[$0] ?? .distantPast)>=opened.at}
                     guard e.assisted || (opened.eligibleAtShow==true && !opened.assisted && !helpedSinceShow && e.purpose=="review") else{throw ExamError.invalid("提前展示或作答期间用过帮助，不能改成延迟独立成绩。")}
                 } else if e.evidenceVersion==2 {
-                    let helpers=Self.helperIDs(course:course,pointID:p.id,check:q)
+                    let helpers=Set([p.id]+(q.relatedKnowledgeIDs ?? []))
                     let helped=hinted.contains(e.presentationID) || helpers.contains{(helpAt[$0] ?? .distantPast)>e.at.addingTimeInterval(-86_400)}
                     guard !(helped || e.purpose != "review") || e.assisted else{throw ExamError.invalid("查阅或练习后的回答不能标成独立。")}
-                    if !e.assisted {guard p.purpose(q) != "guided",let prior=trained[p.id],e.at.timeIntervalSince(prior)>=86_400 else{throw ExamError.invalid("即时练习不能冒充隔时检验。")}}
+                    if !e.assisted {guard p.purpose(q) != "guided" else{throw ExamError.invalid("即时练习不能冒充隔时检验。")}}
                 } else {
                     let first=legacy[p.id]?.first.flatMap{versions[$0]?.check.id}
-                    let helped=hinted.contains(e.presentationID) || !(oldReads[e.day] ?? []).isDisjoint(with:Set([p.id]+p.prerequisites))
+                    let helped=hinted.contains(e.presentationID) || !(oldReads[e.day] ?? []).isDisjoint(with:Set([p.id]+(p.legacyBaseline?.prerequisites ?? [])))
                     guard !(helped || e.checkID==first) || e.assisted else{throw ExamError.invalid("旧练习助力标记不一致。")}
                 }
                 if e.correct==true {
-                    if p.skills==nil,q.id==p.checks.first?.id{learned[p.id,default:[]].insert(p.id)}
-                    else if (e.evidenceVersion ?? 0)>=2,e.purpose=="practice"{learned[p.id,default:[]].insert(p.skill(q))}
-                    if trained[p.id]==nil,Set(p.requiredSkillIDs).isSubset(of:learned[p.id] ?? []){trained[p.id]=e.at}
+                    for (cid,definition) in byPoint[p.id] ?? [] {
+                        if let token=Self.practiceToken(e,q:q,definition:definition){practiceTokens[cid,default:[]].insert(token)}
+                        if trainedDefinitions[cid]==nil,definition.tokens.isSubset(of:practiceTokens[cid] ?? []){trainedDefinitions[cid]=e.at}
+                    }
                 }
             } else if e.correct != nil || e.selectedID != nil{throw ExamError.invalid("阅读和错因不能带答题分数。")}
             if ["read","hint","feedback-read"].contains(e.kind){helpAt[e.pointID]=e.at}
@@ -204,11 +262,11 @@ struct KnowledgeLearningEngine {
             lastDay=e.day;lastTime=max(lastTime,e.at)
         }
         for (id,p) in record.bookmarks {
-            guard id==p.pointID,let unit=course.point(id),["lesson","question","feedback","complete"].contains(p.phase),
+            guard id==p.pointID,let unit=displayPoint(p),["lesson","question","feedback","complete"].contains(p.phase),
                   (0..<unit.lessonPageCount).contains(p.page),let key=p.definitionID,let q=versions[key]?.check,
                   Set(p.order)==Set(q.choices.map(\.id)),p.order.count==q.choices.count else{throw ExamError.invalid("知识点断点或选项次序无效。")}
             if let shown=p.shownAt {
-                guard let event=displayed[p.id],event.at==shown,event.definitionID==p.definitionID,event.familiarity==p.familiarity,event.eligibleAtShow==p.eligibleAtShow,event.purpose==p.mode else{throw ExamError.invalid("断点首次展示信息不一致。")}
+                guard let event=displayed[p.id],event.at==shown,event.definitionID==p.definitionID,event.familiarity==p.familiarity,event.eligibleAtShow==p.eligibleAtShow,event.purpose==p.mode,event.curriculumID==p.curriculumID,event.helpPointIDs==p.helpPointIDs else{throw ExamError.invalid("断点首次展示信息不一致。")}
             } else if p.eligibleAtShow==true{throw ExamError.invalid("没有首次展示事实的断点不能声明延迟资格。")}
             if p.phase=="feedback" || p.phase=="complete",let selected=p.selectedID {
                 guard let e=record.events.last(where:{$0.presentationID==p.id && $0.kind=="answer"}),e.selectedID==selected,e.checkID==q.id,e.assisted==p.assisted else{throw ExamError.invalid("当前反馈与落盘作答不一致。")}
@@ -221,34 +279,42 @@ struct KnowledgeLearningEngine {
         return key.flatMap{record.questionVersions?[$0]?.check}
     }
     private static func practiceSkills(record:KnowledgeLearningRecord,course:KnowledgeCourse,pointID:String)->Set<String> {
-        guard let p=course.point(pointID) else{return []};var skills=Set<String>()
+        guard let p=course.point(pointID) else{return []};let definition=KnowledgeCurriculumVersion.current(p);var tokens=Set<KnowledgePracticeToken>()
         for e in record.events where e.pointID==pointID && e.kind=="answer" && e.correct==true {
             guard let q=question(e,in:record) else{continue}
-            if p.skills==nil {if q.id==p.checks.first?.id{skills.insert(p.id)}}
-            else if (e.evidenceVersion ?? 0)>=2,e.purpose=="practice"{skills.insert(p.skill(q))}
+            if let token=practiceToken(e,q:q,definition:definition){tokens.insert(token)}
         }
-        return skills
+        return Set(definition.requirements.filter{r in r.stages.allSatisfy{tokens.contains(.init(skillID:r.skillID,stage:$0))}}.map(\.skillID))
     }
     private static func trainingAt(record:KnowledgeLearningRecord,course:KnowledgeCourse,pointID:String)->Date? {
-        guard let p=course.point(pointID) else{return nil};var skills=Set<String>()
-        for e in record.events where e.pointID==pointID && e.kind=="answer" && e.correct==true {
+        guard let p=course.point(pointID) else{return nil}
+        return trainingAt(record:record,definition:KnowledgeCurriculumVersion.current(p))
+    }
+    private static func trainingAt(record:KnowledgeLearningRecord,definition:KnowledgeCurriculumVersion)->Date? {
+        var tokens=Set<KnowledgePracticeToken>()
+        for e in record.events where e.pointID==definition.pointID && e.kind=="answer" && e.correct==true {
             guard let q=question(e,in:record) else{continue}
-            if p.skills==nil {if q.id==p.checks.first?.id{skills.insert(p.id)}}
-            else if (e.evidenceVersion ?? 0)>=2,e.purpose=="practice"{skills.insert(p.skill(q))}
-            if Set(p.requiredSkillIDs).isSubset(of:skills){return e.at}
+            if let token=practiceToken(e,q:q,definition:definition){tokens.insert(token)}
+            if definition.tokens.isSubset(of:tokens){return e.at}
         }
+        return nil
+    }
+    private static func practiceToken(_ e:KnowledgeLearningEvent,q:KnowledgeCourse.Check,definition:KnowledgeCurriculumVersion)->KnowledgePracticeToken? {
+        guard e.pointID==definition.pointID,e.kind=="answer",e.correct==true else{return nil}
+        if (e.evidenceVersion ?? 0)>=2,e.purpose=="practice"{return .init(skillID:q.skillID ?? definition.pointID,stage:q.practiceStage ?? "practice")}
+        if (e.evidenceVersion ?? 0)<2,definition.legacyFirstCheckID==q.id{return .init(skillID:definition.pointID,stage:"practice")}
         return nil
     }
     func trainedDay(_ id:String)->Int?{trainedAt(id).flatMap{try? ConceptCalendar.studyDay($0)}}
     func trainedAt(_ id:String)->Date?{Self.trainingAt(record:record,course:course,pointID:id)}
     func learnedSkills(_ id:String)->Int{Self.practiceSkills(record:record,course:course,pointID:id).count}
-    private static func helperIDs(course:KnowledgeCourse,pointID:String,check:KnowledgeCourse.Check?)->Set<String> {
-        var result=Set([pointID]+(check?.relatedKnowledgeIDs ?? [])),todo=Array(result)
+    private static func helperIDs(course:KnowledgeCourse,pointID:String,check:KnowledgeCourse.Check?,extra:[String]=[])->Set<String> {
+        var result=Set([pointID]+(check?.relatedKnowledgeIDs ?? [])+extra),todo=Array(result)
         while let id=todo.popLast(){for parent in course.point(id)?.prerequisites ?? []{if result.insert(parent).inserted{todo.append(parent)}}}
         return result
     }
-    private static func hasHelp(record:KnowledgeLearningRecord,course:KnowledgeCourse,pointID:String,check:KnowledgeCourse.Check,at:Date)->Bool {
-        let ids=helperIDs(course:course,pointID:pointID,check:check),cutoff=at.addingTimeInterval(-86_400)
+    private static func hasHelp(record:KnowledgeLearningRecord,course:KnowledgeCourse,pointID:String,check:KnowledgeCourse.Check,at:Date,scope:Set<String>?=nil)->Bool {
+        let ids=scope ?? helperIDs(course:course,pointID:pointID,check:check),cutoff=at.addingTimeInterval(-86_400)
         return record.events.contains{["read","hint","feedback-read"].contains($0.kind) && ids.contains($0.pointID) && $0.at>cutoff && $0.at<=at}
             || (record.exposures ?? []).contains{!Set($0.pointIDs).isDisjoint(with:ids) && $0.at>cutoff && $0.at<=at}
     }
@@ -268,7 +334,7 @@ struct KnowledgeLearningEngine {
             if e.correct==false{level=1;last=e.at;families=[];skills=[];transfer=false;wrong=true}
             else if !e.assisted {
                 level=min(10,max(1,level+1));last=e.at;families.insert(q.family ?? q.id);skills.insert(p.skill(q))
-                transfer=transfer || (p.purpose(q)=="transfer" && e.familiarity=="unseen-in-app" && e.evidenceVersion==3);wrong=false
+                transfer=transfer || (p.purpose(q)=="transfer" && e.familiarity=="unseen-in-app" && e.evidenceVersion==4);wrong=false
             } else{last=max(last,e.at)}
         }
         var due=last.addingTimeInterval(Double(xkl_word_review_interval_days(UInt32(max(1,level))))*86_400)
@@ -290,24 +356,39 @@ struct KnowledgeLearningEngine {
         let q=p.definitionID.flatMap{record.questionVersions?[$0]?.check}
         record.events.append(.init(id:UUID(),sequence:record.events.count+1,day:try day(now),at:now,kind:kind,pointID:p.pointID,presentationID:p.id,
             checkID:["answer","hint","error-note","feedback-read","present"].contains(kind) ? q?.id:nil,
-            selectedID:selected,correct:selected.map{q!.correct($0)},assisted:p.assisted,definitionID:p.definitionID,purpose:p.mode,errorTag:tag,evidenceVersion:3,
-            shownAt:p.shownAt,eligibleAtShow:p.eligibleAtShow,familiarity:p.familiarity))
+            selectedID:selected,correct:selected.map{q!.correct($0)},assisted:p.assisted,definitionID:p.definitionID,purpose:p.mode,errorTag:tag,evidenceVersion:4,
+            shownAt:p.shownAt,eligibleAtShow:p.eligibleAtShow,familiarity:p.familiarity,curriculumID:p.curriculumID,helpPointIDs:p.helpPointIDs))
     }
     private func version(_ pointID:String,_ q:KnowledgeCourse.Check)->String{(try? KnowledgeQuestionVersion(pointID:pointID,check:q).identity) ?? ""}
+    private mutating func savePresentation(_ p:KnowledgePresentation) {
+        if let previous=record.bookmarks[p.pointID],previous.id != p.id{var archive=record.presentationArchive ?? [:];archive[previous.id.uuidString]=previous;record.presentationArchive=archive}
+        record.bookmarks[p.pointID]=p
+    }
+    private mutating func restoreFrame(_ frame:KnowledgeReturnFrame) {
+        if let previous=frame.displaced{savePresentation(previous)}
+        else {
+            if let temporary=record.bookmarks[frame.displacedPointID]{var archive=record.presentationArchive ?? [:];archive[temporary.id.uuidString]=temporary;record.presentationArchive=archive}
+            record.bookmarks.removeValue(forKey:frame.displacedPointID)
+        }
+    }
     private func presentation(_ id:String,q:KnowledgeCourse.Check?=nil,review:Bool=false)->KnowledgePresentation {
         let p=course.point(id)!,selected=q ?? p.checks[0]
         return .init(id:UUID(),pointID:id,phase:review ? "question":"lesson",page:0,
             checkIndex:p.checks.firstIndex{$0.id==selected.id} ?? 0,order:selected.choices.map(\.id).shuffled(),assisted:!review,hintVisible:false,selectedID:nil,
-            definitionID:version(id,selected),mode:review ? "review":"practice")
+            definitionID:version(id,selected),mode:review ? "review":"practice",curriculumID:try? KnowledgeCurriculumVersion.current(p).identity)
     }
     private func selectCheck(_ p:KnowledgeCourse.Point,review:Bool,skillID:String?=nil)->KnowledgeCourse.Check {
         let eligible=p.checks.filter{q in (review ? p.purpose(q) != "guided":p.purpose(q)=="guided") && (skillID==nil || p.skill(q)==skillID)}
         let candidates=eligible.isEmpty ? p.checks:eligible,answers=record.events.filter{$0.pointID==p.id && $0.kind=="answer"}
         let last=answers.last?.checkID,counts=Dictionary(grouping:answers,by:{$0.checkID ?? ""}).mapValues{$0.count}
         let passed=reviewStatus(p.id)?.passedSkills ?? []
+        let definition=KnowledgeCurriculumVersion.current(p)
+        let practiced=Set(answers.compactMap{e -> KnowledgePracticeToken? in guard let q=Self.question(e,in:record) else{return nil};return Self.practiceToken(e,q:q,definition:definition)})
         return candidates.enumerated().min{a,b in
-            let ka=(review && !passed.contains(p.skill(a.element)) ? 0:1,encounterCount(a.element.id)==0 ? 0:1,a.element.id==last ? 1:0,counts[a.element.id] ?? 0,a.offset)
-            let kb=(review && !passed.contains(p.skill(b.element)) ? 0:1,encounterCount(b.element.id)==0 ? 0:1,b.element.id==last ? 1:0,counts[b.element.id] ?? 0,b.offset)
+            let pa=review ? (passed.contains(p.skill(a.element)) ? 1:0):(practiced.contains(.init(skillID:p.skill(a.element),stage:a.element.practiceStage ?? "practice")) ? 1:0)
+            let pb=review ? (passed.contains(p.skill(b.element)) ? 1:0):(practiced.contains(.init(skillID:p.skill(b.element),stage:b.element.practiceStage ?? "practice")) ? 1:0)
+            let ka=(pa,encounterCount(a.element.id)==0 ? 0:1,a.element.id==last ? 1:0,counts[a.element.id] ?? 0,a.offset)
+            let kb=(pb,encounterCount(b.element.id)==0 ? 0:1,b.element.id==last ? 1:0,counts[b.element.id] ?? 0,b.offset)
             return ka<kb
         }!.element
     }
@@ -324,10 +405,11 @@ struct KnowledgeLearningEngine {
     }
     mutating func open(_ id:String,review:Bool=false,restart:Bool=false,now:Date=Date())throws {
         _=try day(now);guard let unit=course.point(id) else{return}
+        if var frames=record.returnFrames,let frame=frames.last,frame.returnPointID==id,record.currentID==frame.displacedPointID{frames.removeLast();record.returnFrames=frames;restoreFrame(frame)}
         var p=record.bookmarks[id] ?? presentation(id)
         if restart{p=presentation(id)}
         if review{guard trainedAt(id) != nil else{return};p=presentation(id,q:selectCheck(unit,review:true),review:true)}
-        record.currentID=id;record.bookmarks[id]=p
+        record.currentID=id;savePresentation(p)
         if p.phase=="lesson"{try event("read",p,now)}
         if p.phase=="question"{try refreshAssistance(now:now)}
     }
@@ -335,11 +417,11 @@ struct KnowledgeLearningEngine {
         guard current?.phase=="question" else{return};_=try day(now)
         try presented(now:now)
         guard var p=current,let q=check,let shown=p.shownAt else{return}
-        let ids=Self.helperIDs(course:course,pointID:p.pointID,check:q)
+        let ids=Set(p.helpPointIDs ?? [p.pointID])
         let helped=record.events.contains{ids.contains($0.pointID) && ["read","hint","feedback-read"].contains($0.kind) && $0.at>=shown && $0.at<=now}
             || (record.exposures ?? []).contains{!Set($0.pointIDs).isDisjoint(with:ids) && $0.at>=shown && $0.at<=now}
         p.assisted=p.assisted || p.eligibleAtShow != true || p.mode != "review" || p.hintVisible || helped
-        record.bookmarks[p.pointID]=p
+        savePresentation(p)
     }
     private mutating func presented(now:Date)throws {
         guard var p=current,p.phase=="question",p.shownAt==nil,let q=check else{return}
@@ -350,33 +432,40 @@ struct KnowledgeLearningEngine {
             let answered=record.events.contains{$0.kind=="answer" && $0.checkID==q.id}
             p.familiarity=answered ? "seen-answer":(encounterCount(q.id)>0 ? "seen-question":(sourceSeen ? "source-exposed":(q.originalQuestionID != nil ? "history-unknown":"unseen-in-app")))
         }
-        p.shownAt=now;p.eligibleAtShow=p.mode=="review" && !p.hintVisible && trainedAt(p.pointID).map{now.timeIntervalSince($0)>=86_400}==true
-            && !Self.hasHelp(record:record,course:course,pointID:p.pointID,check:q,at:now)
+        if p.curriculumID==nil{p.curriculumID=try KnowledgeCurriculumVersion.current(point!).identity}
+        guard let cid=p.curriculumID,let definition=record.curriculumVersions?[cid] else{throw ExamError.invalid("本次展示缺少教学条件版本。")}
+        p.helpPointIDs=Self.helperIDs(course:course,pointID:p.pointID,check:q,extra:definition.prerequisites ?? []).sorted()
+        p.shownAt=now;p.eligibleAtShow=p.mode=="review" && !p.hintVisible && Self.trainingAt(record:record,definition:definition).map{now.timeIntervalSince($0)>=86_400}==true
+            && !Self.hasHelp(record:record,course:course,pointID:p.pointID,check:q,at:now,scope:Set(p.helpPointIDs ?? [p.pointID]))
         p.assisted=p.eligibleAtShow != true
-        record.bookmarks[p.pointID]=p;try event("present",p,now)
+        savePresentation(p);try event("present",p,now)
     }
     private mutating func ask(_ q:KnowledgeCourse.Check,mode:String,resumePage:Int?=nil,now:Date)throws {
         guard let old=current else{return};var p=presentation(old.pointID,q:q,review:true)
-        p.mode=mode;p.page=old.page;p.resumePage=resumePage
-        record.bookmarks[p.pointID]=p;try refreshAssistance(now:now)
+        p.mode=mode;p.page=old.page;p.resumePage=resumePage;p.curriculumID=old.curriculumID ?? p.curriculumID
+        savePresentation(p);try refreshAssistance(now:now)
     }
     mutating func readNext(token:UUID,now:Date=Date())throws {
-        guard var p=current,p.id==token,p.phase=="lesson",let unit=point else{return};_=try day(now)
+        guard var p=current,p.id==token,p.phase=="lesson",let unit=displayPoint else{return};_=try day(now)
+        if p.mode=="probe-lesson"{try ask(selectCheck(unit,review:false,skillID:p.retrySkillID),mode:"probe",now:now);return}
         if p.page<unit.sections.count,let id=unit.sections[p.page].checkpointID,let q=unit.checks.first(where:{$0.id==id}) {
             let chosen=p.retrySkillID==unit.skill(q) ? selectCheck(unit,review:false,skillID:p.retrySkillID):q
             try ask(chosen,mode:"practice",resumePage:p.page+1,now:now);return
         }
         if p.page<unit.lessonPageCount-1 {
-            p.id=UUID();p.page+=1;p.selectedID=nil;record.bookmarks[p.pointID]=p;try event("read",p,now)
+            p.id=UUID();p.page+=1;p.selectedID=nil;savePresentation(p);try event("read",p,now)
         } else {
-            let passed=Self.practiceSkills(record:record,course:course,pointID:unit.id)
-            if let missing=unit.requiredSkillIDs.first(where:{!passed.contains($0)}){try ask(selectCheck(unit,review:false,skillID:missing),mode:"practice",now:now)}
-            else{p.phase="complete";p.selectedID=nil;record.bookmarks[p.pointID]=p}
+            let target=course.point(unit.id)!,passed=Self.practiceSkills(record:record,course:course,pointID:unit.id)
+            if let missing=target.requiredSkillIDs.first(where:{!passed.contains($0)}) {
+                if p.mode=="legacy" || p.curriculumID != (try KnowledgeCurriculumVersion.current(target).identity){try beginUpdatedLesson(target,skillID:missing,now:now)}
+                else{try ask(selectCheck(unit,review:false,skillID:missing),mode:"practice",now:now)}
+            }
+            else{p.phase="complete";p.selectedID=nil;savePresentation(p)}
         }
     }
     mutating func hint(token:UUID,now:Date=Date())throws {
         guard var p=current,p.id==token,p.phase=="question",!p.hintVisible else{return}
-        p.assisted=true;p.hintVisible=true;record.bookmarks[p.pointID]=p;try event("hint",p,now)
+        p.assisted=true;p.hintVisible=true;savePresentation(p);try event("hint",p,now)
     }
     mutating func reference(now:Date=Date())throws {
         guard let p=current else{return};if p.phase=="question"{try hint(token:p.id,now:now)}else{try event("read",p,now)}
@@ -386,7 +475,7 @@ struct KnowledgeLearningEngine {
         guard q.accepts(response) else{throw ExamError.invalid(q.type=="number" ? "请输入有限数值，并按要求填写单位。":"请先选择完整答案。")}
         try refreshAssistance(now:now);var next=current!
         try event("answer",next,now,selected:response,tag:q.correct(response) ? nil:q.errorTag(response))
-        next.phase="feedback";next.selectedID=response;record.bookmarks[next.pointID]=next;try event("feedback-read",next,now)
+        next.phase="feedback";next.selectedID=response;savePresentation(next);try event("feedback-read",next,now)
     }
     mutating func noteError(_ tag:String,token:UUID,now:Date=Date())throws {
         guard let p=current,p.id==token,p.phase=="feedback",["meaning","conditions","method","calculation","units","code-flow"].contains(tag) else{return}
@@ -394,11 +483,11 @@ struct KnowledgeLearningEngine {
     }
     mutating func saveDraft(_ text:String,token:UUID)throws {
         guard var p=current,p.id==token,p.phase=="question",text.count<=200 else{return}
-        p.draftResponse=text;record.bookmarks[p.pointID]=p
+        p.draftResponse=text;savePresentation(p)
     }
     mutating func lessonPage(_ page:Int,now:Date=Date())throws {
-        guard let old=current,let unit=point,(0..<unit.lessonPageCount).contains(page) else{return}
-        var p=presentation(old.pointID);p.page=page;record.bookmarks[p.pointID]=p;try event("read",p,now)
+        guard let old=current,let unit=displayPoint,(0..<unit.lessonPageCount).contains(page) else{return}
+        var p=presentation(old.pointID);p.page=page;p.curriculumID=old.curriculumID;p.mode=old.mode=="legacy" ? "legacy":"practice";savePresentation(p);try event("read",p,now)
     }
     func encounterCount(_ checkID:String)->Int{Set(record.events.filter{["present","answer"].contains($0.kind) && $0.checkID==checkID}.map(\.presentationID)).count}
     func unseenTransferPoolEmpty(_ id:String)->Bool {
@@ -407,47 +496,68 @@ struct KnowledgeLearningEngine {
         return pool.isEmpty || pool.allSatisfy{encounterCount($0.id)>0}
     }
     mutating func explainAgain(now:Date=Date())throws {
-        guard let old=current,let unit=point else{return};let q=check;var p=presentation(old.pointID,q:q)
+        guard let old=current,let unit=displayPoint else{return};let q=check;var p=presentation(old.pointID,q:q);p.curriculumID=old.curriculumID
         p.page=unit.sectionIndex(old.selectedID.flatMap{q?.repairSection($0)} ?? q?.repairSectionID) ?? 0
-        p.retrySkillID=q.map{unit.skill($0)};p.mode="practice"
-        record.bookmarks[p.pointID]=p;try event("read",p,now)
+        p.retrySkillID=q.map{unit.skill($0)};p.mode=(old.mode=="probe" || old.mode=="probe-lesson") ? "probe-lesson":"practice"
+        savePresentation(p);try event("read",p,now)
     }
-    mutating func repairPrerequisite(_ id:String,now:Date=Date())throws {
-        guard let p=current,id != p.pointID,course.point(id) != nil else{return}
-        var stack=record.returnPoints ?? [];if !stack.contains(p.pointID){stack.append(p.pointID)};record.returnPoints=stack
-        try open(id,restart:true,now:now)
+    mutating func repairPrerequisite(_ id:String,skillID:String?=nil,now:Date=Date())throws {
+        guard let p=current,id != p.pointID,let unit=course.point(id) else{return};_=try day(now)
+        let frame=KnowledgeReturnFrame(returnPointID:p.pointID,displacedPointID:id,displaced:record.bookmarks[id])
+        record.returnFrames=(record.returnFrames ?? [])+[frame]
+        var probe=presentation(id,q:selectCheck(unit,review:false,skillID:skillID ?? unit.requiredSkillIDs.first),review:true)
+        probe.mode="probe";record.currentID=id;savePresentation(probe);try refreshAssistance(now:now)
     }
     mutating func finish(token:UUID,now:Date=Date())throws {
         guard var p=current,p.id==token,p.phase=="feedback",let q=check,let response=p.selectedID else{return}
         guard q.correct(response) else{try explainAgain(now:now);return}
-        if let nextPage=p.resumePage,let unit=point,nextPage<unit.lessonPageCount {
+        if p.mode=="probe"{try next(now:now);return}
+        if let nextPage=p.resumePage,let unit=displayPoint,nextPage<unit.lessonPageCount {
             p.id=UUID();p.phase="lesson";p.page=nextPage;p.selectedID=nil;p.resumePage=nil;p.assisted=true;p.mode="practice";p.hintVisible=false
             p.shownAt=nil;p.eligibleAtShow=nil;p.familiarity=nil
-            record.bookmarks[p.pointID]=p;try event("read",p,now);return
+            p.helpPointIDs=nil
+            savePresentation(p);try event("read",p,now);return
         }
         if p.mode != "review",let unit=point {
             let learned=Self.practiceSkills(record:record,course:course,pointID:p.pointID)
-            if let missing=unit.requiredSkillIDs.first(where:{!learned.contains($0)}){try ask(selectCheck(unit,review:false,skillID:missing),mode:"practice",now:now);return}
+            if let missing=unit.requiredSkillIDs.first(where:{!learned.contains($0)}) {
+                if p.mode=="legacy" || p.curriculumID != (try KnowledgeCurriculumVersion.current(unit).identity){try beginUpdatedLesson(unit,skillID:missing,now:now)}
+                else{try ask(selectCheck(unit,review:false,skillID:missing),mode:"practice",now:now)}
+                return
+            }
         }
-        p.phase="complete";record.bookmarks[p.pointID]=p
+        p.phase="complete";savePresentation(p)
+    }
+    private mutating func beginUpdatedLesson(_ p:KnowledgeCourse.Point,skillID:String,now:Date)throws {
+        var next=presentation(p.id)
+        if let section=p.skills?.first(where:{$0.id==skillID})?.lessonSectionID{next.page=p.sectionIndex(section) ?? 0}
+        savePresentation(next);try event("read",next,now)
     }
     mutating func next(now:Date=Date())throws {
         _=try day(now);let excluded=Set(record.deferredIDs)
+        if var frames=record.returnFrames,let frame=frames.popLast() {
+            record.returnFrames=frames
+            restoreFrame(frame)
+            try open(frame.returnPointID,now:now);return
+        }
         if var stack=record.returnPoints,let id=stack.popLast(),!excluded.contains(id) {
-            record.returnPoints=stack;try open(id,now:now);try explainAgain(now:now);return
+            record.returnPoints=stack;try open(id,now:now);return
         }
         let snapshot=self
         let ready:(KnowledgeCourse.Point)->Bool={p in !excluded.contains(p.id) && p.prerequisites.allSatisfy{snapshot.trainedAt($0) != nil}}
         let due=course.points.first{ready($0) && snapshot.reviewStatus($0.id).map{$0.dueAt<=now}==true}
         let fresh=course.points.first{ready($0) && snapshot.trainedAt($0.id)==nil}
         record.currentID=nil
-        if let p=due ?? fresh {
+        let accessible=course.points.first{!excluded.contains($0.id) && snapshot.trainedAt($0.id)==nil}
+        if let p=due ?? fresh ?? accessible {
             let restart=fresh?.id==p.id && record.bookmarks[p.id]?.phase=="complete"
             try open(p.id,review:due?.id==p.id,restart:restart,now:now)
         }
     }
+    var hasPendingReturn:Bool{!(record.returnFrames ?? []).isEmpty || !(record.returnPoints ?? []).isEmpty}
     mutating func deferCurrent(now:Date=Date())throws {
         guard let p=current else{return};try event("defer",p,now)
+        if ["probe","probe-lesson"].contains(p.mode ?? ""),hasPendingReturn{try next(now:now);return}
         if !record.deferredIDs.contains(p.pointID){record.deferredIDs.append(p.pointID)}
         record.currentID=nil;try next(now:now)
     }
