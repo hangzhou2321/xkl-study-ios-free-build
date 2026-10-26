@@ -43,6 +43,7 @@ struct KnowledgeLearningView:View {
                 if let error=store.error {Text(error).foregroundStyle(.red)}
             }.padding(22).frame(maxWidth:720,alignment:.leading).frame(maxWidth:.infinity)
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("讲懂一个知识点").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement:.topBarTrailing){Button("大纲"){if let p=store.engine?.current,p.phase=="question"{saveDraft(p)};outline=true}}

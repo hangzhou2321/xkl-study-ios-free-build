@@ -715,6 +715,7 @@ import UIKit
             if selectedCase.hasPrefix("knowledge-") {
                 teaching.knowledgeCourse = .synthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))
                 if ["knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair"].contains(selectedCase){teaching.knowledgeCourse = .adaptiveSynthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))}
+                if selectedCase.hasPrefix("knowledge-steps-"){teaching.knowledgeCourse = .structuredSynthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))}
                 teaching.knowledgeCourse?.sourceDocuments=[.init(id:"synthetic",title:"纯合成讲义原页（非用户资料）",fileName:"synthetic.pdf",sha256:sourceHash,bytes:bytes.count,pages:[.init(number:1,asset:sourceAsset),.init(number:2,asset:continuationAsset)])]
                 let knowledgeAssets=root.appendingPathComponent("KnowledgeSources",isDirectory:true)
                 try FileManager.default.createDirectory(at:knowledgeAssets,withIntermediateDirectories:true)
@@ -733,7 +734,29 @@ import UIKit
                     precondition(!auxiliary.blocked && auxiliary.engine?.record.cardIDs.allSatisfy({$0.hasPrefix("kp-")})==true,"New recall cannot contain legacy cards")
                 } else if !["knowledge-home","knowledge-sources"].contains(selectedCase) {
                     let learning=KnowledgeLearningStore(course:knowledge,baseDirectory:root);learning.start()
-                    if selectedCase == "knowledge-review" {
+                    if selectedCase.hasPrefix("knowledge-steps-") {
+                        var process=learning.engine!,count=0
+                        while let p=process.current,p.phase=="lesson",count<12{try process.readNext(token:p.id);count+=1}
+                        if selectedCase != "knowledge-steps-high" {
+                            let p=process.current!;try process.answer(process.check!.syntheticCorrectResponse,token:p.id);try process.finish(token:p.id)
+                            while let p=process.current,p.phase=="lesson",count<24{try process.readNext(token:p.id);count+=1}
+                        }
+                        if selectedCase == "knowledge-steps-wrong",let q=process.check,let p=process.current {
+                            var values=q.stepResponses(q.syntheticCorrectResponse)!;values["relation"]="t=e*p"
+                            let bytes=try JSONEncoder().encode(values)
+                            try process.answer(String(data:bytes,encoding:.utf8)!,token:p.id)
+                            precondition(process.record.events.last?.stepScores?.map(\.status)==["correct","wrong","correct"],"A matching final value cannot hide a wrong relation")
+                        }
+                        if selectedCase == "knowledge-steps-draft",let q=process.check,let p=process.current {
+                            var values=q.stepResponses(q.syntheticCorrectResponse)!;values["relation"]="t^2=e^2/p^2"
+                            let raw=String(data:try JSONEncoder().encode(values),encoding:.utf8)!
+                            precondition(!q.accepts(raw),"Unrecognized legitimate notation remains pending")
+                            try process.saveDraft(raw,token:p.id);try process.explainAgain();try process.resumeAttempt(p.id)
+                        }
+                        expectedKnowledgePhase=process.current!.phase;expectedKnowledgeAnswers=process.record.events.filter{$0.kind=="answer"}.count
+                        _=try KnowledgeLearningEngine(course:knowledge,record:process.record)
+                        try DurableFile.write(JSONEncoder().encode(process.record),to:root.appendingPathComponent("KnowledgeLearning/"+subject.rawValue+"/current.json"))
+                    } else if selectedCase == "knowledge-review" {
                         let yesterday=Calendar.current.date(byAdding:.day,value:-1,to:Date())!
                         var practice=try KnowledgeLearningEngine.fresh(knowledge);try practice.start(now:yesterday)
                         while let p=practice.current,p.phase=="lesson" {try practice.readNext(token:p.id,now:yesterday)}
@@ -905,7 +928,7 @@ struct ProfessionalPriorityPreview: View {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
         case "knowledge-home","knowledge-sources":return teaching.knowledgeCourse?.retiredLegacyCards==true && engine.record.attempts.isEmpty
-        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review","knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair":
+        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review","knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair","knowledge-steps-high","knowledge-steps-low","knowledge-steps-wrong","knowledge-steps-draft":
             guard let course=teaching.knowledgeCourse,let expected=fixture.expectedKnowledgePointID,
                   knowledgeRendered==expected+"|"+fixture.expectedKnowledgePhase else{return false}
             let stored=KnowledgeLearningStore(course:course,baseDirectory:fixture.root)

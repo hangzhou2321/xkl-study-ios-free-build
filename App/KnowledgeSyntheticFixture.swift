@@ -21,7 +21,7 @@ extension KnowledgeCourse {
                 relation.responseType="expression";relation.expression = .init(version:1,variables:vars,expectedLHS:"t",accepted:[right],rejected:[.init(forms:[wrong],feedback:mixed ? "遗漏了前一阶段已经消耗的量。":(reserve>0 ? "把必须保留的部分也算成可用了。":"相乘不能得到持续时长。"),errorTag:"method",repairSectionID:section)])
                 relation.methodIDs=[method]
                 let prompt=reserve>0 ? "纯合成题：总量e=\(e)L，必须保留reserve=\(reserve)L，每小时消耗p=\(rate)L/h。求还能使用的时间t。":"纯合成题：允许使用的总量e=\(e)L，每小时消耗p=\(rate)L/h。求还能使用的时间t。"
-                var root=Check(id:id,prompt:mixed ? "纯合成组合题：总量e=24L，第一段以p1=3L/h用t1=2h，之后改为p2=6L/h。第二段还能使用多久？请自己组织关系。":prompt,choices:[],answerID:"steps",explanation:"各项按同一题面分别核对。条件或关系不符时，最终数值相符也不记方法通过。")
+                var root=Check(id:id,prompt:mixed ? "纯合成组合题：总量e=24L，第一段以p1=3L/h用t1=2h，之后改为p2=6L/h。第二段还能使用多久？请自己组织关系。":prompt+(stage=="scaffold-high" ? "\n本轮已给框架：先求可用量，再除以每小时速度。只补关键数值，记录有帮助练习。":""),choices:[],answerID:"steps",explanation:"各项按同一题面分别核对。条件或关系不符时，最终数值相符也不记方法通过。")
                 root.responseType="structured";root.steps=[conditions,relation,number("result","时间结果（带单位）",time,"h")]
                 root.skillID=method;root.purpose=role;root.family=p.id+"-"+label;root.repairSectionID=section;root.practiceStage=stage
                 root.hint=mixed ? "第一段已用量是p1×t1，剩余再除以p2。":"用总量先扣保留量，再按每小时用量计算。"
@@ -29,7 +29,6 @@ extension KnowledgeCourse {
                 return root
             }
             var high=task("high",role:"guided",e:12,rate:3,reserve:index==0 ? 0:6,stage:"scaffold-high")
-            high.prompt+="\n本轮已给框架：先求可用量，再除以每小时速度。只补关键数值，记录有帮助练习。"
             high.steps=[number("available","允许使用多少L？",index==0 ? 12:6,"L"),number("result","能用多少h？",index==0 ? 4:2,"h")]
             high.exposureAliases=[p.id+"-practice"]+(index==0 ? [p.id+"-number-v2"]:[])
             let low=task("low",role:"guided",e:18,rate:3,reserve:index==0 ? 0:6,stage:"scaffold-low")

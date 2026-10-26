@@ -22,7 +22,8 @@ CASES = ("plan", "sources", "question", "answer", "recall", "guide-only",
          "unified-lesson-transfer", "unified-lesson-transfer-answer",
          "unified-postponed", "unified-last-card", "knowledge-home", "knowledge-lesson",
          "knowledge-example", "knowledge-question", "knowledge-wrong", "knowledge-review", "knowledge-sources", "knowledge-recall",
-         "knowledge-number", "knowledge-multiple", "knowledge-checkpoint", "knowledge-repair")
+         "knowledge-number", "knowledge-multiple", "knowledge-checkpoint", "knowledge-repair",
+         "knowledge-steps-high", "knowledge-steps-low", "knowledge-steps-wrong", "knowledge-steps-draft")
 CAPTURES = [(subject, case) for subject in SUBJECTS for case in CASES]
 
 
