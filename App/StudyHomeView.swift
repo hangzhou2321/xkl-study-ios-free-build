@@ -147,7 +147,7 @@ struct StudyHomeView: View {
         case .computer:
             guard let engine = handbookComputer.engine else { return "进入专业课页，导入已准备的宝典卡" }
             let stats = engine.stats(on: Date())
-            return "宝典 \(stats.total) 张 · 已自评 \(stats.seen) · 到期 \(stats.due) · 未背 \(stats.unseen)"
+            return "宝典 \(stats.total) 张 · 已开始 \(stats.seen) · 到期 \(stats.due) · 未背 \(stats.unseen)"
         case .power:
             let target = professionalPower
             guard let engine = target.engine else { return "进入专业课页，导入手机中已准备的原题题库" }
