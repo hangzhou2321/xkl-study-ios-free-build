@@ -196,6 +196,18 @@ struct KnowledgeSourcesView:View {
     var baseDirectory:URL?=nil
     var body:some View {
         List {
+            Section("原讲义与资料全文") {
+                Text("可查看配套原页。原文可能有相邻内容和答案，打开会保存查阅事实，不计答题成绩。").font(.footnote)
+                ForEach(course.sourceDocuments){doc in
+                    DisclosureGroup(doc.title){
+                        ForEach(doc.pages,id:\.number){page in
+                            NavigationLink("PDF第\(page.number)页"){
+                                KnowledgeSourcePageView(course:course,documentID:doc.id,page:page.number,baseDirectory:baseDirectory)
+                            }
+                        }
+                    }
+                }
+            }
             if let id=pointID,let point=course.point(id) {
                 Section("同一知识点的讲义出处"){
                     ForEach(Array(point.sources.enumerated()),id:\.offset){_,s in

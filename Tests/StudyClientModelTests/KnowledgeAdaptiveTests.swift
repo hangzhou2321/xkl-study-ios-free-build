@@ -24,6 +24,11 @@ final class KnowledgeAdaptiveTests:XCTestCase {
         XCTAssertEqual((0...10).map{xkl_word_review_interval_days(UInt32($0))},[0,1,2,3,5,7,10,15,30,90,180])
         XCTAssertEqual(xkl_word_review_interval_days(11),0)
     }
+    func testUnindexedContinuationPageStillRecordsDocumentHelpInsteadOfBypassingIt() {
+        let c=course()
+        XCTAssertEqual(Set(c.affectedPoints(documentID:"synthetic",page:99)),Set(c.points.map(\.id)))
+        XCTAssertEqual(c.affectedPoints(documentID:"synthetic",page:1),[c.points[0].id])
+    }
     func testV2InlineNumberThenMultipleAndTransferRequireSeparateColdEvidence()throws {
         let c=KnowledgeCourse.adaptiveSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
         var e=try KnowledgeLearningEngine.fresh(c);try e.start(now:date(day));try read(&e,at:date(day))

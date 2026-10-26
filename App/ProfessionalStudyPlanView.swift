@@ -710,6 +710,11 @@ import UIKit
             if selectedCase.hasPrefix("knowledge-") {
                 teaching.knowledgeCourse = .synthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))
                 if ["knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair"].contains(selectedCase){teaching.knowledgeCourse = .adaptiveSynthetic(subject:subject,hash:hash,legacyIDs:(cards+supplementCards).map(\.id))}
+                teaching.knowledgeCourse?.sourceDocuments=[.init(id:"synthetic",title:"纯合成讲义原页（非用户资料）",fileName:"synthetic.pdf",sha256:sourceHash,bytes:bytes.count,pages:[.init(number:1,asset:sourceAsset),.init(number:2,asset:continuationAsset)])]
+                let knowledgeAssets=root.appendingPathComponent("KnowledgeSources",isDirectory:true)
+                try FileManager.default.createDirectory(at:knowledgeAssets,withIntermediateDirectories:true)
+                try bytes.write(to:knowledgeAssets.appendingPathComponent(sourceHash+".png"),options:.atomic)
+                try continuationBytes.write(to:knowledgeAssets.appendingPathComponent(continuationHash+".png"),options:.atomic)
             }
             let package=ConceptContent(format:"xkl-concepts-v1",bankBytes:bankBytes,bankSHA256:hash)
             let course=ConceptCourse(format:teaching.knowledgeCourse == nil ? "xkl-course-v5":(teaching.knowledgeCourse?.format=="knowledge-course-v2" ? "xkl-course-v7":"xkl-course-v6"),subject:subject,bankContent:try JSONEncoder().encode(package),teaching:teaching)

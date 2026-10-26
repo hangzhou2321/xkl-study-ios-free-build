@@ -147,7 +147,12 @@ struct KnowledgeCourse: Codable, Equatable {
     }
     func point(_ id:String)->Point? { points.first {$0.id==id} }
     func affectedPoints(documentID:String,page:Int)->[String] {
-        Array(Set(points.filter{$0.sources.contains{$0.documentID==documentID && $0.page==page}}.map(\.id)+questionMappings.filter{$0.documentID==documentID && $0.page==page}.flatMap(\.knowledgeIDs))).sorted()
+        let exact=Array(Set(points.filter{$0.sources.contains{$0.documentID==documentID && $0.page==page}}.map(\.id)+questionMappings.filter{$0.documentID==documentID && $0.page==page}.flatMap(\.knowledgeIDs))).sorted()
+        // A full-page browser may include continuation pages without a precise
+        // point index. Preserve the help fact conservatively for this document.
+        if !exact.isEmpty{return exact}
+        let documentPoints=points.filter{$0.sources.contains{$0.documentID==documentID}}.map(\.id)
+        return documentPoints.isEmpty ? points.map(\.id):documentPoints
     }
     func recallDeck(bankID:String)->RecallDeck {
         RecallDeck(subject:subject,bankID:bankID,cards:points.map { p in
