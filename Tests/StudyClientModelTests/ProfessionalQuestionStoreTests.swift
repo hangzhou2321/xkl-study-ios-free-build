@@ -32,15 +32,24 @@ final class ProfessionalQuestionStoreTests: XCTestCase {
     }
     private func root() throws -> URL {
         let value = FileManager.default.temporaryDirectory.appendingPathComponent("professional-question-store-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: value, withIntermediateDirectories: true); return value
+        try FileManager.default.createDirectory(at: value, withIntermediateDirectories: true)
+        return value.standardizedFileURL.resolvingSymlinksInPath()
     }
     private func current(_ base: URL) -> URL { base.appendingPathComponent("ProfessionalQuestions/power/current.json") }
     private func initial(_ base: URL) -> URL { base.appendingPathComponent("ProfessionalQuestions/power/initial.json") }
     private func files(_ base: URL) throws -> [String: Data] {
+        let canonical = base.standardizedFileURL.resolvingSymlinksInPath()
+        let rootComponents = canonical.pathComponents
         var values: [String: Data] = [:]
-        guard let enumerator = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey]) else { return values }
+        guard let enumerator = FileManager.default.enumerator(at: canonical, includingPropertiesForKeys: [.isRegularFileKey]) else { return values }
         for case let path as URL in enumerator where try path.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
-            values[String(path.path.dropFirst(base.path.count + 1))] = try Data(contentsOf: path)
+            let components = path.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+            guard components.count > rootComponents.count, Array(components.prefix(rootComponents.count)) == rootComponents else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+            let relative = components.dropFirst(rootComponents.count).joined(separator: "/")
+            guard values[relative] == nil else { throw CocoaError(.fileReadCorruptFile) }
+            values[relative] = try Data(contentsOf: path)
         }
         return values
     }
@@ -71,7 +80,10 @@ final class ProfessionalQuestionStoreTests: XCTestCase {
         }
         let before = try files(base)
         let store = try prepared(base); _ = try answer(store)
-        for path in protected { XCTAssertEqual(try Data(contentsOf: base.appendingPathComponent(path)), before[path]) }
+        for path in protected {
+            let expected = try XCTUnwrap(before[path], "Protection baseline lacks \(path)")
+            XCTAssertEqual(try Data(contentsOf: base.appendingPathComponent(path)), expected)
+        }
         XCTAssertTrue(FileManager.default.fileExists(atPath: current(base).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: initial(base).path))
     }
@@ -83,6 +95,33 @@ final class ProfessionalQuestionStoreTests: XCTestCase {
         store.importData(Data("{\"format\":\"wrong\"}".utf8))
         XCTAssertNotNil(store.error); XCTAssertFalse(store.blocked); XCTAssertNil(store.engine)
         XCTAssertEqual(try files(base), before)
+    }
+
+    @MainActor func testSymlinkedBaseCapturesSameRelativeProtectionBaseline() throws {
+        let base = try root()
+        let alias = FileManager.default.temporaryDirectory.appendingPathComponent("professional-question-base-alias-" + UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: alias)
+            try? FileManager.default.removeItem(at: base)
+        }
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: base)
+        let protected = ["QuestionBank/current-state.json", "Study/event-log.bin"]
+        for path in protected {
+            let file = base.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(("alias-protection-" + path).utf8).write(to: file)
+        }
+        let before = try files(alias)
+        XCTAssertEqual(before, try files(base))
+        XCTAssertEqual(Set(before.keys), Set(protected))
+        let store = try prepared(alias); _ = try answer(store)
+        let after = try files(alias)
+        XCTAssertEqual(after, try files(base))
+        for path in protected {
+            let expected = try XCTUnwrap(before[path], "Alias baseline lacks \(path)")
+            XCTAssertEqual(after[path], expected)
+            XCTAssertEqual(try Data(contentsOf: base.appendingPathComponent(path)), expected)
+        }
     }
 
     @MainActor func testIncompleteSubmissionDoesNotLockOrWriteAnOtherwiseIntactRecord() throws {
