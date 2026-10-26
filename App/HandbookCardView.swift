@@ -48,8 +48,7 @@ struct HandbookCardView: View {
         NavigationStack {
             ScrollViewReader { scroll in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        Color.clear.frame(height: 0).id("handbook-top")
+                    VStack(alignment: .leading, spacing: 18) {
                         if let engine = store.engine {
                             if studying, let card = engine.currentCard, let presentation = engine.presentation {
                                 studyCard(engine, card, presentation)
@@ -69,6 +68,7 @@ struct HandbookCardView: View {
                                 .font(.footnote).foregroundStyle(.orange)
                         }
                     }
+                    .id("handbook-top")
                     .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 24)
                     .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
                 }
@@ -288,7 +288,7 @@ struct HandbookCardView: View {
 
     private func completion(_ engine: HandbookRecallEngine) -> some View {
         let stats = engine.stats(on: displayDate)
-        return VStack(alignment: .leading, spacing: 22) {
+        return VStack(alignment: .leading, spacing: 18) {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 48)).foregroundStyle(.blue)
             Text("这一轮先到这里").font(.system(.largeTitle, design: .rounded).weight(.bold))
             Text("当前可背的卡片已完成或暂缓。记录已经保存，刚自评过的卡不会立即回锅。")
@@ -319,10 +319,14 @@ struct HandbookCardView: View {
                 if p.revealed {
                     HStack(spacing: 12) {
                         Button { store.rate(remembered: false, token: p.id) } label: {
-                            Label("没记住", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity, minHeight: 42)
+                            Label("没记住", systemImage: "arrow.uturn.backward")
+                                .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
+                                .padding(.vertical, 6)
                         }.buttonStyle(.bordered).tint(.orange).accessibilityIdentifier("handbook-forgotten")
                         Button { store.rate(remembered: true, token: p.id) } label: {
-                            Label("记住了", systemImage: "checkmark").frame(maxWidth: .infinity, minHeight: 42)
+                            Label("记住了", systemImage: "checkmark")
+                                .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
+                                .padding(.vertical, 6)
                         }.buttonStyle(.borderedProminent).accessibilityIdentifier("handbook-remembered")
                     }
                     Text("按现在能否回忆来选，下一张会自动出现。")
@@ -330,12 +334,14 @@ struct HandbookCardView: View {
                 } else {
                     Button { store.reveal(token: p.id) } label: {
                         Label("翻答案", systemImage: "rectangle.on.rectangle")
-                            .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+                            .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
+                            .padding(.vertical, 6)
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("handbook-reveal")
                 }
-                Button("暂时不背 · 本轮稍后") { store.postpone(token: p.id) }
-                    .font(.footnote).padding(.vertical, 3).accessibilityIdentifier("handbook-postpone")
-            }.controlSize(.large).disabled(store.blocked)
+                Button { store.postpone(token: p.id) } label: {
+                    Text("暂时不背 · 本轮稍后").font(.footnote).frame(minHeight: 44)
+                }.accessibilityIdentifier("handbook-postpone")
+            }.controlSize(.regular).disabled(store.blocked)
                 .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 8)
                 .frame(maxWidth: .infinity).background(.bar)
         }
@@ -403,20 +409,21 @@ struct HandbookCardView: View {
 private struct HandbookCardFace: View {
     let card: HandbookCard
     let revealed: Bool
-    @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 24.0
-    @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 23.0
-    @ScaledMetric(relativeTo: .body) private var exampleSize: CGFloat = 20.0
-    @ScaledMetric(relativeTo: .body) private var stepSize: CGFloat = 19.0
-    @ScaledMetric(relativeTo: .body) private var noteSize: CGFloat = 18.0
+    @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
+    @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
+    @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
+    @ScaledMetric(relativeTo: .body) private var exampleSize: CGFloat = 18.0
+    @ScaledMetric(relativeTo: .body) private var stepSize: CGFloat = 18.0
+    @ScaledMetric(relativeTo: .body) private var noteSize: CGFloat = 16.0
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text(revealed ? "核对答案" : "主动回忆").font(.caption.weight(.semibold)).foregroundStyle(.blue)
                 Spacer()
                 Image(systemName: revealed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle")
                     .foregroundStyle(.blue.opacity(0.7))
             }
-            Text(card.title).font(.system(.title, design: .rounded).weight(.bold))
+            Text(card.title).font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
             if !revealed {
                 Text(card.prompt).font(.system(size: promptSize)).lineSpacing(8)
@@ -466,7 +473,7 @@ private struct HandbookCardFace: View {
                     }.font(.headline)
                 }
             }
-        }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             .background(.background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 24).stroke(Color.primary.opacity(0.045), lineWidth: 1) }
     }
@@ -475,8 +482,8 @@ private struct HandbookCardFace: View {
 private struct HandbookCardBlockView: View {
     let block: HandbookCard.Block
     @Environment(\.dynamicTypeSize) private var dynamicType
-    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 21.0
-    @ScaledMetric(relativeTo: .body) private var keySize: CGFloat = 19.0
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 19.0
+    @ScaledMetric(relativeTo: .body) private var keySize: CGFloat = 17.0
     @ScaledMetric(relativeTo: .body) private var keyWidth: CGFloat = 72.0
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {

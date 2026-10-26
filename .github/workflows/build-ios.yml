@@ -7,8 +7,14 @@ on:
         type: boolean
         required: false
         default: false
+      reuse_verified_model_tests:
+        description: UI-only rebuild; requires exact model/storage parity with successful run 40354862241
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
+  actions: read
 jobs:
   build:
     if: ${{ !inputs.preview_only }}
@@ -36,11 +42,16 @@ jobs:
           assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
           PY
       - name: Test and compile
+        env:
+          XKL_REUSE_VERIFIED_MODEL_TESTS: ${{ inputs.reuse_verified_model_tests }}
+          GH_TOKEN: ${{ github.token }}
         run: bash tools/build_unsigned_ios.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: XKLStudy-unsigned-iOS
-          path: build/XKLStudy-unsigned.ipa
+          path: |
+            build/XKLStudy-unsigned.ipa
+            build/reused-model-tests.json
           if-no-files-found: error
           retention-days: 1
   preview:

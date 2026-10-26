@@ -7,6 +7,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 python3 tools/generate_xcode_project.py --without-personal-resources
 mkdir -p build/c-tests
+if [[ "${XKL_REUSE_VERIFIED_MODEL_TESTS:-false}" == "true" ]]; then
+  python3 tools/verify_reused_model_tests.py
+else
 for suite in test_engine test_exam_engine test_midnight_engine test_import; do
   clang -std=c11 -Wall -Wextra -Werror -O2 -I Sources/CPocket/include -I Sources/CPocket/internal \
     "Tests/CPocketTests/${suite}.c" Sources/CPocket/xkl_engine.c \
@@ -16,6 +19,7 @@ for suite in test_engine test_exam_engine test_midnight_engine test_import; do
   "build/c-tests/${suite}"
 done
 swift test --jobs 2
+fi
 xcodebuild -project XKLStudy.xcodeproj -scheme XKLStudy -configuration Release \
   -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
