@@ -43,7 +43,7 @@ struct KnowledgeArchive:Codable {
         _=try KnowledgeLearningEngine(course:course,record:KnowledgeLearningEngine.appending(begin,to:course))
         let fm=FileManager.default,parent=baseDirectory.appendingPathComponent("KnowledgeLearning",isDirectory:true),root=parent.appendingPathComponent(course.subject.rawValue,isDirectory:true)
         guard !fm.fileExists(atPath:root.path) else{throw ExamError.invalid("目标已有教学记录；拒绝用归档覆盖。请恢复到独立空目录核对。")}
-        try fm.createDirectory(at:parent,withIntermediateDirectories:true)
+        do{try fm.createDirectory(at:parent,withIntermediateDirectories:true)}catch{throw ExamError.invalid("创建独立恢复目录失败："+error.localizedDescription)}
         let staging=parent.appendingPathComponent("restore-"+UUID().uuidString,isDirectory:true)
         try fm.createDirectory(at:staging,withIntermediateDirectories:false)
         do {
@@ -52,7 +52,7 @@ struct KnowledgeArchive:Codable {
                 try DurableFile.write(f.bytes,to:path);guard try Data(contentsOf:path)==f.bytes else{throw ExamError.invalid("教学归档恢复写入不完整。")}
             }
             guard !fm.fileExists(atPath:root.path) else{throw ExamError.invalid("恢复期间目标出现新档，原档保留。")}
-            try fm.moveItem(at:staging,to:root)
+            do{try fm.moveItem(at:staging,to:root)}catch{throw ExamError.invalid("提交独立恢复目录失败："+error.localizedDescription)}
         } catch{try? fm.removeItem(at:staging);throw error}
     }
 }

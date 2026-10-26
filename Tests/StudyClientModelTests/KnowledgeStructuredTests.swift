@@ -103,7 +103,7 @@ final class KnowledgeStructuredTests:XCTestCase {
 final class KnowledgeStructuredStoreTests:XCTestCase {
     @MainActor func testCompleteArchivePreservesUnknownRawFieldsAndRejectsOverwrite()throws {
         let r=FileManager.default.temporaryDirectory.appendingPathComponent("archive-source-"+UUID().uuidString),target=FileManager.default.temporaryDirectory.appendingPathComponent("archive-target-"+UUID().uuidString)
-        defer{try? FileManager.default.removeItem(at:r);try? FileManager.default.removeItem(at:target)}
+        defer{for folder in [r,target] where FileManager.default.fileExists(atPath:folder.path){try? FileManager.default.removeItem(at:folder)}}
         let c=KnowledgeCourse.structuredSynthetic(subject:.power,hash:String(repeating:"a",count:64),legacyIDs:[])
         let s=KnowledgeLearningStore(course:c,baseDirectory:r);s.start()
         let path=r.appendingPathComponent("KnowledgeLearning/power/current.json")
@@ -112,9 +112,11 @@ final class KnowledgeStructuredStoreTests:XCTestCase {
         let raw=try JSONSerialization.data(withJSONObject:object,options:[.sortedKeys]);try raw.write(to:path)
         let cold=KnowledgeLearningStore(course:c,baseDirectory:r);XCTAssertFalse(cold.blocked,cold.error ?? "")
         cold.readNext(cold.engine!.current!.id);XCTAssertFalse(cold.blocked,cold.error ?? "")
-        let archive=try cold.exportArchive(),decoded=try JSONDecoder().decode(KnowledgeArchive.self,from:archive)
+        let archive:Data
+        do{archive=try cold.exportArchive()}catch{XCTFail("Source export: "+error.localizedDescription);return}
+        let decoded=try JSONDecoder().decode(KnowledgeArchive.self,from:archive)
         XCTAssertTrue(decoded.files.contains{$0.bytes==raw && $0.name.hasPrefix("before-raw-")})
-        try KnowledgeArchive.restore(archive,course:c,baseDirectory:target)
+        do{try KnowledgeArchive.restore(archive,course:c,baseDirectory:target)}catch{XCTFail("Clean restore: "+error.localizedDescription);return}
         let restored=KnowledgeLearningStore(course:c,baseDirectory:target)
         XCTAssertFalse(restored.blocked,restored.error ?? "");XCTAssertEqual(restored.engine?.record,cold.engine?.record)
         XCTAssertEqual(try restored.exportArchive(),archive)
