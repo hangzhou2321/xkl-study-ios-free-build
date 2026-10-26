@@ -36,6 +36,7 @@ extension KnowledgeCourse.Check {
         if let correctChoiceIDs{object["correctChoices"]=correctChoiceIDs.sorted()}
         if let expression{object["expression"]=["version":expression.version,"variables":expression.variables.sorted(),"lhs":expression.expectedLHS ?? "","accepted":expression.accepted.sorted()] as [String:Any]}
         if let steps{object["steps"]=try steps.map{["id":$0.id,"grade":try $0.gradingDigest()]}}
+        if let distinctExpressionIDs{object["distinctExpressions"]=distinctExpressionIDs.sorted()}
         return StudySHA256.hex(try JSONSerialization.data(withJSONObject:object,options:[.sortedKeys]))
     }
     func validateResponse(depth:Int=0)throws {
@@ -49,6 +50,11 @@ extension KnowledgeCourse.Check {
             guard depth==0,choices.isEmpty,let steps,(2...12).contains(steps.count),Set(steps.map(\.id)).count==steps.count,
                   steps.allSatisfy({good($0.id,40) && good($0.prompt,300) && good($0.explanation,2000) && $0.type != "structured"}) else{throw ExamError.invalid("分步骤题缺少可核对的条件、关系或结果。")}
             for step in steps{try step.validateResponse(depth:depth+1)}
+            if let ids=distinctExpressionIDs {
+                let group=steps.filter{ids.contains($0.id)}
+                guard (2...6).contains(ids.count),Set(ids).count==ids.count,group.count==ids.count,let first=group.first?.expression,
+                      first.accepted.count==ids.count,first.expectedLHS==nil,group.allSatisfy({$0.type=="expression" && $0.expression==first}) else{throw ExamError.invalid("组合关系需采用相同、完整且可去重的核对集合。")}
+            }
         } else if type=="expression" {
             guard choices.isEmpty,let e=expression,e.version==1,(1...12).contains(e.variables.count),Set(e.variables).count==e.variables.count,
                   e.variables.allSatisfy({$0.range(of:"^[a-z][a-z0-9]{0,7}$",options:.regularExpression) != nil}),
@@ -94,13 +100,14 @@ extension KnowledgeCourse.Check {
         return !selected.isEmpty && Set(selected).count==selected.count && Set(selected).isSubset(of:Set(choices.map(\.id)))
     }
     func correct(_ response:String)->Bool {
-        if type=="structured",let values=stepResponses(response),let steps{return Set(values.keys)==Set(steps.map(\.id)) && steps.allSatisfy{$0.correct(values[$0.id] ?? "")}}
+        if type=="structured",let values=stepResponses(response),let steps{return Set(values.keys)==Set(steps.map(\.id)) && steps.allSatisfy{$0.correct(values[$0.id] ?? "")} && distinctRelations(values)}
         if type=="expression"{return expressionStatus(response)=="correct"}
         if type=="number"{guard let n=numeric,let value=number(response) else{return false};return abs(value-n.value)<=max(n.tolerance,1e-10*abs(n.value))}
         if type=="multiple"{return accepts(response) && Set(response.split(separator:"|").map(String.init))==Set(correctChoiceIDs ?? [])}
         return response==answerID
     }
     func feedback(_ response:String)->String {
+        if type=="structured",let values=stepResponses(response),!distinctRelations(values){return "重复了同一个关系，仍缺少其他必要关系。三个式子可以任意顺序，但不能用相同关系反复填满。"}
         if type=="expression",let error=expressionError(response){return error.feedback}
         if type=="structured",let values=stepResponses(response),let step=steps?.first(where:{!$0.correct(values[$0.id] ?? "")}){return step.prompt+"："+step.feedback(values[step.id] ?? "")}
         if type=="single",let c=choices.first(where:{$0.id==response}){return c.feedback}
@@ -112,6 +119,7 @@ extension KnowledgeCourse.Check {
         return commonErrors?.first{abs($0.value-value)<=max(n.tolerance,abs(value)*1e-8)}
     }
     func errorTag(_ response:String)->String? {
+        if type=="structured",let values=stepResponses(response),!distinctRelations(values){return "method"}
         if type=="expression"{return expressionError(response)?.errorTag}
         if type=="structured",let values=stepResponses(response){return steps?.first(where:{!$0.correct(values[$0.id] ?? "")}).flatMap{$0.errorTag(values[$0.id] ?? "")}}
         return choices.first{$0.id==response}?.errorTag ?? numericError(response)?.errorTag
@@ -142,7 +150,22 @@ extension KnowledgeCourse.Check {
     }
     func stepScores(_ response:String)->[KnowledgeStepScore]? {
         guard type=="structured",let values=stepResponses(response),let steps else{return nil}
-        return steps.map{s in let v=values[s.id] ?? "";return .init(id:s.id,status:!s.accepts(v) ? "pending":(s.correct(v) ? "correct":"wrong"),response:v,methodIDs:s.methodIDs ?? [],errorTag:s.correct(v) ? nil:s.errorTag(v))}
+        var seen=Set<Int>()
+        return steps.map{s in
+            let v=values[s.id] ?? "";var correct=s.correct(v),tag=correct ? nil:s.errorTag(v)
+            if distinctExpressionIDs?.contains(s.id)==true,let index=relationIndex(v),!seen.insert(index).inserted{correct=false;tag="method"}
+            return .init(id:s.id,status:!s.accepts(v) ? "pending":(correct ? "correct":"wrong"),response:v,methodIDs:s.methodIDs ?? [],errorTag:tag)
+        }
+    }
+    private func relationIndex(_ raw:String)->Int? {
+        guard let id=distinctExpressionIDs?.first,let e=steps?.first(where:{$0.id==id})?.expression else{return nil}
+        return e.accepted.sorted().firstIndex{KnowledgeFormula.equivalent(raw,to:$0,variables:e.variables,lhs:nil)==true}
+    }
+    private func distinctRelations(_ values:[String:String])->Bool {
+        guard let ids=distinctExpressionIDs else{return true}
+        let matched=ids.compactMap{relationIndex(values[$0] ?? "")}
+        // Unknown/wrong notation receives its own pending/error feedback first.
+        return matched.count != ids.count || Set(matched).count==ids.count
     }
     func inputIssue(_ response:String)->String {
         if type=="structured",let values=stepResponses(response),let steps {

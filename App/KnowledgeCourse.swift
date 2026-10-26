@@ -57,6 +57,7 @@ struct KnowledgeCourse: Codable, Equatable {
         var stemID:String? = nil
         var exposureAliases:[String]? = nil
         var evidenceKind:String? = nil
+        var distinctExpressionIDs:[String]? = nil
     }
     struct Skill:Codable,Equatable,Identifiable {
         let id:String;let title:String;let lessonSectionID:String

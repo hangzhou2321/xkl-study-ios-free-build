@@ -122,7 +122,7 @@ struct KnowledgeLearningView:View {
             Text(q.prompt).font(.system(size:22).weight(.medium)).accessibilityIdentifier("knowledge-check-prompt")
             if p.phase=="question" {
             if q.type=="structured",let steps=q.steps {
-                Text("逐步作答，最后一起提交。").font(.footnote).foregroundStyle(.secondary)
+                Text(q.distinctExpressionIDs==nil ? "逐步作答，最后一起提交。":"自行写出三条关系，顺序任意；相同关系重复填写不能补足过程。").font(.footnote).foregroundStyle(.secondary)
                 ForEach(steps){step in
                     KnowledgeStepInputView(step:step,value:Binding(get:{stepInputs[step.id] ?? ""},set:{stepInputs[step.id]=$0}),disabled:p.phase=="feedback" || inputToken != p.id)
                 }
@@ -264,7 +264,7 @@ private struct KnowledgeStepInputView:View {
                 TextField("写出关系，不用先代入数值",text:$value,axis:.vertical).textFieldStyle(.roundedBorder).font(.system(size:22))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 LazyVGrid(columns:[GridItem(.adaptive(minimum:48))],spacing:6) {
-                    ForEach((step.expression?.variables ?? [])+["√3","²","×","÷","(",")"],id:\.self){symbol in
+                    ForEach((step.expression?.variables ?? [])+["=","+","−","√3","²","×","÷","(",")"],id:\.self){symbol in
                         Button(symbol){value+=symbol}.buttonStyle(.bordered).font(.system(size:17))
                     }
                 }

@@ -748,6 +748,27 @@ import UIKit
                     let learning=KnowledgeLearningStore(course:knowledge,baseDirectory:root);learning.start()
                     if selectedCase.hasPrefix("knowledge-steps-") {
                         var process=learning.engine!,count=0
+                        if selectedCase.hasPrefix("knowledge-steps-mixed") {
+                            let now=Date();process=try KnowledgeLearningEngine.fresh(knowledge);let early=now.addingTimeInterval(-3*86400)
+                            try process.start(now:early)
+                            while let p=process.current,p.phase != "complete",count<40 {
+                                count+=1
+                                if p.phase=="lesson"{try process.readNext(token:p.id,now:early)}
+                                else if p.phase=="question"{try process.answer(process.check!.syntheticCorrectResponse,token:p.id,now:early)}
+                                else{try process.finish(token:p.id,now:early)}
+                            }
+                            for days in [-2,-1] {
+                                let at=now.addingTimeInterval(Double(days)*86400);try process.open(knowledge.points[0].id,review:true,now:at)
+                                try process.answer(process.check!.syntheticCorrectResponse,token:process.current!.id,now:at);try process.finish(token:process.current!.id,now:at)
+                            }
+                            try process.open(knowledge.points[0].id,review:true,now:now)
+                            precondition(process.check?.purpose=="mixed" && process.check?.distinctExpressionIDs?.count==3,"Combined task must collect relations without giving their order")
+                            if selectedCase=="knowledge-steps-mixed-wrong",let q=process.check {
+                                var values=q.stepResponses(q.syntheticCorrectResponse)!;values["model3"]="t=e/p2"
+                                try process.answer(String(data:try JSONEncoder().encode(values),encoding:.utf8)!,token:process.current!.id,now:now)
+                                precondition(process.record.events.last(where:{$0.kind=="answer"})?.stepScores?.last?.status=="correct" && process.record.events.last(where:{$0.kind=="answer"})?.correct==false,"A matching result cannot replace a missing relation")
+                            }
+                        } else {
                         while let p=process.current,p.phase=="lesson",count<12{try process.readNext(token:p.id);count+=1}
                         if selectedCase != "knowledge-steps-high" {
                             let p=process.current!;try process.answer(process.check!.syntheticCorrectResponse,token:p.id);try process.finish(token:p.id)
@@ -764,6 +785,7 @@ import UIKit
                             let raw=String(data:try JSONEncoder().encode(values),encoding:.utf8)!
                             precondition(!q.accepts(raw),"Unrecognized legitimate notation remains pending")
                             try process.saveDraft(raw,token:p.id);try process.explainAgain();try process.resumeAttempt(p.id)
+                        }
                         }
                         expectedKnowledgePhase=process.current!.phase;expectedKnowledgeAnswers=process.record.events.filter{$0.kind=="answer"}.count
                         _=try KnowledgeLearningEngine(course:knowledge,record:process.record)
@@ -940,7 +962,7 @@ struct ProfessionalPriorityPreview: View {
         guard !fixture.store.blocked,fixture.store.error == nil,let engine=fixture.store.engine,let teaching=fixture.store.teaching else { return false }
         switch fixture.selectedCase {
         case "knowledge-home","knowledge-sources":return teaching.knowledgeCourse?.retiredLegacyCards==true && engine.record.attempts.isEmpty
-        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review","knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair","knowledge-steps-high","knowledge-steps-low","knowledge-steps-wrong","knowledge-steps-draft":
+        case "knowledge-lesson","knowledge-example","knowledge-question","knowledge-wrong","knowledge-review","knowledge-number","knowledge-multiple","knowledge-checkpoint","knowledge-repair","knowledge-steps-high","knowledge-steps-low","knowledge-steps-wrong","knowledge-steps-draft","knowledge-steps-mixed","knowledge-steps-mixed-wrong":
             guard let course=teaching.knowledgeCourse,let expected=fixture.expectedKnowledgePointID,
                   knowledgeRendered==expected+"|"+fixture.expectedKnowledgePhase else{return false}
             let stored=KnowledgeLearningStore(course:course,baseDirectory:fixture.root)

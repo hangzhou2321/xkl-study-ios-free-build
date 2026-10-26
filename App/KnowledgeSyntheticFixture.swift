@@ -34,7 +34,10 @@ extension KnowledgeCourse {
             let low=task("low",role:"guided",e:18,rate:3,reserve:index==0 ? 0:6,stage:"scaffold-low")
             let independent=task("independent",role:"independent",e:25,rate:4,reserve:index==0 ? 0:5)
             let transfer=task("transfer",role:"transfer",e:28,rate:4,reserve:index==0 ? 8:4)
-            let mixed=task("mixed",role:"mixed",e:24,rate:6,reserve:0,mixed:true)
+            var mixed=task("mixed",role:"mixed",e:24,rate:6,reserve:0,mixed:true)
+            let model=Check.Expression(version:1,variables:["e","p1","t1","p2","a","b","t"],expectedLHS:nil,accepted:["a=p1*t1","b=e-a","t=b/p2"],rejected:[.init(forms:["t=e/p2"],feedback:"总量中已有一部分消耗，不能全部留给第二段。",errorTag:"method",repairSectionID:section)])
+            let modelSteps=(1...3).map{i -> Check in var q=Check(id:"model\(i)",prompt:"关系式 \(i)（可任意顺序）",choices:[],answerID:"expression",explanation:"核对自己使用的完整等式，不能重复填写同一关系。");q.responseType="expression";q.expression=model;q.methodIDs=[method];return q}
+            mixed.steps=[mixed.steps![0]]+modelSteps+[mixed.steps!.last!];mixed.distinctExpressionIDs=modelSteps.map(\.id)
             var sections=p.sections;sections[2].checkpointID=high.id
             sections.append(.init(title:"撤去给定公式，再独立组织一遍",body:"先判断允许使用的范围，再组织总量、每小时用量和时间的关系。留存部分不能拿来消耗；分段时先扣已用量。不要只填写看起来合理的最终数。",id:"low-scaffold",checkpointID:low.id))
             let skills=[Skill(id:method,title:"确定可用量并求时长",lessonSectionID:section,practiceStages:["scaffold-high","scaffold-low"],independentEvidence:"steps")]
@@ -90,7 +93,11 @@ extension KnowledgeCourse.Check {
     /// Fixture driver only. It simulates a known response; it is not a learner
     /// test and is never compiled into a Release App.
     var syntheticCorrectResponse:String {
-        if type=="structured"{let values=Dictionary(uniqueKeysWithValues:(steps ?? []).map{($0.id,$0.syntheticCorrectResponse)});let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return String(data:try! encoder.encode(values),encoding:.utf8)!}
+        if type=="structured"{
+            var values=Dictionary(uniqueKeysWithValues:(steps ?? []).map{($0.id,$0.syntheticCorrectResponse)})
+            if let ids=distinctExpressionIDs,let first=steps?.first(where:{$0.id==ids.first})?.expression{for (i,id) in ids.enumerated(){values[id]=first.accepted[i]}}
+            let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return String(data:try! encoder.encode(values),encoding:.utf8)!
+        }
         if type=="expression"{return expression!.accepted[0]}
         if type=="number"{return String(numeric!.value)+numeric!.unit}
         if type=="multiple"{return correctChoiceIDs!.sorted().joined(separator:"|")}

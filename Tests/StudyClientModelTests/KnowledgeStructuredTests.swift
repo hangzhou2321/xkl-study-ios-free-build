@@ -39,6 +39,32 @@ final class KnowledgeStructuredTests:XCTestCase {
         XCTAssertEqual(scores.map(\.status),["correct","wrong","correct"])
         XCTAssertEqual(scores[1].errorTag,"method")
     }
+    func testMixedRelationsAcceptAnyOrderButRejectDuplicateCoverage()throws {
+        let q=course().points[0].checks.last!;try q.validateResponse()
+        XCTAssertNotNil(q.distinctExpressionIDs)
+        var values=q.stepResponses(q.syntheticCorrectResponse)!
+        let a=values["model1"]!;values["model1"]=values["model3"];values["model3"]=a
+        func raw()->String{String(data:try! JSONEncoder().encode(values),encoding:.utf8)!}
+        XCTAssertTrue(q.accepts(raw()));XCTAssertTrue(q.correct(raw()))
+        values["model2"]=values["model1"]
+        XCTAssertTrue(q.accepts(raw()));XCTAssertFalse(q.correct(raw()))
+        XCTAssertEqual(q.stepScores(raw())?.filter{$0.status=="wrong"}.count,1)
+        XCTAssertTrue(q.feedback(raw()).contains("重复"))
+    }
+    func testMixedWrongRelationWithRightNumberRetainsRawStepsAfterColdRestore()throws {
+        let c=course();var e=try KnowledgeLearningEngine.fresh(c);try train(&e,at:date(day));let id=c.points[0].id
+        for d in [day+1,day+2] {
+            try e.open(id,review:true,now:date(d));try e.answer(e.check!.syntheticCorrectResponse,token:e.current!.id,now:date(d));try e.finish(token:e.current!.id,now:date(d))
+        }
+        try e.open(id,review:true,now:date(day+3));XCTAssertEqual(e.check?.purpose,"mixed")
+        var values=e.check!.stepResponses(e.check!.syntheticCorrectResponse)!;values["model3"]="t=e/p2"
+        let raw=String(data:try JSONEncoder().encode(values),encoding:.utf8)!
+        try e.answer(raw,token:e.current!.id,now:date(day+3))
+        let answer=e.record.events.last{$0.kind=="answer"}!
+        XCTAssertEqual(answer.correct,false);XCTAssertEqual(answer.stepScores?.last?.status,"correct")
+        XCTAssertEqual(answer.stepScores?.filter{$0.status=="wrong"}.count,1)
+        let restored=try KnowledgeLearningEngine(course:c,record:e.record);XCTAssertEqual(restored.record.events.last{$0.kind=="answer"},answer)
+    }
     func testUnrecognizedAlternativeRemainsPendingRatherThanBecomingWrong()throws {
         let q=course().points[0].checks[1]
         let raw=response(q,["relation":"t^2=e^2/p^2"])
