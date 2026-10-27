@@ -222,22 +222,32 @@ struct HandbookCardPreview: View {
                 }
             }
             .statusBarHidden(fullScreenEnabled && recalling)
-            .environment(\.handbookCardPreview, .init(didRender: { observation = $0; handleFocusToggle($0) }))
+            .environment(\.handbookCardPreview, .init(didRender: { observation = $0 }))
             .onChange(of: observation) { _, _ in reportIfReady() }
+            .task { await runFocusToggle() }
     }
-    @MainActor private func handleFocusToggle(_ observed: HandbookCardPreviewObservation) {
-        guard fixture.selectedCase == "focus-toggle", let record = fixture.store.engine?.record else { return }
-        switch togglePhase {
-        case 0 where !observed.fullScreen:
-            toggleRecord = record; togglePhase = 1; fullScreenEnabled = true
-        case 1 where observed.fullScreen:
-            precondition(record == toggleRecord, "Entering fullscreen must not mutate a study record")
-            togglePhase = 2; fullScreenEnabled = false
-        case 2 where !observed.fullScreen:
-            precondition(record == toggleRecord, "Exiting fullscreen must keep the exact card/face/queue/grades")
-            togglePhase = 3; fullScreenEnabled = true
-        default: break
+    @MainActor private func waitForFocus(_ value: Bool) async {
+        for _ in 0..<200 {
+            if observation?.fullScreen == value { return }
+            try? await Task.sleep(for: .milliseconds(50))
         }
+        preconditionFailure("Synthetic fullscreen transition did not render: \(value)")
+    }
+    @MainActor private func runFocusToggle() async {
+        guard fixture.selectedCase == "focus-toggle" else { return }
+        await waitForFocus(false)
+        toggleRecord = fixture.store.engine?.record
+        print("FOCUS_TOGGLE initial record captured")
+        fullScreenEnabled = true; await waitForFocus(true)
+        precondition(fixture.store.engine?.record == toggleRecord, "Entering fullscreen must not mutate a study record")
+        print("FOCUS_TOGGLE entered; record unchanged")
+        fullScreenEnabled = false; await waitForFocus(false)
+        precondition(fixture.store.engine?.record == toggleRecord, "Exiting fullscreen must keep the exact card/face/queue/grades")
+        print("FOCUS_TOGGLE exited; record unchanged")
+        fullScreenEnabled = true; await waitForFocus(true)
+        precondition(fixture.store.engine?.record == toggleRecord, "Re-entering fullscreen must keep the exact study record")
+        togglePhase = 3
+        reportIfReady()
     }
     @MainActor private func criticalReady() -> Bool {
         guard selectedTab == 4, selectedSubject == fixture.subject, recalling, !practicing,
