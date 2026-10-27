@@ -158,6 +158,118 @@ final class HandbookWordTests: XCTestCase {
         XCTAssertEqual(Array(reopened.record.attempts.prefix(before.attempts.count)), before.attempts)
     }
     #if canImport(Combine)
+    private func stagedPackage(_ base: HandbookCardPackage, id: String? = nil, subject: String? = nil,
+                               revision: String, answer: String? = nil) throws -> Data {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(base)) as! [String: Any]
+        if let id { object["id"] = id }
+        if let subject { object["subject"] = subject }
+        object["revision"] = revision
+        if let answer {
+            var cards = object["cards"] as! [[String: Any]]
+            cards[0]["answerSummary"] = answer; object["cards"] = cards
+        }
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+    @MainActor func testStagedRecommendationUpdatesWithoutChangingLearningOrOriginalFiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-staged-update-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staging = root.appendingPathComponent("HandbookCards")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let old = try stagedPackage(package(), revision: "1.23.1")
+        let fresh = try stagedPackage(package(), revision: "1.26", answer: "Updated source")
+        let oldURL = staging.appendingPathComponent("computer-old.xklflashcards")
+        let newURL = staging.appendingPathComponent("computer-new.xklflashcards")
+        try old.write(to: oldURL); try fresh.write(to: newURL)
+        try Data("invalid".utf8).write(to: staging.appendingPathComponent("computer-bad.json"))
+        let oversizedURL = staging.appendingPathComponent("computer-oversized.json")
+        try stagedPackage(package(), revision: "99.0").write(to: oversizedURL)
+        let largeFile = try FileHandle(forWritingTo: oversizedURL)
+        try largeFile.seekToEnd()
+        let padding = Data(repeating: 0x20, count: 1_024 * 1_024)
+        for _ in 0..<40 { try largeFile.write(contentsOf: padding) }
+        try largeFile.close()
+        XCTAssertGreaterThan(try XCTUnwrap(oversizedURL.resourceValues(forKeys: [.fileSizeKey]).fileSize), 40 * 1_024 * 1_024)
+        let store = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        store.importData(old); store.start(now: now)
+        let first = try XCTUnwrap(store.engine?.presentation?.id)
+        store.reveal(token: first, now: now); store.rate(remembered: false, token: first, now: now)
+        let active = try XCTUnwrap(store.engine?.presentation?.id); store.reveal(token: active, now: now)
+        let before = try XCTUnwrap(store.engine?.state), eventsBefore = try events(before.word)
+        let currentURL = root.appendingPathComponent("HandbookWordRecall/computer/current.json")
+        let currentBefore = try Data(contentsOf: currentURL)
+        let archiveBefore = try JSONDecoder().decode(Archive.self, from: store.exportRecords())
+        XCTAssertEqual(store.recommendedStagedFile(), newURL)
+        XCTAssertEqual(store.engine?.state, before)
+        XCTAssertEqual(try Data(contentsOf: currentURL), currentBefore)
+        store.importContent(try XCTUnwrap(store.recommendedStagedFile()))
+        XCTAssertNil(store.error)
+        let after = try XCTUnwrap(store.engine?.state)
+        XCTAssertEqual(after.originalCardIDs, before.originalCardIDs)
+        XCTAssertEqual(after.word, before.word)
+        XCTAssertEqual(cards(after.word.snapshot, 3), cards(before.word.snapshot, 3))
+        XCTAssertEqual(try events(after.word), eventsBefore)
+        XCTAssertEqual(after.frozenToken, before.frozenToken)
+        XCTAssertEqual(after.frozenCard, before.frozenCard)
+        let currentAfter = try Data(contentsOf: currentURL)
+        store.importContent(newURL)
+        XCTAssertEqual(try Data(contentsOf: currentURL), currentAfter)
+        let archiveAfter = try JSONDecoder().decode(Archive.self, from: store.exportRecords())
+        for key in ["initial.json", "legacy-baseline.json", "imports/\(StudySHA256.hex(old)).xklflashcards"] {
+            XCTAssertEqual(archiveAfter.files[key], archiveBefore.files[key])
+        }
+        XCTAssertEqual(archiveAfter.files["revisions/\(StudySHA256.hex(currentBefore)).json"], currentBefore)
+        XCTAssertEqual(try Data(contentsOf: oldURL), old)
+        XCTAssertEqual(try Data(contentsOf: newURL), fresh)
+        let reopened = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        XCTAssertEqual(reopened.engine?.state, after)
+    }
+    @MainActor func testStagedRecommendationRejectsAmbiguousIDsAndConflictingTopVersionsSeparatelyPerSubject() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-staged-ambiguous-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staging = root.appendingPathComponent("HandbookCards")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        func stage(_ name: String, _ data: Data) throws -> URL {
+            let url = staging.appendingPathComponent(name); try data.write(to: url); return url
+        }
+        let computerOld = try stagedPackage(package(), revision: "1.23.1")
+        let computerNew = try stagedPackage(package(), revision: "1.26")
+        let computerOldURL = try stage("a.xklflashcards", computerOld)
+        let computerNewURL = try stage("b.xklflashcards", computerNew)
+        _ = try stage("numeric-1.9.xklflashcards", stagedPackage(package(), revision: "1.9"))
+        let otherURL = try stage("c.xklflashcards", stagedPackage(package(), id: "different", revision: "9.0"))
+        let powerOld = try stagedPackage(package(), id: "power-package", subject: "power", revision: "1.24.0")
+        let powerNew = try stagedPackage(package(), id: "power-package", subject: "power", revision: "1.26")
+        _ = try stage("d.xklflashcards", powerOld)
+        let powerNewURL = try stage("e.xklflashcards", powerNew)
+        let computer = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        let power = HandbookWordStore(subject: .power, baseDirectory: root, documentsDirectory: root, now: now)
+        XCTAssertNil(computer.recommendedStagedFile(), "Different package IDs require manual selection before first import.")
+        XCTAssertEqual(power.recommendedStagedFile(), powerNewURL)
+        computer.importData(computerOld); power.importData(powerOld)
+        XCTAssertEqual(computer.recommendedStagedFile(), computerNewURL)
+        XCTAssertEqual(power.recommendedStagedFile(), powerNewURL)
+        let duplicateURL = try stage("z.xklflashcards", computerNew)
+        XCTAssertEqual(computer.recommendedStagedFile(), computerNewURL, "Equivalent duplicates are unambiguous.")
+        try FileManager.default.removeItem(at: duplicateURL)
+        var removedCard = try JSONSerialization.jsonObject(with: computerNew) as! [String: Any]
+        removedCard["revision"] = "1.27"
+        var rows = removedCard["cards"] as! [[String: Any]]; rows.removeFirst(); removedCard["cards"] = rows
+        let removedURL = try stage("removed.xklflashcards", JSONSerialization.data(withJSONObject: removedCard, options: [.sortedKeys]))
+        XCTAssertNil(computer.recommendedStagedFile(), "A top package that drops an existing ID is not offered.")
+        try FileManager.default.removeItem(at: removedURL)
+        let computerBefore = try XCTUnwrap(computer.engine?.state), powerBefore = try XCTUnwrap(power.engine?.state)
+        let conflictURL = try stage("f.xklflashcards", stagedPackage(package(), revision: "1.26", answer: "Conflicting source"))
+        XCTAssertNil(computer.recommendedStagedFile())
+        XCTAssertEqual(power.recommendedStagedFile(), powerNewURL)
+        XCTAssertEqual(computer.engine?.state, computerBefore); XCTAssertEqual(power.engine?.state, powerBefore)
+        try FileManager.default.removeItem(at: conflictURL)
+        try FileManager.default.removeItem(at: computerNewURL)
+        XCTAssertEqual(computer.recommendedStagedFile(), computerOldURL)
+        computer.importData(computerNew)
+        XCTAssertNil(computer.recommendedStagedFile(), "The only matching staged package is older than the installed one.")
+        XCTAssertEqual(power.engine?.state, powerBefore)
+        XCTAssertEqual(try Data(contentsOf: otherURL), try stagedPackage(package(), id: "different", revision: "9.0"))
+    }
     private struct Archive: Decodable {
         struct Entry: Decodable {
             let storedKey: String

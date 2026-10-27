@@ -28,6 +28,7 @@ struct HandbookCardView: View {
     @StateObject private var store: HandbookWordStore
     @State private var studying = false
     @State private var importing = false
+    @State private var recommendedStagedFile: URL?
     @State private var exporting = false
     @State private var showingOutline = false
     @State private var showingSources = false
@@ -126,7 +127,7 @@ struct HandbookCardView: View {
                     Menu {
                         if store.package != nil { Button("章节目录", systemImage: "list.bullet") { showingOutline = true } }
                         if store.package != nil { Button("核对讲义原页", systemImage: "doc.text.magnifyingglass") { showingAllSources = true } }
-                        if let staged = singleStagedFile {
+                        if let staged = recommendedStagedFile {
                             Button("导入已准备的宝典卡", systemImage: "tray.and.arrow.down") { importStaged(staged) }
                                 .disabled(store.blocked)
                         }
@@ -145,7 +146,7 @@ struct HandbookCardView: View {
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
-            case .success(let url): store.importContent(url); if store.error == nil { studying = false }
+            case .success(let url): store.importContent(url); recommendedStagedFile = store.recommendedStagedFile()
             case .failure(let error):
                 if (error as NSError).code != NSUserCancelledError { store.error = error.localizedDescription }
             }
@@ -184,6 +185,7 @@ struct HandbookCardView: View {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
         .task {
+            recommendedStagedFile = store.recommendedStagedFile()
             if startInStudy || studying { store.start() }
             #if DEBUG
             previewStudyStarted = true
@@ -198,6 +200,7 @@ struct HandbookCardView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             displayDate = Date()
+            if phase == .active { recommendedStagedFile = store.recommendedStagedFile() }
             if phase == .active, studying, store.engine?.presentation != nil { store.start() }
         }
         .onReceive(clock) { date in displayDate = date }
@@ -248,8 +251,13 @@ struct HandbookCardView: View {
         }.padding(.horizontal, 16)
             .background(Color(uiColor: .systemGroupedBackground))
     }
-    private var singleStagedFile: URL? { let files = store.stagedFiles(); return files.count == 1 ? files.first : nil }
-    private func importStaged(_ url: URL) { store.importContent(url); if store.error == nil { studying = false } }
+    private func importStaged(_ url: URL) {
+        let recommendation = store.recommendedStagedFile()
+        recommendedStagedFile = recommendation
+        guard recommendation == url else { return }
+        store.importContent(url)
+        recommendedStagedFile = store.recommendedStagedFile()
+    }
     private func exportRecords() {
         do { document = HandbookCardRecordDocument(data: try store.exportRecords()); exporting = true }
         catch { store.error = error.localizedDescription }
@@ -265,7 +273,7 @@ struct HandbookCardView: View {
             Text("一张卡，一个知识点").font(.system(.largeTitle, design: .rounded).weight(.bold))
             Text("先回忆，再翻答案。按原书顺序背，随时停下，下次接着来。")
                 .font(.title3).foregroundStyle(.secondary).lineSpacing(6)
-            if let staged = singleStagedFile {
+            if let staged = recommendedStagedFile {
                 Button { importStaged(staged) } label: {
                     Label("导入已准备的宝典卡", systemImage: "tray.and.arrow.down")
                         .frame(maxWidth: .infinity, minHeight: 42)

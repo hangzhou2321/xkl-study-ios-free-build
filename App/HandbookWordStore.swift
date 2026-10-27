@@ -240,8 +240,30 @@ enum HandbookWordArchivePath {
         let root = documents.appendingPathComponent("HandbookCards")
         return ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey])) ?? []).filter {
             let meta = try? $0.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
-            return meta?.isSymbolicLink != true && meta?.isRegularFile == true && ["xklflashcards", "xklcards", "json"].contains($0.pathExtension.lowercased()) && $0.lastPathComponent.lowercased().contains(subject.rawValue)
+            return meta?.isSymbolicLink != true && meta?.isRegularFile == true && ["xklflashcards", "xklcards", "json"].contains($0.pathExtension.lowercased())
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+    /// Inspect staged packages without changing the saved learning state. Ambiguity
+    /// is left to the file picker, including conflicting packages at the top version.
+    func recommendedStagedFile() -> URL? {
+        let candidates: [(url: URL, package: HandbookCardPackage)] = stagedFiles().compactMap { url in
+            guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                  size >= 0, size <= 40 * 1_024 * 1_024,
+                  let raw = try? read(url), let package = try? HandbookCardPackage.load(raw), package.subject == subject else { return nil }
+            return (url, package)
+        }
+        let eligible: [(url: URL, package: HandbookCardPackage)]
+        if let current = package {
+            eligible = candidates.filter { $0.package.id == current.id && $0.package.revision.compare(current.revision, options: .numeric) != .orderedAscending }
+        } else {
+            guard Set(candidates.map { $0.package.id }).count == 1 else { return nil }
+            eligible = candidates
+        }
+        guard let highest = eligible.max(by: { $0.package.revision.compare($1.package.revision, options: .numeric) == .orderedAscending }) else { return nil }
+        let top = eligible.filter { $0.package.revision.compare(highest.package.revision, options: .numeric) == .orderedSame }
+        guard top.allSatisfy({ $0.package == highest.package }) else { return nil }
+        if let current = engine, !Set(current.state.originalCardIDs).isSubset(of: Set(highest.package.cards.map(\.id))) { return nil }
+        return top.first?.url
     }
     func exportRecords() throws -> Data {
         let files = try scan(directory), legacy = try legacyFiles()
