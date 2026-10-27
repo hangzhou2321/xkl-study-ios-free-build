@@ -2,6 +2,17 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
+/// Readability only: retain every source character and insert a line break after a semicolon.
+func handbookDisplayText(_ source: String) -> String {
+    var result = "", afterSemicolon = false
+    for character in source {
+        if afterSemicolon && character != "\n" && character != "\r" && character != "\r\n" { result.append("\n") }
+        result.append(character)
+        afterSemicolon = character == "；" || character == ";"
+    }
+    return result
+}
+
 /// A book knowledge point is one self-assessed card. It never awards an
 /// objective question-bank answer or changes another subject's scheduler.
 struct HandbookCardView: View {
@@ -13,6 +24,7 @@ struct HandbookCardView: View {
     private let onOverlayChanged: (Bool) -> Void
     private let startInStudy: Bool
     @Binding private var externalStudying: Bool
+    @Binding private var fullScreenEnabled: Bool
     @StateObject private var store: HandbookCardStore
     @State private var studying = false
     @State private var importing = false
@@ -29,18 +41,21 @@ struct HandbookCardView: View {
     @Environment(\.handbookCardPreview) private var preview
     @State private var layoutReady = false
     @State private var scrollReady = false
+    @State private var previewStudyStarted = false
     #endif
 
     init(subject: ConceptSubject = .computer, baseDirectory: URL? = nil,
          injectedStore: HandbookCardStore? = nil,
          originalQuestionStore: ProfessionalQuestionStore? = nil, legacyStore: ConceptStore? = nil,
          studying: Binding<Bool> = .constant(false), startInStudy: Bool = false,
+         fullScreenEnabled: Binding<Bool> = .constant(false),
          onStart: @escaping () -> Void = {}, onOverlayChanged: @escaping (Bool) -> Void = { _ in }) {
         self.subject = subject; self.baseDirectory = baseDirectory
         self.originalQuestionStore = originalQuestionStore; self.legacyStore = legacyStore
         self.onStart = onStart; self.onOverlayChanged = onOverlayChanged
         self.startInStudy = startInStudy
         _externalStudying = studying
+        _fullScreenEnabled = fullScreenEnabled
         _studying = State(initialValue: startInStudy || studying.wrappedValue)
         _store = StateObject(wrappedValue: injectedStore ?? HandbookCardStore(subject: subject, baseDirectory: baseDirectory))
     }
@@ -70,7 +85,8 @@ struct HandbookCardView: View {
                         }
                     }
                     .id("handbook-top")
-                    .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 24)
+                    .padding(.horizontal, fullScreenActive ? 12 : 20)
+                    .padding(.top, fullScreenActive ? 0 : 10).padding(.bottom, 24)
                     .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
                 }
                 .onChange(of: store.engine?.presentation?.id) { _, _ in
@@ -95,9 +111,16 @@ struct HandbookCardView: View {
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("宝典一 · \(subject.shortTitle)")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(fullScreenActive ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if studying { Button("卡片", systemImage: "chevron.left") { studying = false } }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if studying {
+                        Button("全屏", systemImage: "arrow.up.left.and.arrow.down.right") { fullScreenEnabled = true }
+                            .accessibilityIdentifier("handbook-enter-fullscreen")
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -114,6 +137,9 @@ struct HandbookCardView: View {
                         }
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if fullScreenActive { fullScreenBar }
             }
             .safeAreaInset(edge: .bottom) { actions }
         }
@@ -158,9 +184,16 @@ struct HandbookCardView: View {
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
-        .task { if startInStudy || studying { store.start() } }
+        .task {
+            if startInStudy || studying { store.start() }
+            #if DEBUG
+            previewStudyStarted = true
+            reportPreview()
+            #endif
+        }
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
+        .onChange(of: fullScreenEnabled) { _, _ in reportPreviewIfEnabled() }
         .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingOldQuestions || store.error != nil) { _, value in
             onOverlayChanged(value)
         }
@@ -191,6 +224,25 @@ struct HandbookCardView: View {
     private var sourceRoot: URL {
         (baseDirectory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
             .appendingPathComponent("HandbookSources", isDirectory: true)
+    }
+    private var fullScreenActive: Bool { studying && fullScreenEnabled }
+    private var fullScreenBar: some View {
+        HStack {
+            Button { fullScreenEnabled = false } label: {
+                Label("退出全屏", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .font(.footnote).frame(minHeight: 44)
+            }.accessibilityIdentifier("handbook-exit-fullscreen")
+            Spacer()
+            Menu {
+                Button("返回卡片首页", systemImage: "rectangle.on.rectangle") { studying = false }
+                Button("章节目录", systemImage: "list.bullet") { showingOutline = true }
+                Button("核对本卡原页", systemImage: "doc.text.magnifyingglass") { showingSources = true }
+                Button("导出背卡记录", systemImage: "square.and.arrow.up") { exportRecords() }
+            } label: {
+                Image(systemName: "ellipsis").font(.body).frame(width: 44, height: 44)
+            }.accessibilityLabel("卡片选项")
+        }.padding(.horizontal, 16)
+            .background(Color(uiColor: .systemGroupedBackground))
     }
     private var singleStagedFile: URL? { let files = store.stagedFiles(); return files.count == 1 ? files.first : nil }
     private func importStaged(_ url: URL) { store.importContent(url); if store.error == nil { studying = false } }
@@ -230,7 +282,7 @@ struct HandbookCardView: View {
         return VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("按知识点，把这一册背清楚").font(.system(.title, design: .rounded).weight(.bold))
-                Text(verbatim: engine.package.title).font(.subheadline).foregroundStyle(.secondary)
+                Text(verbatim: handbookDisplayText(engine.package.title)).font(.subheadline).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .firstTextBaseline) {
@@ -276,24 +328,27 @@ struct HandbookCardView: View {
         let stats = engine.stats(on: displayDate)
         let index = engine.package.cards.firstIndex(where: { $0.id == card.id }).map { $0 + 1 }
         return VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Text(verbatim: engine.package.chapter(for: card)?.title ?? "宝典知识点").font(.subheadline.weight(.medium))
+            if !fullScreenActive { HStack {
+                Text(verbatim: handbookDisplayText(engine.package.chapter(for: card)?.title ?? "宝典知识点")).font(.subheadline.weight(.medium))
                 Spacer()
                 Text(index.map { "\($0) / \(stats.total)" } ?? "复习中")
                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
             }.foregroundStyle(.secondary)
             ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
                 .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)张")
-            HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power)
+            }
+            HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power, focused: fullScreenActive)
                 .id("handbook-card-face")
             if p.revealed {
                 Button { showingSources = true } label: {
                     Label(sourceLabel(card), systemImage: "doc.text.magnifyingglass").font(.footnote)
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
                     .accessibilityIdentifier("handbook-source")
-                Text("这次只是背卡自评，不计入原题正确率。")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
+                if !fullScreenActive {
+                    Text("这次只是背卡自评，不计入原题正确率。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else if !fullScreenActive {
                 HStack(spacing: 8) {
                     Image(systemName: "brain.head.profile")
                     Text(subject == .power ? "看提示回忆遮住的内容，再翻开核对。" : "先在心里回答，再翻开核对。")
@@ -331,7 +386,9 @@ struct HandbookCardView: View {
 
     @ViewBuilder private var actions: some View {
         if studying, let engine = store.engine, let p = engine.presentation, engine.currentCard != nil {
-            VStack(spacing: 10) {
+            if fullScreenActive {
+                focusedActions(p)
+            } else { VStack(spacing: 10) {
                 if p.revealed {
                     HStack(spacing: 12) {
                         Button { store.rate(remembered: false, token: p.id) } label: {
@@ -360,7 +417,29 @@ struct HandbookCardView: View {
             }.controlSize(.regular).disabled(store.blocked)
                 .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 8)
                 .frame(maxWidth: .infinity).background(.bar)
+            }
         }
+    }
+
+    private func focusedActions(_ p: HandbookCardPresentation) -> some View {
+        HStack(spacing: 8) {
+            if p.revealed {
+                Button { store.rate(remembered: false, token: p.id) } label: {
+                    Text("没记住").font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
+                }.buttonStyle(.bordered).tint(.orange).accessibilityIdentifier("handbook-forgotten")
+                Button { store.rate(remembered: true, token: p.id) } label: {
+                    Text("记住了").font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("handbook-remembered")
+            } else {
+                Button { store.reveal(token: p.id) } label: {
+                    Text("翻答案").font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("handbook-reveal")
+            }
+            Button { store.postpone(token: p.id) } label: {
+                Text("稍后").font(.footnote).frame(minWidth: 40, minHeight: 44)
+            }.buttonStyle(.bordered).accessibilityLabel("暂时不背，本轮稍后")
+                .accessibilityIdentifier("handbook-postpone")
+        }.disabled(store.blocked).padding(.horizontal, 12).padding(.vertical, 8).background(.bar)
     }
 
     private func outline(_ package: HandbookCardPackage) -> some View {
@@ -377,10 +456,10 @@ struct HandbookCardView: View {
                                         .font(.footnote).foregroundStyle(.secondary).padding()
                                 }.background(Color(uiColor: .systemGroupedBackground))
                                     .navigationTitle("知识点预览").navigationBarTitleDisplayMode(.inline)
-                            } label: { Text(verbatim: card.title).padding(.vertical, 5) }
+                            } label: { Text(verbatim: handbookDisplayText(card.title)).padding(.vertical, 5) }
                         }
                     } header: {
-                        Text(verbatim: chapter.title)
+                        Text(verbatim: handbookDisplayText(chapter.title))
                     }
                 }
             }.navigationTitle("章节目录").navigationBarTitleDisplayMode(.inline)
@@ -405,7 +484,7 @@ struct HandbookCardView: View {
     private func reportPreview() {
         Task { @MainActor in
             await Task.yield()
-            guard layoutReady, preview.scrollTarget == nil || scrollReady else { return }
+            guard layoutReady, previewStudyStarted, preview.scrollTarget == nil || scrollReady else { return }
             let engine = store.engine
             let card = engine?.currentCard
             let p = engine?.presentation
@@ -419,7 +498,7 @@ struct HandbookCardView: View {
             preview.didRender(.init(mode: mode, cardID: card?.id, revealed: p?.revealed ?? false,
                 ratingCount: engine?.record.ratings.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
                 sourceFilesPresent: filesPresent,
-                recallCueMode: subject == .power && mode == "front"))
+                recallCueMode: subject == .power && mode == "front", fullScreen: fullScreenActive))
         }
     }
     #endif
@@ -429,6 +508,7 @@ private struct HandbookCardFace: View {
     let card: HandbookCard
     let revealed: Bool
     var showRecallCues = false
+    var focused = false
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -437,56 +517,60 @@ private struct HandbookCardFace: View {
     @ScaledMetric(relativeTo: .body) private var noteSize: CGFloat = 16.0
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
+            if !focused { HStack {
                 Text(revealed ? "核对答案" : "主动回忆").font(.caption.weight(.semibold)).foregroundStyle(.blue)
                 Spacer()
                 Image(systemName: revealed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle")
                     .foregroundStyle(.blue.opacity(0.7))
-            }
-            Text(verbatim: card.title).font(.system(size: titleSize, weight: .bold, design: .rounded))
+            } }
+            Text(verbatim: handbookDisplayText(card.title)).font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
             if !revealed && showRecallCues {
-                Text("冒号前作提示，后面遮住；翻一次核对整张。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                if !focused {
+                    Text("冒号前作提示，后面遮住；翻一次核对整张。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 if card.answerSummary != "讲义原文" {
                     HandbookCueTextView(source: card.answerSummary, fontSize: summarySize)
                 }
                 ForEach(Array(card.blocks.enumerated()), id: \.offset) { _, block in
-                    if !block.collapsed { HandbookCardBlockView(block: block, masked: true) }
+                    if !block.collapsed { HandbookCardBlockView(block: block, masked: true, focused: focused) }
                 }
             } else if !revealed {
-                Text(verbatim: card.prompt).font(.system(size: promptSize)).lineSpacing(8)
+                Text(verbatim: handbookDisplayText(card.prompt)).font(.system(size: promptSize)).lineSpacing(8)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("handbook-card-prompt")
                     .padding(.top, 5).padding(.bottom, 34)
             } else {
-                Text(verbatim: card.answerSummary).font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
+                if !focused || card.answerSummary != "讲义原文" {
+                Text(verbatim: handbookDisplayText(card.answerSummary)).font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-summary")
+                }
                 ForEach(Array(card.blocks.enumerated()), id: \.offset) { _, block in
                     if block.collapsed {
                         DisclosureGroup {
-                            HandbookCardBlockView(block: block).padding(.top, 12)
-                        } label: { Text(verbatim: block.title.isEmpty ? "展开补充" : block.title).font(.headline) }
-                    } else { HandbookCardBlockView(block: block) }
+                            HandbookCardBlockView(block: block, focused: focused).padding(.top, 12)
+                        } label: { Text(verbatim: handbookDisplayText(block.title.isEmpty ? "展开补充" : block.title)).font(.headline) }
+                    } else { HandbookCardBlockView(block: block, focused: focused) }
                 }
                 if !card.examples.isEmpty {
                     DisclosureGroup("用原例再理解一次") {
                         VStack(alignment: .leading, spacing: 20) {
                             ForEach(Array(card.examples.enumerated()), id: \.offset) { _, example in
                                 VStack(alignment: .leading, spacing: 11) {
-                                    if !example.title.isEmpty { Text(verbatim: example.title).font(.headline) }
-                                    Text(verbatim: example.prompt).font(.system(size: exampleSize)).lineSpacing(5)
+                                    if !example.title.isEmpty { Text(verbatim: handbookDisplayText(example.title)).font(.headline) }
+                                    Text(verbatim: handbookDisplayText(example.prompt)).font(.system(size: exampleSize)).lineSpacing(5)
                                     ForEach(Array(example.steps.enumerated()), id: \.offset) { index, step in
                                         HStack(alignment: .top, spacing: 9) {
                                             Text(String(index + 1)).font(.caption.bold()).foregroundStyle(.blue)
                                                 .frame(width: 22, height: 22).background(.blue.opacity(0.09), in: Circle())
-                                            Text(verbatim: step).font(.system(size: stepSize)).fixedSize(horizontal: false, vertical: true)
+                                            Text(verbatim: handbookDisplayText(step)).font(.system(size: stepSize)).fixedSize(horizontal: false, vertical: true)
                                         }
                                     }
-                                    Text(verbatim: example.answer).font(.system(size: exampleSize, weight: .medium))
+                                    Text(verbatim: handbookDisplayText(example.answer)).font(.system(size: exampleSize, weight: .medium))
                                     Text("PDF第\(example.sourcePage)页").font(.caption).foregroundStyle(.secondary)
                                     if let note = example.sourceIssueNote, !note.isEmpty {
-                                        Text(verbatim: note).font(.footnote).foregroundStyle(.secondary)
+                                        Text(verbatim: handbookDisplayText(note)).font(.footnote).foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -497,7 +581,7 @@ private struct HandbookCardFace: View {
                     DisclosureGroup("原书校注") {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(Array(card.sourceNotes.enumerated()), id: \.offset) { _, note in
-                                Text(verbatim: note).font(.system(size: noteSize)).foregroundStyle(.secondary).lineSpacing(5)
+                                Text(verbatim: handbookDisplayText(note)).font(.system(size: noteSize)).foregroundStyle(.secondary).lineSpacing(5)
                             }
                         }.padding(.top, 10)
                     }.font(.headline)
@@ -512,13 +596,16 @@ private struct HandbookCardFace: View {
 private struct HandbookCardBlockView: View {
     let block: HandbookCard.Block
     var masked = false
+    var focused = false
     @Environment(\.dynamicTypeSize) private var dynamicType
     @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 19.0
     @ScaledMetric(relativeTo: .body) private var keySize: CGFloat = 17.0
     @ScaledMetric(relativeTo: .body) private var keyWidth: CGFloat = 72.0
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            if !block.title.isEmpty && !block.collapsed { Text(verbatim: block.title).font(.headline).foregroundStyle(.secondary) }
+            if !block.title.isEmpty && !block.collapsed && !(focused && ["原文", "原表", "原图"].contains(block.title)) {
+                Text(verbatim: handbookDisplayText(block.title)).font(.headline).foregroundStyle(.secondary)
+            }
             if block.kind == "keyValues" || block.kind == "table" { table }
             else if block.kind == "bullets" || block.kind == "steps" {
                 ForEach(Array((block.items ?? []).enumerated()), id: \.offset) { index, item in
@@ -526,12 +613,12 @@ private struct HandbookCardBlockView: View {
                         Text(block.kind == "steps" ? String(index + 1) + "." : "•")
                             .font(.system(size: keySize, weight: .semibold)).foregroundStyle(.blue).frame(minWidth: 15, alignment: .leading)
                         if masked { HandbookCueTextView(source: item, fontSize: bodySize) }
-                        else { Text(verbatim: item).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true) }
+                        else { Text(verbatim: handbookDisplayText(item)).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true) }
                     }
                 }
             } else if let text = block.text {
                 if masked { HandbookCueTextView(source: text, fontSize: bodySize) }
-                else { Text(verbatim: text).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true) }
+                else { Text(verbatim: handbookDisplayText(text)).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true) }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -540,7 +627,7 @@ private struct HandbookCardBlockView: View {
             if block.kind == "table", let columns = block.columns, columns.contains(where: { !$0.isEmpty }), !dynamicType.isAccessibilitySize {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(Array(columns.enumerated()), id: \.offset) { index, title in
-                        Text(verbatim: title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(verbatim: handbookDisplayText(title)).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                             .frame(width: columns.count == 2 && index == 0 ? keyWidth : nil, alignment: .leading)
                             .frame(maxWidth: columns.count == 2 && index == 0 ? nil : .infinity, alignment: .leading)
                     }
@@ -559,7 +646,7 @@ private struct HandbookCardBlockView: View {
                 ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
                     VStack(alignment: .leading, spacing: 4) {
                         if block.kind == "table", let columns = block.columns, column < columns.count {
-                            Text(verbatim: columns[column]).font(.caption).foregroundStyle(.secondary)
+                            Text(verbatim: handbookDisplayText(columns[column])).font(.caption).foregroundStyle(.secondary)
                         }
                         cellText(cell, column: column)
                     }
@@ -579,7 +666,7 @@ private struct HandbookCardBlockView: View {
         if masked, HandbookRecallCue.cell(cell, column: column) == .hidden {
             HandbookAnswerMask()
         } else {
-            Text(verbatim: cell).font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
+            Text(verbatim: handbookDisplayText(cell)).font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
                 .foregroundStyle(column == 0 ? Color.blue : Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -594,7 +681,7 @@ private struct HandbookCueTextView: View {
             ForEach(Array(HandbookRecallCue.lines(source).enumerated()), id: \.offset) { _, line in
                 VStack(alignment: .leading, spacing: 6) {
                     if !line.prefix.isEmpty {
-                        Text(verbatim: line.prefix).font(.system(size: fontSize)).lineSpacing(6)
+                        Text(verbatim: handbookDisplayText(line.prefix)).font(.system(size: fontSize)).lineSpacing(6)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if line.hidesAnswer { HandbookAnswerMask() }

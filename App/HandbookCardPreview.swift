@@ -11,6 +11,7 @@ struct HandbookCardPreviewObservation: Equatable {
     let ratingEnabled: Bool
     let sourceFilesPresent: Bool
     let recallCueMode: Bool
+    let fullScreen: Bool
 }
 struct HandbookCardPreviewState {
     var didRender: (HandbookCardPreviewObservation) -> Void = { _ in }
@@ -38,7 +39,7 @@ extension EnvironmentValues {
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle"]
 
     init() {
         let args = ProcessInfo.processInfo.arguments
@@ -111,7 +112,7 @@ extension EnvironmentValues {
                 } else {
                     title = table ? "合成卡：演进阶段" : (long ? "合成卡：长内容排版" : "合成卡：设备的诞生")
                     prompt = table ? "四个阶段分别采用什么部件？" : "它在什么时候、什么地方诞生？名称是什么？"
-                    summary = table ? "按主要部件划分，四个阶段一起比较。" : "这是一张合成样式卡，只用于检查手机排版。"
+                    summary = table ? "按主要部件划分，四个阶段一起比较。" : "这是合成样式；仅用于检查手机排版;不含真实课程。"
                 }
                 let examples: [[String: Any]] = power ? [["title": "合成原例 _甲_", "prompt": "照写 **字面值** 与 U_*。",
                     "steps": ["保留 A_1 中的下划线。", "保留 A_1 * B_2 中的星号。"], "answer": "**字面值**；U_*。",
@@ -140,7 +141,7 @@ extension EnvironmentValues {
             let now = Date()
             prepared.start(now: now)
             precondition(prepared.engine?.presentation != nil, "Synthetic card must start")
-            if ["back", "table", "long", "resume", "postponed", "missing-source"].contains(selected) {
+            if ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
                 prepared.reveal(token: prepared.engine!.presentation!.id, now: now)
             }
             if selected == "resume" {
@@ -195,29 +196,62 @@ struct HandbookCardPreview: View {
     @State private var recalling = true
     @State private var observation: HandbookCardPreviewObservation?
     @State private var reported = false
+    @State private var fullScreenEnabled: Bool
+    @State private var selectedTab = 4
+    @State private var togglePhase = 0
+    @State private var toggleRecord: HandbookCardRecord?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
         _selectedSubject = State(initialValue: prepared.subject)
+        _fullScreenEnabled = State(initialValue: !["normal-front", "normal-back", "focus-toggle"].contains(prepared.selectedCase))
     }
     var body: some View {
-        ProfessionalCoursesView(computer: fixture.legacyComputer, power: fixture.legacyPower,
+        TabView(selection: $selectedTab) {
+            Text("合成首页，不含学习资料").tabItem { Label("今天", systemImage: "house") }.tag(5)
+            ProfessionalCoursesView(computer: fixture.legacyComputer, power: fixture.legacyPower,
                                 subject: $selectedSubject, practicing: $practicing, recalling: $recalling,
-                                handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower)
-            .environment(\.handbookCardPreview, .init(didRender: { observation = $0 }))
+                                handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower,
+                                fullScreenEnabled: $fullScreenEnabled)
+                .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
+                .tabItem { Label("专业课", systemImage: "books.vertical") }.tag(4)
+        }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !(fullScreenEnabled && recalling) {
+                    Text("合成学习段栏 · 非真实学习记录").font(.footnote).padding(8)
+                }
+            }
+            .statusBarHidden(fullScreenEnabled && recalling)
+            .environment(\.handbookCardPreview, .init(didRender: { observation = $0; handleFocusToggle($0) }))
             .onChange(of: observation) { _, _ in reportIfReady() }
     }
+    @MainActor private func handleFocusToggle(_ observed: HandbookCardPreviewObservation) {
+        guard fixture.selectedCase == "focus-toggle", let record = fixture.store.engine?.record else { return }
+        switch togglePhase {
+        case 0 where !observed.fullScreen:
+            toggleRecord = record; togglePhase = 1; fullScreenEnabled = true
+        case 1 where observed.fullScreen:
+            precondition(record == toggleRecord, "Entering fullscreen must not mutate a study record")
+            togglePhase = 2; fullScreenEnabled = false
+        case 2 where !observed.fullScreen:
+            precondition(record == toggleRecord, "Exiting fullscreen must keep the exact card/face/queue/grades")
+            togglePhase = 3; fullScreenEnabled = true
+        default: break
+        }
+    }
     @MainActor private func criticalReady() -> Bool {
-        guard selectedSubject == fixture.subject, recalling, !practicing,
+        guard selectedTab == 4, selectedSubject == fixture.subject, recalling, !practicing,
               !fixture.store.blocked, fixture.store.error == nil, let engine = fixture.store.engine, let observed = observation,
               observed.cardID == fixture.expectedCardID, observed.ratingCount == fixture.expectedRatings,
               engine.record.ratings.count == fixture.expectedRatings, engine.package.subject == fixture.subject,
               engine.record.subject == fixture.subject,
               engine.presentation?.id == fixture.expectedToken,
-              engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }) else { return false }
+              engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
+              observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
-        case "front", "table-front", "postponed": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.ratings.isEmpty && observed.recallCueMode == (fixture.subject == .power)
-        case "back", "table", "long", "resume": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.ratings.isEmpty
+        case "front", "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.ratings.isEmpty && observed.recallCueMode == (fixture.subject == .power)
+        case "back", "table", "long", "resume", "normal-back": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.ratings.isEmpty
+        case "focus-toggle": return togglePhase == 3 && engine.record == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.ratings.isEmpty
         case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.ratings.isEmpty
         case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.ratings.count == 2
         default: return false
@@ -238,6 +272,10 @@ struct HandbookCardPreview: View {
                 "presentationID": fixture.expectedToken.map { $0.uuidString.lowercased() as Any } ?? NSNull(),
                 "sourceFilesPresent": observation!.sourceFilesPresent,
                 "recallCueMode": observation!.recallCueMode,
+                "fullScreen": observation!.fullScreen,
+                "rootTabShellFixture": true,
+                "focusTogglePreservedRecord": fixture.selectedCase == "focus-toggle" && togglePhase == 3 && fixture.store.engine?.record == toggleRecord,
+                "semicolonFormatting": handbookDisplayText("甲；乙;丙") == "甲；\n乙;\n丙",
                 "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
                 "literalSymbolsFixture": fixture.subject == .power,
                 "sourceBlankCellsPreserved": fixture.store.package?.cards.contains { card in

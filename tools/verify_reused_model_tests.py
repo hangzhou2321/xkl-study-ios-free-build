@@ -3,8 +3,8 @@ from pathlib import Path
 import json, os, subprocess, urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
-BASE='464ca9fe6aa9bef4080e4a682701c0b2d8214ae8'
-RUN=40354862241
+BASE='3c9a5d79635fcca3c8951329a30dabc63dae0b5d'
+RUN=40439595866
 REPOSITORY='hangzhou2321/xkl-study-ios-free-build'
 ALLOWED={'App/HandbookCardView.swift','.github/workflows/build-ios.yml',
          'tools/build_unsigned_ios.sh','tools/verify_reused_model_tests.py',
@@ -24,9 +24,9 @@ def main():
              'baselineCommit':BASE,'baselineRun':RUN,'baselineRunURL':verified['html_url'],
              'releaseCommit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
              'allowedChanges':changed,'modelAndStorageSourcesByteIdentical':True,
-             'swiftTestsFromBaseline':{'executed':439,'passed':432,'skipped':7,'failures':0},
+             'swiftTestsFromBaseline':{'executed':444,'passed':437,'skipped':7,'failures':0},
              'strictCSuitesFromBaseline':4,'testsRerunForUIOnlyCommit':False,
-             'currentCommitRequiredChecks':['iOS Release compile','16 native synthetic computer/power phone previews']}
+             'currentCommitRequiredChecks':['iOS Release compile','24 native synthetic computer/power phone previews including fullscreen transitions']}
     out=ROOT/'build/reused-model-tests.json';out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf8')
     print('UI-only revision: exact model/storage source parity with successful full run',RUN,BASE)

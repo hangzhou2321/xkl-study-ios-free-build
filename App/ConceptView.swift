@@ -14,10 +14,12 @@ struct ProfessionalCoursesView: View {
     var objectivePower: ProfessionalQuestionStore? = nil
     var handbookComputer: HandbookCardStore? = nil
     var handbookPower: HandbookCardStore? = nil
+    var fullScreenEnabled: Binding<Bool> = .constant(false)
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("专业课", selection: Binding(get: { subject }, set: {
+            if !(recalling && fullScreenEnabled.wrappedValue) {
+                Picker("专业课", selection: Binding(get: { subject }, set: {
                 practicing = false
                 recalling = false
                 subject = $0
@@ -27,11 +29,13 @@ struct ProfessionalCoursesView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
-            .padding(.vertical, 8)
+                .padding(.vertical, 8)
+            }
             HandbookCardView(subject: subject,
                              injectedStore: subject == .computer ? handbookComputer : handbookPower,
                              originalQuestionStore: subject == .computer ? objectiveComputer : objectivePower,
                              legacyStore: subject == .computer ? computer : power, studying: $recalling,
+                             fullScreenEnabled: fullScreenEnabled,
                              onStart: onStart, onOverlayChanged: onOverlayChanged)
                 .id(subject.rawValue)
         }

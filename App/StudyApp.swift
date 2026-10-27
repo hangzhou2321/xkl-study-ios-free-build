@@ -76,6 +76,7 @@ struct RootView: View {
     @State private var examPracticing = false
     @State private var professionalPracticing = false
     @State private var professionalRecalling = false
+    @AppStorage("handbookFullScreenEnabled") private var handbookFullScreenEnabled = true
     @State private var examOverlay = false
     @State private var professionalOverlay = false
     @State private var observedCalendarDay: Date?
@@ -105,7 +106,9 @@ struct RootView: View {
                                     onStart: { began(subject == .computer ? .computer : .power) },
                                     onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() },
                                     objectiveComputer: professionalComputer, objectivePower: professionalPower,
-                                    handbookComputer: handbookComputer, handbookPower: handbookPower)
+                                    handbookComputer: handbookComputer, handbookPower: handbookPower,
+                                    fullScreenEnabled: handbookFullScreenBinding)
+                .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .disabled(flow.state.activeArea == (subject == .computer ? StudyArea.computer : .power)
                           && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
@@ -117,7 +120,10 @@ struct RootView: View {
                 .tabItem { Label("记录", systemImage: "chart.bar.doc.horizontal") }
                 .tag(2)
         }
-        .safeAreaInset(edge: .top, spacing: 0) { segmentBar }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !handbookFullScreenActive { segmentBar }
+        }
+        .statusBarHidden(handbookFullScreenActive)
         .onAppear {
             refreshCalendars(force: true)
             trackStudyVisibility()
@@ -172,6 +178,14 @@ struct RootView: View {
                 }.buttonStyle(.bordered)
             }.padding(28).presentationDetents([.medium]).interactiveDismissDisabled()
         }
+    }
+    private var handbookFullScreenActive: Bool {
+        selectedTab == 4 && professionalRecalling && handbookFullScreenBinding.wrappedValue
+    }
+    private var handbookFullScreenBinding: Binding<Bool> {
+        // Keep the shared resume/break controls reachable while learning is paused.
+        Binding(get: { handbookFullScreenEnabled && !flow.state.isPaused && !flow.state.needsBreak },
+                set: { handbookFullScreenEnabled = $0 })
     }
     private func trackStudyVisibility() {
         if let area = currentPracticeArea, area != flow.state.activeArea {
