@@ -7,7 +7,9 @@ permissions:
   contents: read
 jobs:
   guide-ui-test:
-    runs-on: macos-15-intel
+    # Retry on a different hosted runner after Intel's Accessibility service
+    # timed out before any test executed; all inputs remain synthetic.
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
