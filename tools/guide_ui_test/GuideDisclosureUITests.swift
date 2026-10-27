@@ -27,7 +27,9 @@ final class GuideDisclosureUITests: XCTestCase {
         let firstCue = app.staticTexts["合成提示甲："]
         XCTAssertTrue(firstCue.waitForExistence(timeout: 10), "Guide front should render")
         XCTAssertTrue(app.staticTexts["合成提示己："].exists, "All six cues belong to one card")
-        XCTAssertFalse(app.staticTexts["合成答案甲"].exists, "Guide answers must be hidden before revealing")
+        let firstAnswer = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "合成答案甲")).firstMatch
+        let lastAnswer = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "合成答案己")).firstMatch
+        XCTAssertFalse(firstAnswer.exists, "Guide answers must be hidden before revealing")
         capture("\(subject)-six-rows-front-top")
         let scroll = app.scrollViews.firstMatch
         XCTAssertTrue(scroll.exists)
@@ -37,13 +39,18 @@ final class GuideDisclosureUITests: XCTestCase {
         XCTAssertTrue(reveal.isHittable, "Single reveal button must remain available")
         reveal.tap()
         XCTAssertTrue(app.buttons["handbook-remembered"].waitForExistence(timeout: 10))
-        let fullAnswer = app.descendants(matching: .any).matching(identifier: "handbook-guide-full-answer").firstMatch
+        let fullAnswer = app.buttons.matching(identifier: "handbook-guide-full-answer")
+            .matching(NSPredicate(format: "label == %@", "查看完整讲义内容")).firstMatch
         for _ in 0..<3 where !fullAnswer.isHittable { scroll.swipeUp() }
         XCTAssertTrue(fullAnswer.isHittable, "The full lesson disclosure should be reachable")
-        XCTAssertTrue(app.staticTexts["合成答案己"].exists, "The same single reveal exposes the last core answer")
+        XCTAssertTrue(lastAnswer.exists, "The same single reveal exposes the last core answer")
         capture("\(subject)-six-rows-back")
 
-        let summary = app.descendants(matching: .any).matching(identifier: "handbook-card-summary").firstMatch
+        // SwiftUI propagates the disclosure's accessibility identifier to its
+        // expanded descendants on iOS 18.5. Match the unique synthetic lesson
+        // text instead of the child identifier, which is overridden at runtime.
+        let summaryFragment = subject == "power" ? "纯合成：U_*" : "这是合成样式"
+        let summary = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", summaryFragment)).firstMatch
         XCTAssertFalse(summary.exists, "Full lesson should start collapsed")
         // Allow the host record monitor to capture a stable post-reveal baseline.
         Thread.sleep(forTimeInterval: 8)

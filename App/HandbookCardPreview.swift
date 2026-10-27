@@ -187,12 +187,12 @@ extension EnvironmentValues {
             if ["front", "back"].contains(selected) {
                 package["memoryGuides"] = [["cardID": "synthetic-handbook-first",
                     "explanation": "仅用于验证简短骨架，不含真实课程。",
-                    "rows": [["cue": "合成提示甲", "answer": "合成答案甲"],
-                             ["cue": "合成提示乙", "answer": "合成答案乙"],
-                             ["cue": "合成提示丙", "answer": "合成答案丙"],
-                             ["cue": "合成提示丁", "answer": "合成答案丁"],
-                             ["cue": "合成提示戊", "answer": "合成答案戊"],
-                             ["cue": "合成提示己", "answer": "合成答案己"]],
+                    "rows": [["cue": "合成提示甲", "answer": "合成答案甲：纯合成较长说明，用于检查多行文字的自然换行。"],
+                             ["cue": "合成提示乙", "answer": "合成答案乙：纯合成较长说明，用于检查多行文字的自然换行。"],
+                             ["cue": "合成提示丙", "answer": "合成答案丙：纯合成较长说明，用于检查多行文字的自然换行。"],
+                             ["cue": "合成提示丁", "answer": "合成答案丁：纯合成较长说明，用于检查多行文字的自然换行。"],
+                             ["cue": "合成提示戊", "answer": "合成答案戊：纯合成较长说明，用于检查多行文字的自然换行。"],
+                             ["cue": "合成提示己", "answer": "合成答案己：纯合成较长说明，用于检查多行文字的自然换行。"]],
                     "mnemonic": "合成记忆提示"]]
             }
             var sourcePages: [[String: Any]] = [["number": archivePage, "asset": ["sha256": String(repeating: "c", count: 64), "mimeType": "image/png", "byteCount": 128,
