@@ -1,0 +1,35 @@
+name: Synthetic guide disclosure UI test
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci-guide-ui-test-579055e]
+permissions:
+  contents: read
+jobs:
+  guide-ui-test:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private content
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for pattern in ('*.pdf','*.xklflashcards','*.xklcourse','*.xklquestions','*.xklqbank','*.xklmath','*.xklmathguide','personal-state.bin','deck.json','resource-manifest.json'):
+              assert not list(Path('.').rglob(pattern)), 'private input must not enter this synthetic test'
+          PY
+      - name: Real simulator taps and record monitoring
+        run: |
+          python3 tools/guide_ui_test/run.py || { tail -160 build/guide-ui-test/xcodebuild.log || true; exit 1; }
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-guide-disclosure-ui-test
+          path: |
+            build/guide-ui-test/summary.json
+            build/guide-ui-test/xcodebuild.log
+            build/guide-ui-test/attachment-export.log
+            build/guide-ui-test/attachments/
+            build/guide-ui-test/GuideDisclosure.xcresult/
+          if-no-files-found: warn
+          retention-days: 3
