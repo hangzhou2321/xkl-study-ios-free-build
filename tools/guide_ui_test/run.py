@@ -71,7 +71,8 @@ def main():
         cmd = ['xcodebuild','test','-project','XKLStudy.xcodeproj','-scheme','XKLStudy','-configuration','Debug',
                '-destination','platform=iOS Simulator,id='+device,'-derivedDataPath',str(OUT/'DerivedData'),
                '-resultBundlePath',str(result_path),'-parallel-testing-enabled','NO','-only-testing:GuideDisclosureUITests',
-               'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=']
+               'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=',
+               'ARCHS='+platform.machine(),'ONLY_ACTIVE_ARCH=YES']
         with (OUT/'xcodebuild.log').open('w',encoding='utf8') as stream:
             process = subprocess.run(cmd,stdout=stream,stderr=subprocess.STDOUT,text=True,env=test_env)
         report['xcodebuildExitCode'] = process.returncode
