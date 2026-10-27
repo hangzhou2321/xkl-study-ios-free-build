@@ -21,6 +21,7 @@ struct HandbookCardPreviewObservation: Equatable {
     let recallCueMode: Bool
     let fullScreen: Bool
     let sourceSheetPresented: Bool
+    let frequencyLabel: String?
 }
 struct HandbookSourcePreviewObservation: Equatable {
     let sourceID: String
@@ -176,6 +177,10 @@ extension EnvironmentValues {
                 "title": "纯合成卡组 · 不含用户资料", "revision": "synthetic-1",
                 "source": ["title": "纯合成来源", "fileName": "synthetic.pdf", "sha256": String(repeating: "b", count: 64), "pdfPageCount": archivePage, "includedPages": [sourcePage, archivePage]],
                 "chapters": [["id": "synthetic-chapter", "title": "合成章节 · 仅用于页面检查"]], "cards": cards]
+            if ["front", "back", "normal-front"].contains(selected) {
+                package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
+                    "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
+            }
             var sourcePages: [[String: Any]] = [["number": archivePage, "asset": ["sha256": String(repeating: "c", count: 64), "mimeType": "image/png", "byteCount": 128,
                 "pixelWidth": 120, "pixelHeight": 160, "crop": ["x": 0, "y": 0, "width": 1, "height": 1], "altText": "纯合成档案原页，仅查阅，不在任何卡片的调度中。"]]]
             if selected == "missing-source" {
@@ -462,6 +467,7 @@ struct HandbookCardPreview: View {
                 "selectedSourceMissingPageNumbers": sourceObservation?.missingPageNumbers ?? [],
                 "recallCueMode": observation!.recallCueMode,
                 "fullScreen": observation!.fullScreen,
+                "topicFrequencyLabel": observation!.frequencyLabel.map { $0 as Any } ?? NSNull(),
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,
                 "diagramSwitchStartedCollapsed": fixture.selectedCase == "diagram-switch" && diagramPhase == 3 &&

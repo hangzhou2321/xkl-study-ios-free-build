@@ -108,6 +108,34 @@ final class HandbookWordTests: XCTestCase {
         XCTAssertEqual(restored.state.originalCardIDs, original.cards.map(\.id))
         XCTAssertEqual(restored.package.cards[0].answerSummary, "Updated source")
     }
+    @MainActor func testTopicFrequencyOnlyUpdateKeepsEnglishStateAndFrozenFace() async throws {
+        let original = package(), book = try HandbookWordEngine(package: original, now: now)
+        try book.start(now: now)
+        let first = try XCTUnwrap(book.presentation?.id)
+        try book.reveal(token: first, now: now); try book.rate(remembered: false, token: first, now: now)
+        let token = try XCTUnwrap(book.presentation?.id)
+        try book.reveal(token: token, now: now)
+        let before = book.record, frozen = book.currentCard, oldIDs = book.state.originalCardIDs
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
+        object["revision"] = "1.1"
+        object["topicFrequencies"] = [["topicNumber": 1, "stars": 5, "sourcePage": 1,
+                                        "cardIDs": ["original-id-0", "original-id-1"]]]
+        let annotated = try HandbookCardPackage.load(JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(annotated.cards.map(\.definitionID), original.cards.map(\.definitionID))
+        try book.updatePackage(annotated, now: now)
+        XCTAssertEqual(book.record, before)
+        XCTAssertEqual(book.state.originalCardIDs, oldIDs)
+        XCTAssertEqual(book.currentCard, frozen)
+        XCTAssertEqual(book.presentation?.id, token)
+        XCTAssertEqual(book.presentation?.revealed, true)
+        let annotatedState = book.state
+        try book.updatePackage(annotated, now: now)
+        XCTAssertEqual(book.state, annotatedState)
+        let reopened = try HandbookWordEngine(state: JSONDecoder().decode(HandbookWordState.self, from: JSONEncoder().encode(book.state)))
+        XCTAssertEqual(reopened.record, before)
+        XCTAssertEqual(reopened.package.frequencyLabel(for: annotated.cards[0]), "宝典考点频率 ★★★★★")
+        XCTAssertEqual(reopened.package.frequencyLabel(for: annotated.cards[2]), "宝典未单独标注")
+    }
     @MainActor func testContentSourceUpdateAndAddedCardPreserveAnsweredStreamAndFrozenFace() async throws {
         let original = package(), book = try HandbookWordEngine(package: original, now: now)
         try book.start(now: now)

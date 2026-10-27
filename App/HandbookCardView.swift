@@ -350,7 +350,8 @@ struct HandbookCardView: View {
                 .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
             }
             HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
-                             focused: fullScreenActive, primarySourceTitle: engine.package.source.title)
+                             focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
+                             frequencyLabel: engine.package.frequencyLabel(for: card))
                 .id("handbook-card-face")
             if p.revealed {
                 Button { showingSources = true } label: {
@@ -465,13 +466,21 @@ struct HandbookCardView: View {
                         ForEach(package.cards.filter { package.chapter(for: $0)?.id == chapter.id }, id: \.id) { card in
                             NavigationLink {
                                 ScrollView {
-                                    HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title)
+                                    HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
+                                                     frequencyLabel: package.frequencyLabel(for: card))
                                         .padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
                                     Text("目录预览不产生自评，也不改变复习日期。")
                                         .font(.footnote).foregroundStyle(.secondary).padding()
                                 }.background(Color(uiColor: .systemGroupedBackground))
                                     .navigationTitle("知识点预览").navigationBarTitleDisplayMode(.inline)
-                            } label: { Text(verbatim: handbookDisplayText(card.title)).padding(.vertical, 5) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(verbatim: handbookDisplayText(card.title))
+                                    if let label = package.frequencyLabel(for: card) {
+                                        Text(verbatim: label).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }.padding(.vertical, 5)
+                            }
                         }
                     } header: {
                         Text(verbatim: handbookDisplayText(chapter.title))
@@ -517,7 +526,8 @@ struct HandbookCardView: View {
                 ratingCount: engine?.record.attempts.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
                 sourceFilesPresent: filesPresent,
                 recallCueMode: subject == .power && mode == "front", fullScreen: fullScreenActive,
-                sourceSheetPresented: showingSources || showingAllSources))
+                sourceSheetPresented: showingSources || showingAllSources,
+                frequencyLabel: card.flatMap { engine?.package.frequencyLabel(for: $0) }))
         }
     }
     #endif
@@ -529,6 +539,7 @@ private struct HandbookCardFace: View {
     var showRecallCues = false
     var focused = false
     var primarySourceTitle: String? = nil
+    var frequencyLabel: String? = nil
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -545,6 +556,10 @@ private struct HandbookCardFace: View {
             } }
             Text(verbatim: handbookDisplayText(card.title)).font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
+            if let label = frequencyLabel {
+                Text(verbatim: label).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("handbook-topic-frequency")
+            }
             if !revealed && showRecallCues {
                 if !focused {
                     Text("冒号前作提示，后面遮住；翻一次核对整张。")

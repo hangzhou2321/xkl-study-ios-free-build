@@ -60,6 +60,8 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "route": "ProfessionalCoursesView", "selectedSubject": subject,
         "recallCueMode": subject == "power" and mode == "front",
         "fullScreen": case not in ("normal-front", "normal-back"), "rootTabShellFixture": True,
+        "topicFrequencyLabel": ("宝典考点频率 ★★★★☆" if case in ("front", "back") else
+                                ("宝典未单独标注" if case == "normal-front" else None)),
         "focusTogglePreservedRecord": case == "focus-toggle", "semicolonFormatting": True,
         "diagramExpanded": case in ("diagram-branch", "diagram-flow"),
         "diagramTogglePreservedRecord": case in ("diagram-branch", "diagram-flow", "diagram-switch"),

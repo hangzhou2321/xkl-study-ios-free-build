@@ -103,6 +103,14 @@ struct HandbookCardPackage: Codable, Equatable {
     }
     struct Chapter: Codable, Equatable, Identifiable { let id: String; let title: String }
     struct Page: Codable, Equatable { let number: Int; let asset: ProfessionalSourceFileAsset }
+    /// The book's rating belongs to a whole topic, not to an individual fact or observed exam frequency.
+    /// Explicit card IDs prevent later additions from inheriting a rating by proximity.
+    struct TopicFrequency: Codable, Equatable {
+        let topicNumber: Int
+        let stars: Int
+        let sourcePage: Int
+        let cardIDs: [String]
+    }
     struct AdditionalSource: Codable, Equatable, Identifiable {
         let id: String
         let source: Source
@@ -118,6 +126,8 @@ struct HandbookCardPackage: Codable, Equatable {
     let cards: [HandbookCard]
     var sourcePages: [Page]? = nil
     var additionalSources: [AdditionalSource]? = nil
+    /// Optional package-level presentation metadata; it does not alter card definitions or scheduling.
+    var topicFrequencies: [TopicFrequency]? = nil
 
     var hash: String { handbookHash(self) }
     static func load(_ data: Data) throws -> Self {
@@ -134,9 +144,34 @@ struct HandbookCardPackage: Codable, Equatable {
         }
         try Self.validateSource(source, sourcePages: sourcePages)
         try Self.validateAdditionalSources(additionalSources)
+        try validateTopicFrequencies()
         for card in cards {
             try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
         }
+    }
+    private func validateTopicFrequencies() throws {
+        guard let frequencies = topicFrequencies else { return }
+        let byID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
+        let assigned = frequencies.flatMap(\.cardIDs)
+        guard frequencies.count <= 1_000,
+              Set(frequencies.map(\.topicNumber)).count == frequencies.count,
+              Set(assigned).count == assigned.count,
+              frequencies.allSatisfy({ item in
+                  (1...1_000).contains(item.topicNumber) && (1...5).contains(item.stars) &&
+                  source.includedPages.contains(item.sourcePage) && item.cardIDs.count <= cards.count &&
+                  item.cardIDs.allSatisfy { byID[$0]?.topicNumber == item.topicNumber }
+              }) else {
+            throw ExamError.invalid("宝典考点星级的来源、范围或卡片对应关系无效。")
+        }
+    }
+    /// Nil for older packages; unlisted cards are explicitly not individually rated by the book.
+    func frequencyLabel(for card: HandbookCard) -> String? {
+        guard let frequencies = topicFrequencies else { return nil }
+        guard let item = frequencies.first(where: { $0.cardIDs.contains(card.id) }) else {
+            return "宝典未单独标注"
+        }
+        return "宝典考点频率 " + String(repeating: "★", count: item.stars) +
+            String(repeating: "☆", count: 5 - item.stars)
     }
     static func validateAdditionalSources(_ sources: [AdditionalSource]?) throws {
         let sources = sources ?? []

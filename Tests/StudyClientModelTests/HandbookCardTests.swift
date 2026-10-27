@@ -41,6 +41,31 @@ final class HandbookCardTests: XCTestCase {
             object["cards"] = cards
         })
     }
+    func testBookTopicFrequencyIsOptionalExplicitAndValidated() throws {
+        let legacy = fixture()
+        XCTAssertNil(legacy.frequencyLabel(for: legacy.cards[0]))
+        let unchanged = try HandbookCardPackage.load(JSONEncoder().encode(legacy))
+        XCTAssertEqual(unchanged.hash, legacy.hash)
+        let annotated = try changed(legacy) { object in
+            object["topicFrequencies"] = [
+                ["topicNumber": 1, "stars": 4, "sourcePage": 1, "cardIDs": ["synthetic-knowledge-1"]],
+                ["topicNumber": 3, "stars": 5, "sourcePage": 3, "cardIDs": []]
+            ]
+        }
+        XCTAssertEqual(annotated.frequencyLabel(for: annotated.cards[0]), "宝典考点频率 ★★★★☆")
+        XCTAssertEqual(annotated.frequencyLabel(for: annotated.cards[1]), "宝典未单独标注")
+        XCTAssertEqual(annotated.cards.map(\.definitionID), legacy.cards.map(\.definitionID))
+        XCTAssertEqual(try HandbookCardPackage.load(JSONEncoder().encode(annotated)), annotated)
+        for bad in [
+            [["topicNumber": 1, "stars": 6, "sourcePage": 1, "cardIDs": ["synthetic-knowledge-1"]]],
+            [["topicNumber": 1, "stars": 4, "sourcePage": 99, "cardIDs": ["synthetic-knowledge-1"]]],
+            [["topicNumber": 1, "stars": 4, "sourcePage": 1, "cardIDs": ["synthetic-knowledge-2"]]],
+            [["topicNumber": 1, "stars": 4, "sourcePage": 1, "cardIDs": ["missing-card"]]],
+            [["topicNumber": 1, "stars": 4, "sourcePage": 1, "cardIDs": ["synthetic-knowledge-1", "synthetic-knowledge-1"]]]
+        ] {
+            XCTAssertThrowsError(try changed(legacy) { $0["topicFrequencies"] = bad })
+        }
+    }
     func testOriginalTableBlankCellsAndUnlabelledHeadersRemainBlank() throws {
         let pack = try changed(fixture()) { object in
             var cards = object["cards"] as! [[String: Any]]
