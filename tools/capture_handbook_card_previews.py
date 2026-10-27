@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/handbook-card-previews"
 BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
-CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle")
+CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
+         "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages")
 CAPTURES = tuple((subject, case) for subject in SUBJECTS for case in CASES)
 
 
@@ -52,6 +53,9 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         raise RuntimeError("Native receipt does not match this fixture launch")
     mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
+    supplemented = case.startswith(("multi-source", "lecture-only"))
+    lecture_only = case.startswith("lecture-only")
+    source_sheet = case.endswith("-pages")
     expected_state = {
         "route": "ProfessionalCoursesView", "selectedSubject": subject,
         "recallCueMode": subject == "power" and mode == "front",
@@ -61,7 +65,19 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "selfRatings": 2 if case == "completed" else 0,
         "cardID": None if case == "completed" else ("synthetic-handbook-second" if case == "postponed" else "synthetic-handbook-first"),
         "sourceFilesPresent": False, "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
-        "literalSymbolsFixture": subject == "power", "cardSourcePageNumbers": [] if case == "completed" else [page],
+        "sourceSheetPresented": source_sheet, "sourceNavigationPreservedRecord": source_sheet,
+        "selectedSourceID": "additional:synthetic-lecture" if source_sheet else None,
+        "selectedSourceTitle": "纯合成讲义甲" if source_sheet else None,
+        "selectedSourcePageNumbers": [7, 9] if source_sheet else [],
+        "selectedSourceMissingPageNumbers": [7, 9] if source_sheet else [],
+        "literalSymbolsFixture": subject == "power" and not supplemented,
+        "cardSourcePageNumbers": [] if case == "completed" or lecture_only else [page],
+        "cardAdditionalSourceReferences": [{"sourceID": "synthetic-lecture", "page": 7}] if supplemented else [],
+        "cardSourceTitles": ([] if case == "completed" else
+                             (["纯合成讲义甲"] if lecture_only else
+                              (["纯合成来源", "纯合成讲义甲"] if supplemented else ["纯合成来源"]))),
+        "allSourceTitles": ["纯合成来源", "纯合成讲义甲"] if supplemented else ["纯合成来源"],
+        "supplementalExampleUsesOrdinaryBlock": supplemented,
         "sourceBlankCellsPreserved": subject == "power" and case in ("table", "table-front"),
         "allSourcePageNumbers": [page, archive] if case == "missing-source" else [archive],
         "archivalSourcePageNumbers": [archive],

@@ -3,6 +3,10 @@ import StudyCore
 
 /// A source knowledge point and its readable answer. It is not an original-question answer key.
 struct HandbookCard: Codable, Equatable, Identifiable {
+    struct SourceReference: Codable, Equatable, Hashable {
+        let sourceID: String
+        let page: Int
+    }
     struct Block: Codable, Equatable {
         let title: String
         let kind: String
@@ -31,14 +35,21 @@ struct HandbookCard: Codable, Equatable, Identifiable {
     let examples: [Example]
     let sourceNotes: [String]
     var chapterID: String? = nil
+    /// References to additional sources only; sourcePages retains its original handbook meaning.
+    var sourceReferences: [SourceReference]? = nil
 
     var definitionID: String { handbookHash(self) }
-    func validate(pages: Set<Int>, chapterIDs: Set<String>) throws {
+    func validate(pages: Set<Int>, chapterIDs: Set<String>, additionalSources: [HandbookCardPackage.AdditionalSource]? = nil) throws {
+        let references = sourceReferences ?? []
         guard handbookText(id, 200), !sourceGroupIDs.isEmpty, sourceGroupIDs.count <= 30,
               Set(sourceGroupIDs).count == sourceGroupIDs.count, sourceGroupIDs.allSatisfy({ handbookText($0, 200) }),
               (1...1_000).contains(topicNumber), handbookText(title, 160), handbookText(prompt, 1_200),
               handbookText(answerSummary, 2_000), blocks.count <= 16,
-              !sourcePages.isEmpty, Set(sourcePages).count == sourcePages.count, Set(sourcePages).isSubset(of: pages),
+              (!sourcePages.isEmpty || !references.isEmpty), Set(sourcePages).count == sourcePages.count, Set(sourcePages).isSubset(of: pages),
+              Set(references).count == references.count,
+              references.allSatisfy({ reference in
+                  (additionalSources ?? []).contains { $0.id == reference.sourceID && $0.source.includedPages.contains(reference.page) }
+              }),
               chapterID == nil || chapterIDs.contains(chapterID!), examples.count <= 12,
               sourceNotes.count <= 30, sourceNotes.allSatisfy({ handbookText($0, 4_000) }) else {
             throw ExamError.invalid("宝典卡片的标题、答案、身份或出处不完整：\(id)")
@@ -86,6 +97,11 @@ struct HandbookCardPackage: Codable, Equatable {
     }
     struct Chapter: Codable, Equatable, Identifiable { let id: String; let title: String }
     struct Page: Codable, Equatable { let number: Int; let asset: ProfessionalSourceFileAsset }
+    struct AdditionalSource: Codable, Equatable, Identifiable {
+        let id: String
+        let source: Source
+        var sourcePages: [Page]? = nil
+    }
     var format = "xkl-handbook-cards-v1"
     let id: String
     let subject: ConceptSubject
@@ -95,6 +111,7 @@ struct HandbookCardPackage: Codable, Equatable {
     let chapters: [Chapter]
     let cards: [HandbookCard]
     var sourcePages: [Page]? = nil
+    var additionalSources: [AdditionalSource]? = nil
 
     var hash: String { handbookHash(self) }
     static func load(_ data: Data) throws -> Self {
@@ -110,7 +127,18 @@ struct HandbookCardPackage: Codable, Equatable {
             throw ExamError.invalid("宝典卡包身份、章节或卡片ID无效。")
         }
         try Self.validateSource(source, sourcePages: sourcePages)
-        for card in cards { try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id))) }
+        try Self.validateAdditionalSources(additionalSources)
+        for card in cards {
+            try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
+        }
+    }
+    static func validateAdditionalSources(_ sources: [AdditionalSource]?) throws {
+        let sources = sources ?? []
+        guard sources.count <= 100, Set(sources.map(\.id)).count == sources.count,
+              sources.allSatisfy({ handbookText($0.id, 100) && $0.id == $0.id.trimmingCharacters(in: .whitespacesAndNewlines) }) else {
+            throw ExamError.invalid("宝典追加来源ID为空、重复或无效。")
+        }
+        for item in sources { try validateSource(item.source, sourcePages: item.sourcePages) }
     }
     static func validateSource(_ source: Source, sourcePages: [Page]?) throws {
         guard handbookText(source.title, 600), handbookText(source.fileName, 300), !source.fileName.contains("/"),
@@ -174,6 +202,7 @@ struct HandbookCardContentVersion: Codable, Equatable {
     let source: HandbookCardPackage.Source
     let chapters: [HandbookCardPackage.Chapter]
     var sourcePages: [HandbookCardPackage.Page]? = nil
+    var additionalSources: [HandbookCardPackage.AdditionalSource]? = nil
 }
 struct HandbookCardRecord: Codable, Equatable {
     var format = "xkl-handbook-card-record-v1"
@@ -216,7 +245,7 @@ struct HandbookRecallEngine {
                 activeDefinitions: active, cardOrder: package.cards.map(\.id),
                 contentVersions: [.init(packageSHA256: package.hash, revision: package.revision,
                     cardIDs: package.cards.map(\.id), activeDefinitions: active, source: package.source,
-                    chapters: package.chapters, sourcePages: package.sourcePages)])
+                    chapters: package.chapters, sourcePages: package.sourcePages, additionalSources: package.additionalSources)])
         }
     }
     static func fresh(_ package: HandbookCardPackage) throws -> Self { try .init(package: package) }
@@ -235,7 +264,7 @@ struct HandbookRecallEngine {
         saved.activeDefinitions = Dictionary(uniqueKeysWithValues: next.cards.map { ($0.id, $0.definitionID) })
         saved.contentVersions.append(.init(packageSHA256: next.hash, revision: next.revision,
             cardIDs: saved.cardOrder, activeDefinitions: saved.activeDefinitions, source: next.source,
-            chapters: next.chapters, sourcePages: next.sourcePages))
+            chapters: next.chapters, sourcePages: next.sourcePages, additionalSources: next.additionalSources))
         // A displayed/back-side or postponed card retains its frozen definition.
         self = try Self(package: next, record: saved)
     }
@@ -350,9 +379,10 @@ struct HandbookRecallEngine {
                 throw ExamError.invalid("宝典内容版本链缺失或发生回退。")
             }
             try HandbookCardPackage.validateSource(version.source, sourcePages: version.sourcePages)
+            try HandbookCardPackage.validateAdditionalSources(version.additionalSources)
             for (id, hash) in version.activeDefinitions {
                 guard let card = record.definitions[hash], card.id == id else { throw ExamError.invalid("宝典旧卡定义缺失。") }
-                try card.validate(pages: Set(version.source.includedPages), chapterIDs: Set(version.chapters.map(\.id)))
+                try card.validate(pages: Set(version.source.includedPages), chapterIDs: Set(version.chapters.map(\.id)), additionalSources: version.additionalSources)
             }
             previousIDs = version.cardIDs; previousRevision = version.revision
         }

@@ -17,10 +17,40 @@ private struct HandbookWordBaseline: Codable {
     let mappingPolicy: String
     let legacyFiles: [String: Data]
 }
-private struct HandbookWordExport: Codable {
+private struct HandbookWordExport: Encodable {
     var format = "xkl-handbook-word-export-v1"
     let files: [String: Data]
     let currentLegacyFiles: [String: Data]
+    let legacyBaselineMappingPolicy = "read-only-index;original-baseline-bytes-and-stored-keys-retained;unique-path-suffix-and-exact-bytes-only"
+    let legacyBaselineIndex: [HandbookWordLegacyArchiveEntry]
+}
+private struct HandbookWordLegacyArchiveEntry: Encodable {
+    let storedKey: String
+    let sha256: String
+    let originalRelativePath: String?
+    let candidateRelativePaths: [String]
+    let resolution: String
+}
+
+/// Foundation can enumerate /var through its /private/var alias. Compare canonical
+/// components, never character offsets from the caller's spelling of the root.
+enum HandbookWordArchivePath {
+    static func isSafeRelativeKey(_ key: String) -> Bool {
+        !key.isEmpty && !key.contains("\\") && !key.contains(":") &&
+        !key.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) &&
+        key.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+    static func relativeKey(for file: URL, within root: URL) throws -> String {
+        guard file.isFileURL, root.isFileURL else { throw ExamError.invalid("宝典归档必须使用本地文件路径。") }
+        let rootParts = root.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let fileParts = file.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard fileParts.count > rootParts.count, Array(fileParts.prefix(rootParts.count)) == rootParts else {
+            throw ExamError.invalid("宝典归档文件超出所属目录。")
+        }
+        let key = fileParts.dropFirst(rootParts.count).joined(separator: "/")
+        guard isSafeRelativeKey(key) else { throw ExamError.invalid("宝典归档相对路径无效。") }
+        return key
+    }
 }
 
 /// Independent English-engine namespace. Existing handbook self-ratings are backed up,
@@ -93,15 +123,26 @@ private struct HandbookWordExport: Codable {
     }
     private func scan(_ root: URL) throws -> [String: Data] {
         guard FileManager.default.fileExists(atPath: root.path) else { return [:] }
-        guard try root.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else { throw ExamError.invalid("旧宝典目录不能是符号链接。") }
+        let rootInfo = try root.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+        guard rootInfo.isSymbolicLink != true, rootInfo.isDirectory == true else { throw ExamError.invalid("旧宝典目录必须是真实目录，不能是符号链接。") }
+        let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath().standardizedFileURL
+        _ = try HandbookWordArchivePath.relativeKey(for: canonicalRoot, within: base)
         var files: [String: Data] = [:]
-        if let iterator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-            for case let url as URL in iterator {
-                let meta = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
-                guard meta.isSymbolicLink != true else { throw ExamError.invalid("宝典档案包含符号链接，停止写入。") }
-                if meta.isRegularFile == true { files[String(url.path.dropFirst(root.path.count + 1))] = try read(url) }
+        var enumerationError: Error?
+        guard let iterator = FileManager.default.enumerator(at: canonicalRoot,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], errorHandler: { _, error in
+                enumerationError = error; return false
+            }) else { throw ExamError.invalid("宝典档案目录无法完整读取。") }
+        for case let url as URL in iterator {
+            let meta = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+            guard meta.isSymbolicLink != true else { throw ExamError.invalid("宝典档案包含符号链接，停止写入。") }
+            let key = try HandbookWordArchivePath.relativeKey(for: url, within: canonicalRoot)
+            if meta.isRegularFile == true {
+                guard files[key] == nil else { throw ExamError.invalid("宝典档案相对路径重复，停止导出。") }
+                files[key] = try read(url)
             }
         }
+        if let enumerationError { throw enumerationError }
         return files
     }
     private func immutable(_ bytes: Data, _ url: URL) throws {
@@ -202,6 +243,26 @@ private struct HandbookWordExport: Codable {
             return meta?.isSymbolicLink != true && meta?.isRegularFile == true && ["xklflashcards", "xklcards", "json"].contains($0.pathExtension.lowercased()) && $0.lastPathComponent.lowercased().contains(subject.rawValue)
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
-    func exportRecords() throws -> Data { try encode(HandbookWordExport(files: scan(directory), currentLegacyFiles: legacyFiles())) }
+    func exportRecords() throws -> Data {
+        let files = try scan(directory), legacy = try legacyFiles()
+        var index: [HandbookWordLegacyArchiveEntry] = []
+        if let raw = files["legacy-baseline.json"] {
+            // Older baselines may contain keys such as omputer/current.json. Keep
+            // the hashed baseline verbatim; this index is evidence, not a rewrite.
+            let baseline = try JSONDecoder().decode(HandbookWordBaseline.self, from: raw)
+            index = baseline.legacyFiles.keys.sorted().map { key in
+                let bytes = baseline.legacyFiles[key]!
+                let safe = HandbookWordArchivePath.isSafeRelativeKey(key)
+                let exact = safe && legacy[key] == bytes
+                let candidates = safe ? legacy.keys.filter { (key == $0 || key.hasSuffix("/" + $0)) && legacy[$0] == bytes }.sorted() : []
+                let resolved = exact ? key : (candidates.count == 1 ? candidates[0] : nil)
+                let resolution = !safe ? "unsafe-stored-key-retained" : exact ? "exact-path-and-bytes" :
+                    candidates.count == 1 ? "unique-suffix-and-bytes" : candidates.isEmpty ? "unresolved-retained" : "ambiguous-retained"
+                return .init(storedKey: key, sha256: StudySHA256.hex(bytes), originalRelativePath: resolved,
+                             candidateRelativePaths: candidates, resolution: resolution)
+            }
+        }
+        return try encode(HandbookWordExport(files: files, currentLegacyFiles: legacy, legacyBaselineIndex: index))
+    }
     private func fail(_ failure: Error) { blocked = true;error = failure.localizedDescription + " 原记录保留。" }
 }

@@ -159,13 +159,12 @@ struct HandbookCardView: View {
         }
         .sheet(isPresented: $showingSources) {
             if let package = store.package, let card = store.engine?.currentCard {
-                HandbookSourcePagesView(pageNumbers: card.sourcePages, package: package, assetRoot: sourceRoot, title: "原文出处")
+                HandbookSourcePagesView(groups: handbookSourceGroups(package, card: card), assetRoot: sourceRoot, title: "原文出处")
             }
         }
         .sheet(isPresented: $showingAllSources) {
             if let package = store.package {
-                HandbookSourcePagesView(pageNumbers: (package.sourcePages ?? []).map(\.number).sorted(),
-                                        package: package, assetRoot: sourceRoot, title: "核对讲义原页")
+                HandbookSourcePagesView(groups: handbookSourceGroups(package), assetRoot: sourceRoot, title: "核对讲义原页")
             }
         }
         .sheet(isPresented: $showingOldQuestions) {
@@ -218,6 +217,11 @@ struct HandbookCardView: View {
         .onChange(of: store.engine?.presentation) { _, _ in reportPreview() }
         .onChange(of: store.engine?.record.attempts.count) { _, _ in reportPreview() }
         .onChange(of: store.blocked) { _, _ in reportPreview() }
+        .onChange(of: preview.sourceSheet) { _, route in
+            showingSources = route == "card"
+            showingAllSources = route == "all"
+        }
+        .onChange(of: showingSources || showingAllSources) { _, _ in reportPreview() }
         #endif
     }
 
@@ -337,11 +341,14 @@ struct HandbookCardView: View {
             ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
                 .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
             }
-            HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power, focused: fullScreenActive)
+            HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
+                             focused: fullScreenActive, primarySourceTitle: engine.package.source.title)
                 .id("handbook-card-face")
             if p.revealed {
                 Button { showingSources = true } label: {
-                    Label(sourceLabel(card), systemImage: "doc.text.magnifyingglass").font(.footnote)
+                    Label { Text(verbatim: sourceLabel(card)).multilineTextAlignment(.leading) }
+                        icon: { Image(systemName: "doc.text.magnifyingglass") }
+                        .font(.footnote).fixedSize(horizontal: false, vertical: true)
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
                     .accessibilityIdentifier("handbook-source")
                 if !fullScreenActive {
@@ -450,7 +457,7 @@ struct HandbookCardView: View {
                         ForEach(package.cards.filter { package.chapter(for: $0)?.id == chapter.id }, id: \.id) { card in
                             NavigationLink {
                                 ScrollView {
-                                    HandbookCardFace(card: card, revealed: true)
+                                    HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title)
                                         .padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
                                     Text("目录预览不产生自评，也不改变复习日期。")
                                         .font(.footnote).foregroundStyle(.secondary).padding()
@@ -467,8 +474,10 @@ struct HandbookCardView: View {
         }
     }
     private func sourceLabel(_ card: HandbookCard) -> String {
-        let pages = card.sourcePages.map(String.init).joined(separator: "、")
-        return "原文 · PDF第\(pages)页"
+        guard let package = store.package else { return "查看原文出处" }
+        return handbookSourceGroups(package, card: card).map { group in
+            group.title + " · PDF第" + group.pageNumbers.map(String.init).joined(separator: "、") + "页"
+        }.joined(separator: "\n")
     }
     private func dueText(_ date: Date) -> String {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "zh_CN")
@@ -490,15 +499,17 @@ struct HandbookCardView: View {
             let p = engine?.presentation
             let mode = !studying ? (engine == nil ? "empty" : "home") : (card == nil || p == nil ? "completed" : (p!.revealed ? "back" : "front"))
             let filesPresent = card.map { current in
-                current.sourcePages.allSatisfy { number in
-                    guard let a = engine?.package.sourcePages?.first(where: { $0.number == number })?.asset else { return false }
-                    return FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent(a.sha256 + (a.mimeType == "image/jpeg" ? ".jpg" : ".png")).path)
+                guard let package = engine?.package else { return false }
+                let groups = handbookSourceGroups(package, card: current)
+                return !groups.isEmpty && groups.allSatisfy { group in
+                    group.pageNumbers.allSatisfy { group.imageExists(page: $0, root: sourceRoot) }
                 }
             } ?? false
             preview.didRender(.init(mode: mode, cardID: card?.id, revealed: p?.revealed ?? false,
                 ratingCount: engine?.record.attempts.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
                 sourceFilesPresent: filesPresent,
-                recallCueMode: subject == .power && mode == "front", fullScreen: fullScreenActive))
+                recallCueMode: subject == .power && mode == "front", fullScreen: fullScreenActive,
+                sourceSheetPresented: showingSources || showingAllSources))
         }
     }
     #endif
@@ -509,6 +520,7 @@ private struct HandbookCardFace: View {
     let revealed: Bool
     var showRecallCues = false
     var focused = false
+    var primarySourceTitle: String? = nil
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -568,7 +580,8 @@ private struct HandbookCardFace: View {
                                         }
                                     }
                                     Text(verbatim: handbookDisplayText(example.answer)).font(.system(size: exampleSize, weight: .medium))
-                                    Text("PDF第\(example.sourcePage)页").font(.caption).foregroundStyle(.secondary)
+                                    Text(verbatim: (primarySourceTitle.map { $0 + " · " } ?? "") + "PDF物理第\(example.sourcePage)页")
+                                        .font(.caption).foregroundStyle(.secondary)
                                     if let note = example.sourceIssueNote, !note.isEmpty {
                                         Text(verbatim: handbookDisplayText(note)).font(.footnote).foregroundStyle(.secondary)
                                     }
@@ -700,38 +713,115 @@ private struct HandbookAnswerMask: View {
     }
 }
 
-private struct HandbookSourcePagesView: View {
+/// Keep each PDF's physical page numbers in its own namespace.
+struct HandbookSourceGroup: Identifiable {
+    let id: String
+    let title: String
     let pageNumbers: [Int]
-    let package: HandbookCardPackage
+    let pages: [HandbookCardPackage.Page]
+
+    func imageExists(page number: Int, root: URL) -> Bool {
+        guard let asset = pages.first(where: { $0.number == number })?.asset else { return false }
+        return FileManager.default.fileExists(atPath: root.appendingPathComponent(
+            asset.sha256 + (asset.mimeType == "image/jpeg" ? ".jpg" : ".png")).path)
+    }
+}
+
+func handbookSourceGroups(_ package: HandbookCardPackage, card: HandbookCard? = nil) -> [HandbookSourceGroup] {
+    var groups: [HandbookSourceGroup] = []
+    let primaryPages = card?.sourcePages ?? package.source.includedPages
+    if !primaryPages.isEmpty {
+        groups.append(.init(id: "primary", title: package.source.title, pageNumbers: primaryPages.sorted(), pages: package.sourcePages ?? []))
+    }
+    for extra in package.additionalSources ?? [] {
+        let numbers = card.map { current in
+            (current.sourceReferences ?? []).filter { $0.sourceID == extra.id }.map(\.page)
+        } ?? extra.source.includedPages
+        if !numbers.isEmpty {
+            groups.append(.init(id: "additional:" + extra.id, title: extra.source.title,
+                                pageNumbers: numbers.sorted(), pages: extra.sourcePages ?? []))
+        }
+    }
+    return groups
+}
+
+private struct HandbookSourcePagesView: View {
+    let groups: [HandbookSourceGroup]
     let assetRoot: URL
     let title: String
+    @State private var selectedID = ""
     @Environment(\.dismiss) private var dismiss
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
+    private var selected: HandbookSourceGroup? { groups.first(where: { $0.id == selectedID }) ?? groups.first }
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
                     Text("按PDF物理页号核对原文。查阅原页不产生自评，也不改变复习日期。")
                         .font(.subheadline).foregroundStyle(.secondary)
-                    if pageNumbers.isEmpty {
+                    if groups.count > 1 {
+                        Menu {
+                            ForEach(groups) { group in
+                                Button { selectedID = group.id } label: {
+                                    if selected?.id == group.id { Label(group.title, systemImage: "checkmark") }
+                                    else { Text(verbatim: group.title) }
+                                }
+                            }
+                        } label: {
+                            HStack(alignment: .top) {
+                                Text(verbatim: selected?.title ?? "选择来源").multilineTextAlignment(.leading)
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.up.chevron.down")
+                            }.font(.headline).padding(14).frame(maxWidth: .infinity)
+                                .background(Color.blue.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                        }.accessibilityIdentifier("handbook-source-picker")
+                    }
+                    if groups.isEmpty {
                         Text("这个卡包暂未附上原页图片；仍可继续背文字卡。")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
-                    ForEach(pageNumbers, id: \.self) { number in
+                    if let selected {
+                    Text(verbatim: selected.title).font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("handbook-source-title")
+                    ForEach(selected.pageNumbers, id: \.self) { number in
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("PDF第\(number)页").font(.headline)
-                            if let page = package.sourcePages?.first(where: { $0.number == number }) {
+                            Text("PDF物理第\(number)页").font(.headline)
+                            if let page = selected.pages.first(where: { $0.number == number }) {
                                 HandbookOriginalPageImage(asset: page.asset, root: assetRoot)
                             } else {
-                                Text("可对照原书此页。没有附图也不影响翻卡和自评。")
-                                    .foregroundStyle(.secondary)
+                                Label("这页原图尚未附上；可继续阅读卡片正文。", systemImage: "photo.badge.exclamationmark")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("handbook-source-image-missing")
                             }
                         }
+                    }
                     }
                 }.padding(20)
             }.navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button("关闭") { dismiss() } }
         }
+        #if DEBUG
+        .onAppear { reportSourcePreview() }
+        .onChange(of: selectedID) { _, _ in reportSourcePreview() }
+        .onChange(of: preview.sourceSelectionID, initial: true) { _, id in
+            if let id, groups.contains(where: { $0.id == id }) { selectedID = id }
+        }
+        #endif
     }
+    #if DEBUG
+    private func reportSourcePreview() {
+        Task { @MainActor in
+            await Task.yield()
+            guard let selected else { return }
+            preview.didRenderSources(.init(sourceID: selected.id, title: selected.title,
+                pageNumbers: selected.pageNumbers,
+                missingPageNumbers: selected.pageNumbers.filter { !selected.imageExists(page: $0, root: assetRoot) }))
+        }
+    }
+    #endif
 }
 
 private struct HandbookOriginalPageImage: View {
@@ -748,11 +838,13 @@ private struct HandbookOriginalPageImage: View {
                 }.frame(height: 470).clipShape(RoundedRectangle(cornerRadius: 12))
                 Text("可横竖滑动查看原页。").font(.caption).foregroundStyle(.secondary)
             } else if let error {
-                Text(error).font(.footnote).foregroundStyle(.secondary)
+                Label(error, systemImage: "photo.badge.exclamationmark").font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("handbook-source-image-missing")
             } else { ProgressView("打开原页…") }
         }.task(id: asset.sha256) {
+            image = nil; error = nil
             do { image = try asset.decodedCGImage(assetRoot: root) }
-            catch { self.error = "这页原图尚未附上；仍可继续使用完整文字卡。" }
+            catch { self.error = "这页原图尚未附上或无法打开；可继续阅读卡片正文。" }
         }
     }
 }

@@ -20,10 +20,20 @@ struct HandbookCardPreviewObservation: Equatable {
     let sourceFilesPresent: Bool
     let recallCueMode: Bool
     let fullScreen: Bool
+    let sourceSheetPresented: Bool
+}
+struct HandbookSourcePreviewObservation: Equatable {
+    let sourceID: String
+    let title: String
+    let pageNumbers: [Int]
+    let missingPageNumbers: [Int]
 }
 struct HandbookCardPreviewState {
     var didRender: (HandbookCardPreviewObservation) -> Void = { _ in }
     var scrollTarget: String? = nil
+    var sourceSheet: String? = nil
+    var sourceSelectionID: String? = nil
+    var didRenderSources: (HandbookSourcePreviewObservation) -> Void = { _ in }
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -47,7 +57,7 @@ extension EnvironmentValues {
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -71,6 +81,8 @@ extension EnvironmentValues {
             let power = selectedSubject == .power
             let sourcePage = power ? 102 : 2
             let archivePage = power ? 117 : 3
+            let supplemented = selected.hasPrefix("multi-source") || selected.hasPrefix("lecture-only")
+            let lectureOnly = selected.hasPrefix("lecture-only")
             var blocks: [[String: Any]]
             if table {
                 blocks = [["title": "四个阶段放在同一张卡", "kind": "table", "columns": ["阶段", "主要部件"],
@@ -106,11 +118,22 @@ extension EnvironmentValues {
                         ["符号乙", "A_1 * B_2"], ["字面标记", "**合成** 与 _示例_"]], "collapsed": false]]
                 }
             }
+            if supplemented {
+                blocks = [
+                    ["title": lectureOnly ? "讲义补充" : "本卡补充", "kind": "text",
+                     "text": "适用条件：只用于合成预览；核对方式：按来源书名和物理页号查阅。", "collapsed": false],
+                    ["title": "补充原例 · 合成讲义甲", "kind": "text",
+                     "text": "原例：甲、乙两项合成记录并列；说明：这是普通文字分块。", "collapsed": false]]
+            }
             func card(_ id: String, second: Bool = false) -> [String: Any] {
                 let title: String
                 let prompt: String
                 let summary: String
-                if second {
+                if supplemented {
+                    title = lectureOnly ? "合成卡：仅讲义出处" : "合成卡：多来源补充"
+                    prompt = "合成记录的条件与核对方式是什么？"
+                    summary = "纯合成内容，不含真实资料。"
+                } else if second {
                     title = "合成卡：另一知识点"
                     prompt = "这个知识点要记住哪件事？"
                     summary = "这是第二个合成知识点，供检查暂缓和自动续背。"
@@ -123,13 +146,15 @@ extension EnvironmentValues {
                     prompt = table ? "四个阶段分别采用什么部件？" : "它在什么时候、什么地方诞生？名称是什么？"
                     summary = table ? "按主要部件划分，四个阶段一起比较。" : "这是合成样式；仅用于检查手机排版;不含真实课程。"
                 }
-                let examples: [[String: Any]] = power ? [["title": "合成原例 _甲_", "prompt": "照写 **字面值** 与 U_*。",
+                let examples: [[String: Any]] = power && !supplemented ? [["title": "合成原例 _甲_", "prompt": "照写 **字面值** 与 U_*。",
                     "steps": ["保留 A_1 中的下划线。", "保留 A_1 * B_2 中的星号。"], "answer": "**字面值**；U_*。",
                     "sourcePage": sourcePage, "sourceIssueNote": "纯合成校注 _原样_，不是讲义结论。"]] : []
                 let notes = [power ? "纯合成校注：**标记** 和 _符号_ 原样显示。不是讲义原文。" : "纯合成测试，不是宝典原文，也不会写入个人学习记录。"]
-                return ["id": id, "sourceGroupIDs": [id + "-group"], "topicNumber": 1, "chapterID": "synthetic-chapter",
+                var result: [String: Any] = ["id": id, "sourceGroupIDs": [id + "-group"], "topicNumber": 1, "chapterID": "synthetic-chapter",
                         "title": title, "prompt": prompt, "answerSummary": summary, "blocks": blocks,
-                        "sourcePages": [sourcePage], "examples": examples, "sourceNotes": notes]
+                        "sourcePages": lectureOnly ? [] : [sourcePage], "examples": examples, "sourceNotes": notes]
+                if supplemented { result["sourceReferences"] = [["sourceID": "synthetic-lecture", "page": 7]] }
+                return result
             }
             var cards = [card("synthetic-handbook-first")]
             if ["resume", "postponed", "completed"].contains(selected) { cards.append(card("synthetic-handbook-second", second: true)) }
@@ -144,6 +169,15 @@ extension EnvironmentValues {
                     "pixelWidth": 120, "pixelHeight": 160, "crop": ["x": 0, "y": 0, "width": 1, "height": 1], "altText": "故意缺失的合成原页，不影响文字卡自评。"]])
             }
             package["sourcePages"] = sourcePages
+            if supplemented {
+                package["additionalSources"] = [["id": "synthetic-lecture", "source": [
+                    "title": "纯合成讲义甲", "fileName": "synthetic-lecture.pdf", "sha256": String(repeating: "d", count: 64),
+                    "pdfPageCount": 9, "includedPages": [7, 9]],
+                    "sourcePages": [["number": 7, "asset": ["sha256": String(repeating: "e", count: 64),
+                        "mimeType": "image/jpeg", "byteCount": 128, "pixelWidth": 120, "pixelHeight": 160,
+                        "crop": ["x": 0, "y": 0, "width": 1, "height": 1],
+                        "altText": "故意缺失的纯合成讲义页，用于验证来源隔离。"]]]]]
+            }
             var prepared = HandbookWordStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
             prepared.importData(try JSONSerialization.data(withJSONObject: package, options: [.sortedKeys]))
             handbookPreviewTrace("fixture-imported", ["blocked": prepared.blocked, "error": prepared.error ?? "", "engine": prepared.engine != nil])
@@ -152,7 +186,7 @@ extension EnvironmentValues {
             prepared.start(now: now)
             handbookPreviewTrace("fixture-started", ["blocked": prepared.blocked, "error": prepared.error ?? "", "card": prepared.engine?.currentCard?.id ?? "nil"])
             precondition(prepared.engine?.presentation != nil, "Synthetic card must start")
-            if ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
+            if supplemented || ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
                 prepared.reveal(token: prepared.engine!.presentation!.id, now: now)
             }
             if selected == "resume" {
@@ -212,6 +246,11 @@ struct HandbookCardPreview: View {
     @State private var selectedTab = 4
     @State private var togglePhase = 0
     @State private var toggleRecord: ProfessionalRecallRecord?
+    @State private var sourceSheet: String?
+    @State private var sourceSelectionID: String?
+    @State private var sourceObservation: HandbookSourcePreviewObservation?
+    @State private var sourcePhase = 0
+    @State private var sourceRecord: ProfessionalRecallRecord?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -237,10 +276,14 @@ struct HandbookCardPreview: View {
             .environment(\.handbookCardPreview, .init(didRender: {
                 observation = $0
                 handbookPreviewTrace("observed", ["mode": $0.mode, "fullScreen": $0.fullScreen, "card": $0.cardID ?? "nil", "ratings": $0.ratingCount])
+            }, sourceSheet: sourceSheet, sourceSelectionID: sourceSelectionID, didRenderSources: {
+                sourceObservation = $0
             }))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
+            .onChange(of: sourceObservation) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
+            .task { await runSourceNavigation() }
     }
     @MainActor private func waitForFocus(_ value: Bool) async {
         for _ in 0..<200 {
@@ -265,6 +308,39 @@ struct HandbookCardPreview: View {
         togglePhase = 3
         reportIfReady()
     }
+    @MainActor private func waitForSource(_ id: String?, pages: [Int] = []) async {
+        for _ in 0..<200 {
+            if let id {
+                if observation?.sourceSheetPresented == true, sourceObservation?.sourceID == id,
+                   sourceObservation?.pageNumbers == pages { return }
+            } else if observation?.sourceSheetPresented == false { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        preconditionFailure("Synthetic source navigation did not render")
+    }
+    @MainActor private func runSourceNavigation() async {
+        guard fixture.selectedCase.hasSuffix("-pages") else { return }
+        await waitForFocus(true)
+        sourceRecord = fixture.store.engine?.record
+        sourceSheet = "card"
+        let lectureOnly = fixture.selectedCase.hasPrefix("lecture-only")
+        await waitForSource(lectureOnly ? "additional:synthetic-lecture" : "primary",
+                            pages: lectureOnly ? [7] : [fixture.subject == .power ? 102 : 2])
+        sourceSelectionID = "additional:synthetic-lecture"
+        await waitForSource("additional:synthetic-lecture", pages: [7])
+        precondition(fixture.store.engine?.record == sourceRecord, "Switching source must preserve the exact study record")
+        sourceSheet = nil
+        await waitForSource(nil)
+        precondition(fixture.store.engine?.record == sourceRecord, "Closing sources must preserve card, face, queue and grades")
+        // Allow the sheet dismissal transition to finish before opening the complete source catalog.
+        try? await Task.sleep(for: .milliseconds(600))
+        sourceObservation = nil
+        sourceSheet = "all"
+        await waitForSource("additional:synthetic-lecture", pages: [7, 9])
+        precondition(fixture.store.engine?.record == sourceRecord, "Opening all sources must preserve the exact study record")
+        sourcePhase = 3
+        reportIfReady()
+    }
     @MainActor private func criticalReady() -> Bool {
         guard selectedTab == 4, selectedSubject == fixture.subject, recalling, !practicing,
               !fixture.store.blocked, fixture.store.error == nil, let engine = fixture.store.engine, let observed = observation,
@@ -276,7 +352,10 @@ struct HandbookCardPreview: View {
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
         case "front", "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode == (fixture.subject == .power)
-        case "back", "table", "long", "resume", "normal-back": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
+        case "back", "table", "long", "resume", "normal-back", "multi-source", "lecture-only": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
+        case "multi-source-pages", "lecture-only-pages": return sourcePhase == 3 && engine.record == sourceRecord &&
+            observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.sourceSheetPresented &&
+            sourceObservation?.sourceID == "additional:synthetic-lecture" && sourceObservation?.missingPageNumbers == [7, 9] && engine.record.attempts.isEmpty
         case "focus-toggle": return togglePhase == 3 && engine.record == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
         case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.attempts.isEmpty
         case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.attempts.count == 2
@@ -297,17 +376,33 @@ struct HandbookCardPreview: View {
                 "cardID": observation!.cardID.map { $0 as Any } ?? NSNull(),
                 "presentationID": fixture.expectedToken.map { $0.uuidString.lowercased() as Any } ?? NSNull(),
                 "sourceFilesPresent": observation!.sourceFilesPresent,
+                "sourceSheetPresented": observation!.sourceSheetPresented,
+                "sourceNavigationPreservedRecord": fixture.selectedCase.hasSuffix("-pages") && sourcePhase == 3 && fixture.store.engine?.record == sourceRecord,
+                "selectedSourceID": sourceObservation.map { $0.sourceID as Any } ?? NSNull(),
+                "selectedSourceTitle": sourceObservation.map { $0.title as Any } ?? NSNull(),
+                "selectedSourcePageNumbers": sourceObservation?.pageNumbers ?? [],
+                "selectedSourceMissingPageNumbers": sourceObservation?.missingPageNumbers ?? [],
                 "recallCueMode": observation!.recallCueMode,
                 "fullScreen": observation!.fullScreen,
                 "rootTabShellFixture": true,
                 "focusTogglePreservedRecord": fixture.selectedCase == "focus-toggle" && togglePhase == 3 && fixture.store.engine?.record == toggleRecord,
                 "semicolonFormatting": handbookDisplayText("甲；乙;丙") == "甲；\n乙;\n丙",
                 "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
-                "literalSymbolsFixture": fixture.subject == .power,
+                "literalSymbolsFixture": fixture.subject == .power && !fixture.selectedCase.hasPrefix("multi-source") && !fixture.selectedCase.hasPrefix("lecture-only"),
                 "sourceBlankCellsPreserved": fixture.store.package?.cards.contains { card in
                     card.blocks.contains { $0.kind == "table" && $0.columns?.allSatisfy(\.isEmpty) == true && $0.rows?.contains(where: { $0.contains("") }) == true }
                 } == true,
                 "cardSourcePageNumbers": fixture.store.engine?.currentCard?.sourcePages ?? [],
+                "cardAdditionalSourceReferences": (fixture.store.engine?.currentCard?.sourceReferences ?? []).map {
+                    ["sourceID": $0.sourceID, "page": $0.page] as [String: Any]
+                },
+                "cardSourceTitles": fixture.store.engine?.currentCard.map { card in
+                    handbookSourceGroups(fixture.store.package!, card: card).map(\.title)
+                } ?? [],
+                "allSourceTitles": fixture.store.package.map { handbookSourceGroups($0).map(\.title) } ?? [],
+                "supplementalExampleUsesOrdinaryBlock": fixture.store.engine?.currentCard?.blocks.contains {
+                    $0.title == "补充原例 · 合成讲义甲" && $0.kind == "text"
+                } == true,
                 "allSourcePageNumbers": (fixture.store.package?.sourcePages ?? []).map(\.number).sorted(),
                 "archivalSourcePageNumbers": (fixture.store.package?.sourcePages ?? []).map(\.number).filter { number in
                     fixture.store.package?.cards.allSatisfy { !$0.sourcePages.contains(number) } == true
