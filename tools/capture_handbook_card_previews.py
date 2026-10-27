@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/handbook-card-previews"
 BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
-CASES = ("front", "back", "table", "long", "resume", "postponed", "completed", "missing-source")
+CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source")
 CAPTURES = tuple((subject, case) for subject in SUBJECTS for case in CASES)
 
 
@@ -50,16 +50,17 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
-    mode = "completed" if case == "completed" else ("front" if case in ("front", "postponed") else "back")
+    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     expected_state = {
         "route": "ProfessionalCoursesView", "selectedSubject": subject,
+        "recallCueMode": subject == "power" and mode == "front",
         "mode": mode, "revealed": mode == "back", "ratingEnabled": mode == "back",
         "selfRatings": 2 if case == "completed" else 0,
         "cardID": None if case == "completed" else ("synthetic-handbook-second" if case == "postponed" else "synthetic-handbook-first"),
         "sourceFilesPresent": False, "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
         "literalSymbolsFixture": subject == "power", "cardSourcePageNumbers": [] if case == "completed" else [page],
-        "sourceBlankCellsPreserved": subject == "power" and case == "table",
+        "sourceBlankCellsPreserved": subject == "power" and case in ("table", "table-front"),
         "allSourcePageNumbers": [page, archive] if case == "missing-source" else [archive],
         "archivalSourcePageNumbers": [archive],
     }

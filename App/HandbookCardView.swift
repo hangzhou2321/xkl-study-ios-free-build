@@ -284,7 +284,7 @@ struct HandbookCardView: View {
             }.foregroundStyle(.secondary)
             ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
                 .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)张")
-            HandbookCardFace(card: card, revealed: p.revealed)
+            HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power)
                 .id("handbook-card-face")
             if p.revealed {
                 Button { showingSources = true } label: {
@@ -296,7 +296,7 @@ struct HandbookCardView: View {
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "brain.head.profile")
-                    Text("先在心里回答，再翻开核对。")
+                    Text(subject == .power ? "看提示回忆遮住的内容，再翻开核对。" : "先在心里回答，再翻开核对。")
                 }.font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 4)
             }
         }.padding(.top, 10)
@@ -345,7 +345,7 @@ struct HandbookCardView: View {
                                 .padding(.vertical, 6)
                         }.buttonStyle(.borderedProminent).accessibilityIdentifier("handbook-remembered")
                     }
-                    Text("按现在能否回忆来选，下一张会自动出现。")
+                    Text(subject == .power ? "按整张卡遮住的内容自评，下一张会自动出现。" : "按现在能否回忆来选，下一张会自动出现。")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     Button { store.reveal(token: p.id) } label: {
@@ -418,7 +418,8 @@ struct HandbookCardView: View {
             } ?? false
             preview.didRender(.init(mode: mode, cardID: card?.id, revealed: p?.revealed ?? false,
                 ratingCount: engine?.record.ratings.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
-                sourceFilesPresent: filesPresent))
+                sourceFilesPresent: filesPresent,
+                recallCueMode: subject == .power && mode == "front"))
         }
     }
     #endif
@@ -427,6 +428,7 @@ struct HandbookCardView: View {
 private struct HandbookCardFace: View {
     let card: HandbookCard
     let revealed: Bool
+    var showRecallCues = false
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -443,7 +445,16 @@ private struct HandbookCardFace: View {
             }
             Text(verbatim: card.title).font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
-            if !revealed {
+            if !revealed && showRecallCues {
+                Text("冒号前作提示，后面遮住；翻一次核对整张。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if card.answerSummary != "讲义原文" {
+                    HandbookCueTextView(source: card.answerSummary, fontSize: summarySize)
+                }
+                ForEach(Array(card.blocks.enumerated()), id: \.offset) { _, block in
+                    if !block.collapsed { HandbookCardBlockView(block: block, masked: true) }
+                }
+            } else if !revealed {
                 Text(verbatim: card.prompt).font(.system(size: promptSize)).lineSpacing(8)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("handbook-card-prompt")
@@ -500,6 +511,7 @@ private struct HandbookCardFace: View {
 
 private struct HandbookCardBlockView: View {
     let block: HandbookCard.Block
+    var masked = false
     @Environment(\.dynamicTypeSize) private var dynamicType
     @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 19.0
     @ScaledMetric(relativeTo: .body) private var keySize: CGFloat = 17.0
@@ -513,11 +525,13 @@ private struct HandbookCardBlockView: View {
                     HStack(alignment: .top, spacing: 11) {
                         Text(block.kind == "steps" ? String(index + 1) + "." : "•")
                             .font(.system(size: keySize, weight: .semibold)).foregroundStyle(.blue).frame(minWidth: 15, alignment: .leading)
-                        Text(verbatim: item).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+                        if masked { HandbookCueTextView(source: item, fontSize: bodySize) }
+                        else { Text(verbatim: item).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true) }
                     }
                 }
             } else if let text = block.text {
-                Text(verbatim: text).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+                if masked { HandbookCueTextView(source: text, fontSize: bodySize) }
+                else { Text(verbatim: text).font(.system(size: bodySize)).lineSpacing(6).fixedSize(horizontal: false, vertical: true) }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -561,10 +575,41 @@ private struct HandbookCardBlockView: View {
             }
         }
     }
-    private func cellText(_ cell: String, column: Int) -> some View {
-        Text(verbatim: cell).font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
-            .foregroundStyle(column == 0 ? Color.blue : Color.primary)
-            .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder private func cellText(_ cell: String, column: Int) -> some View {
+        if masked, HandbookRecallCue.cell(cell, column: column) == .hidden {
+            HandbookAnswerMask()
+        } else {
+            Text(verbatim: cell).font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
+                .foregroundStyle(column == 0 ? Color.blue : Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct HandbookCueTextView: View {
+    let source: String
+    let fontSize: CGFloat
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(HandbookRecallCue.lines(source).enumerated()), id: \.offset) { _, line in
+                VStack(alignment: .leading, spacing: 6) {
+                    if !line.prefix.isEmpty {
+                        Text(verbatim: line.prefix).font(.system(size: fontSize)).lineSpacing(6)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if line.hidesAnswer { HandbookAnswerMask() }
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct HandbookAnswerMask: View {
+    var body: some View {
+        Text("已遮住").font(.caption).foregroundStyle(.secondary)
+            .frame(minWidth: 48, maxWidth: 104, minHeight: 30)
+            .background(Color.primary.opacity(0.065), in: RoundedRectangle(cornerRadius: 7))
+            .accessibilityLabel("答案已遮住，使用底部翻答案统一查看")
     }
 }
 

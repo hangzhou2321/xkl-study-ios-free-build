@@ -10,6 +10,7 @@ struct HandbookCardPreviewObservation: Equatable {
     let ratingCount: Int
     let ratingEnabled: Bool
     let sourceFilesPresent: Bool
+    let recallCueMode: Bool
 }
 struct HandbookCardPreviewState {
     var didRender: (HandbookCardPreviewObservation) -> Void = { _ in }
@@ -37,7 +38,7 @@ extension EnvironmentValues {
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "long", "resume", "postponed", "completed", "missing-source"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source"]
 
     init() {
         let args = ProcessInfo.processInfo.arguments
@@ -55,7 +56,7 @@ extension EnvironmentValues {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-handbook-" + rawSubject + "-" + UUID().uuidString, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            let table = selected == "table"
+            let table = ["table", "table-front"].contains(selected)
             let long = selected == "long"
             let power = selectedSubject == .power
             let sourcePage = power ? 102 : 2
@@ -89,7 +90,9 @@ extension EnvironmentValues {
                         "长文字自然换行，原例和校注仍按需展开。"], "collapsed": false],
                               ["title": "合成补充 _甲_", "kind": "text", "text": "**原样保留**：A_1 * B_2。纯合成测试。", "collapsed": true]]
                 } else {
-                    blocks = [["title": "纯合成符号记录", "kind": "keyValues", "rows": [["符号甲", "U_*"],
+                    blocks = [["title": "纯合成提示 · 不是讲义", "kind": "bullets", "items": [
+                        "（1）项目甲：U_*；项目乙：A_1 * B_2。", "项目丙: **合成** 与 _示例_。"], "collapsed": false],
+                        ["title": "纯合成符号记录", "kind": "keyValues", "rows": [["符号甲", "U_*"],
                         ["符号乙", "A_1 * B_2"], ["字面标记", "**合成** 与 _示例_"]], "collapsed": false]]
                 }
             }
@@ -213,7 +216,7 @@ struct HandbookCardPreview: View {
               engine.presentation?.id == fixture.expectedToken,
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }) else { return false }
         switch fixture.selectedCase {
-        case "front", "postponed": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.ratings.isEmpty
+        case "front", "table-front", "postponed": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.ratings.isEmpty && observed.recallCueMode == (fixture.subject == .power)
         case "back", "table", "long", "resume": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.ratings.isEmpty
         case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.ratings.isEmpty
         case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.ratings.count == 2
@@ -234,6 +237,7 @@ struct HandbookCardPreview: View {
                 "cardID": observation!.cardID.map { $0 as Any } ?? NSNull(),
                 "presentationID": fixture.expectedToken.map { $0.uuidString.lowercased() as Any } ?? NSNull(),
                 "sourceFilesPresent": observation!.sourceFilesPresent,
+                "recallCueMode": observation!.recallCueMode,
                 "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
                 "literalSymbolsFixture": fixture.subject == .power,
                 "sourceBlankCellsPreserved": fixture.store.package?.cards.contains { card in
