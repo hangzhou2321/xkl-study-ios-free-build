@@ -2,7 +2,7 @@ name: Synthetic guide disclosure UI test
 on:
   workflow_dispatch:
   push:
-    branches: [ci-guide-ui-test-579055e]
+    branches: [ci-guide-ui-fallback-20261028]
 permissions:
   contents: read
 jobs:
@@ -27,6 +27,8 @@ jobs:
           name: synthetic-guide-disclosure-ui-test
           path: |
             build/guide-ui-test/summary.json
+            build/guide-ui-test/generated-test-source.swift
+            build/guide-ui-test/synthetic-crash-*.ips
             build/guide-ui-test/xcodebuild.log
             build/guide-ui-test/attachment-export.log
             build/guide-ui-test/attachments/

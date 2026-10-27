@@ -16,9 +16,11 @@ final class GuideDisclosureUITests: XCTestCase {
         let app = XCUIApplication(bundleIdentifier: "local.xkl.study")
         app.launchArguments = ["--handbook-card-preview", "--subject=\(subject)", "--case=front",
                                "--capture-id=\(UUID().uuidString.lowercased())"]
-        if let fallback = ProcessInfo.processInfo.environment["GUIDE_TEST_DYLD_FALLBACK"], !fallback.isEmpty {
-            app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = fallback
-        }
+        // Populated in the isolated CI checkout after checking the selected simulator runtime.
+        // Host environment variables are not necessarily inherited by the test runner.
+        let fallback = "__GUIDE_TEST_FALLBACK_PLACEHOLDER__"
+        XCTAssertFalse(fallback.hasPrefix("__GUIDE_TEST_"), "Simulator fallback was not bound")
+        if !fallback.isEmpty { app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"] = fallback }
         app.launch()
         let reveal = app.buttons["handbook-reveal"]
         XCTAssertTrue(reveal.waitForExistence(timeout: 45), "Synthetic front should start")

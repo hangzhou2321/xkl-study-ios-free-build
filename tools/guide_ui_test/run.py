@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import threading
@@ -58,9 +59,21 @@ def main():
     env, workaround = simulator_webkit_workaround(info)
     test_env = dict(os.environ)
     test_env['GUIDE_TEST_DYLD_FALLBACK'] = env.get('SIMCTL_CHILD_DYLD_FALLBACK_LIBRARY_PATH', '')
+    # Xcode does not reliably forward host variables into the XCUITest runner.
+    # Bind the verified simulator-runtime path directly into the synthetic test
+    # source in this disposable CI checkout; production App sources are untouched.
+    test_source = ROOT/'tools'/'guide_ui_test'/'GuideDisclosureUITests.swift'
+    template = test_source.read_text(encoding='utf8')
+    marker = '"__GUIDE_TEST_FALLBACK_PLACEHOLDER__"'
+    if template.count(marker) != 1:
+        raise RuntimeError('Synthetic test fallback placeholder missing or ambiguous')
+    bound = template.replace(marker, json.dumps(test_env['GUIDE_TEST_DYLD_FALLBACK']))
+    test_source.write_text(bound, encoding='utf8')
+    (OUT/'generated-test-source.swift').write_text(bound, encoding='utf8')
     subprocess.run(['python3', 'tools/guide_ui_test/generate_project.py', '--without-personal-resources'], check=True, env=test_env)
     device = sim('create', 'GuideUITest-' + uuid.uuid4().hex[:12], kind, runtime).strip()
     state, stop = {}, threading.Event()
+    started_at = time.time()
     observer = None
     result_path = OUT/'GuideDisclosure.xcresult'
     report = {'status':'INCOMPLETE','device':name,'runtime':info.get('version'),'syntheticOnly':True,'physicalDeviceTested':False,'webkitWorkaround':workaround}
@@ -71,11 +84,17 @@ def main():
         cmd = ['xcodebuild','test','-project','XKLStudy.xcodeproj','-scheme','XKLStudy','-configuration','Debug',
                '-destination','platform=iOS Simulator,id='+device,'-derivedDataPath',str(OUT/'DerivedData'),
                '-resultBundlePath',str(result_path),'-parallel-testing-enabled','NO','-only-testing:GuideDisclosureUITests',
+               '-test-timeouts-enabled','YES','-default-test-execution-time-allowance','120',
+               '-maximum-test-execution-time-allowance','180',
                'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=',
                'ARCHS='+platform.machine(),'ONLY_ACTIVE_ARCH=YES']
         with (OUT/'xcodebuild.log').open('w',encoding='utf8') as stream:
-            process = subprocess.run(cmd,stdout=stream,stderr=subprocess.STDOUT,text=True,env=test_env)
-        report['xcodebuildExitCode'] = process.returncode
+            try:
+                process = subprocess.run(cmd,stdout=stream,stderr=subprocess.STDOUT,text=True,env=test_env,timeout=1200)
+                report['xcodebuildExitCode'] = process.returncode
+            except subprocess.TimeoutExpired:
+                report['xcodebuildExitCode'] = 124
+                report['timeout'] = 'xcodebuild exceeded 1200 seconds; test outcome remains unverified'
         if result_path.exists():
             attachments = OUT/'attachments';attachments.mkdir(exist_ok=True)
             exported = subprocess.run(['xcrun','xcresulttool','export','attachments','--path',str(result_path),'--output-path',str(attachments)],capture_output=True,text=True)
@@ -86,6 +105,17 @@ def main():
         if observer is not None: observer.join(timeout=10)
         report['recordObservation'] = state
         report['finishedAtUTC'] = time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+        # The runner is ephemeral and only our synthetic app is built here. Retain
+        # fresh named app crashes when available; no other process reports are read.
+        diagnostic_dir = Path.home()/'Library'/'Logs'/'DiagnosticReports'
+        crashes = []
+        if diagnostic_dir.is_dir():
+            for p in diagnostic_dir.glob('XKLStudy-*.ips'):
+                if p.is_file() and not p.is_symlink() and p.stat().st_mtime >= started_at and p.stat().st_size <= 5*1024*1024:
+                    dest = OUT/('synthetic-crash-'+p.name)
+                    shutil.copy2(p,dest)
+                    crashes.append({'name':dest.name,'sha256':digest(dest)})
+        report['freshSyntheticAppCrashReports'] = crashes
         try: sim('shutdown',device)
         except subprocess.CalledProcessError: pass
         sim('delete',device)
