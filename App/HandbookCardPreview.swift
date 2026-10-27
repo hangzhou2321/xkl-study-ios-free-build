@@ -3,6 +3,14 @@ import Foundation
 import SwiftUI
 import StudyCore
 
+private func handbookPreviewTrace(_ stage: String, _ extra: [String: Any] = [:]) {
+    guard let raw = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--capture-id=") }),
+          let id = UUID(uuidString: String(raw.dropFirst("--capture-id=".count))) else { return }
+    let value = extra.merging(["stage": stage], uniquingKeysWith: { _, new in new })
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("handbook-card-preview-debug-" + id.uuidString.lowercased() + ".json")
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) { try? data.write(to: url, options: .atomic) }
+}
+
 struct HandbookCardPreviewObservation: Equatable {
     let mode: String
     let cardID: String?
@@ -42,6 +50,7 @@ extension EnvironmentValues {
     static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle"]
 
     init() {
+        handbookPreviewTrace("fixture-begin")
         let args = ProcessInfo.processInfo.arguments
         func argument(_ name: String) -> String? {
             args.first(where: { $0.hasPrefix(name + "=") }).map { String($0.dropFirst(name.count + 1)) }
@@ -137,9 +146,11 @@ extension EnvironmentValues {
             package["sourcePages"] = sourcePages
             var prepared = HandbookWordStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
             prepared.importData(try JSONSerialization.data(withJSONObject: package, options: [.sortedKeys]))
+            handbookPreviewTrace("fixture-imported", ["blocked": prepared.blocked, "error": prepared.error ?? "", "engine": prepared.engine != nil])
             precondition(!prepared.blocked && prepared.error == nil && prepared.engine != nil, "Synthetic card package must import")
             let now = Date()
             prepared.start(now: now)
+            handbookPreviewTrace("fixture-started", ["blocked": prepared.blocked, "error": prepared.error ?? "", "card": prepared.engine?.currentCard?.id ?? "nil"])
             precondition(prepared.engine?.presentation != nil, "Synthetic card must start")
             if ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
                 prepared.reveal(token: prepared.engine!.presentation!.id, now: now)
@@ -185,6 +196,7 @@ extension EnvironmentValues {
             expectedCardID = prepared.engine?.currentCard?.id
             expectedToken = prepared.engine?.presentation?.id
             expectedRatings = prepared.engine?.record.attempts.count ?? 0
+            handbookPreviewTrace("fixture-ready", ["card": expectedCardID ?? "nil", "ratings": expectedRatings])
         } catch { fatalError("Synthetic handbook fixture failed: \(error)") }
     }
 }
@@ -222,7 +234,11 @@ struct HandbookCardPreview: View {
                 }
             }
             .statusBarHidden(fullScreenEnabled && recalling)
-            .environment(\.handbookCardPreview, .init(didRender: { observation = $0 }))
+            .environment(\.handbookCardPreview, .init(didRender: {
+                observation = $0
+                handbookPreviewTrace("observed", ["mode": $0.mode, "fullScreen": $0.fullScreen, "card": $0.cardID ?? "nil", "ratings": $0.ratingCount])
+            }))
+            .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
     }

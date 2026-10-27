@@ -121,6 +121,7 @@ def main():
     try:
         sim("boot", device)
         sim("bootstatus", device, "-b")
+        run("open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", device)
         sim("install", device, str(app))
         container = Path(sim("get_app_container", device, BUNDLE, "data").strip()).resolve()
         for subject, case in captures:
@@ -140,6 +141,7 @@ def main():
                     stdout=stream, stderr=subprocess.STDOUT,
                     env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES", **launch_environment})
                 try:
+                    retries = 0
                     deadline = time.monotonic() + timeout
                     while True:
                         ready = read_receipt(container, receipt, capture_id, subject, case, launched_at)
@@ -148,6 +150,35 @@ def main():
                         if process.poll() not in (None, 0):
                             raise RuntimeError(f"Native launch exited before readiness, code={process.poll()}")
                         if time.monotonic() > deadline:
+                            debug = container / "tmp" / f"handbook-card-preview-debug-{capture_id}.json"
+                            if debug.exists() and debug.stat().st_size < 65536:
+                                trace = debug.read_text(encoding="utf8")
+                                (OUT / f"failure-{subject}-{case}-{retries}.json").write_text(trace, encoding="utf8")
+                                print("Native diagnostic:", trace, flush=True)
+                            try:
+                                sim("io", device, "screenshot", "--type=png", str(OUT / f"failure-{subject}-{case}-{retries}.png"))
+                            except Exception as error:
+                                print("Failure screenshot unavailable:", type(error).__name__, flush=True)
+                            if retries == 0:
+                                retries += 1
+                                try:
+                                    sim("terminate", device, BUNDLE)
+                                except Exception:
+                                    pass
+                                if process.poll() is None:
+                                    process.terminate()
+                                    process.wait(timeout=10)
+                                capture_id = str(uuid.uuid4())
+                                receipt = container / "tmp" / f"handbook-card-preview-ready-{capture_id}.json"
+                                assert not receipt.exists()
+                                launched_at = time.time()
+                                process = subprocess.Popen(
+                                    ["xcrun", "simctl", "launch", "--console", "--terminate-running-process", device, BUNDLE,
+                                     "--handbook-card-preview", f"--subject={subject}", f"--case={case}", f"--capture-id={capture_id}"],
+                                    stdout=stream, stderr=subprocess.STDOUT,
+                                    env={**os.environ, "SIMCTL_CHILD_NSUnbufferedIO": "YES", **launch_environment})
+                                deadline = time.monotonic() + timeout
+                                continue
                             raise RuntimeError(f"Native fixture readiness timed out: {subject}/{case}; app state unknown")
                         time.sleep(0.2)
                     ready_elapsed = time.monotonic() - started
