@@ -63,6 +63,12 @@ struct HandbookCard: Codable, Equatable, Identifiable {
                 guard let items = block.items, (1...24).contains(items.count), items.allSatisfy({ handbookText($0, 1_600) }) else {
                     throw ExamError.invalid("宝典分行答案不完整。")
                 }
+            case "diagram":
+                guard block.collapsed, let mode = block.text, let items = block.items,
+                      ((mode == "branch" && items.count == 3) || (mode == "flow" && (2...6).contains(items.count))),
+                      items.allSatisfy({ handbookText($0, 100) }), block.columns == nil, block.rows == nil else {
+                    throw ExamError.invalid("宝典关系图须折叠，且模式和节点完整。")
+                }
             case "keyValues":
                 guard let rows = block.rows, (1...30).contains(rows.count), rows.allSatisfy({ $0.count == 2 && $0.allSatisfy { $0.isEmpty || handbookText($0, 1_600) } }),
                       rows.joined().contains(where: { !$0.isEmpty }) else {

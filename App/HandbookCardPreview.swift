@@ -34,6 +34,8 @@ struct HandbookCardPreviewState {
     var sourceSheet: String? = nil
     var sourceSelectionID: String? = nil
     var didRenderSources: (HandbookSourcePreviewObservation) -> Void = { _ in }
+    var diagramExpanded: Bool? = nil
+    var didRenderDiagram: (Bool) -> Void = { _ in }
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -57,7 +59,7 @@ extension EnvironmentValues {
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -125,6 +127,13 @@ extension EnvironmentValues {
                     ["title": "补充原例 · 合成讲义甲", "kind": "text",
                      "text": "原例：甲、乙两项合成记录并列；说明：这是普通文字分块。", "collapsed": false]]
             }
+            if selected == "diagram-branch" {
+                blocks = [["title": "展开合成分支图", "kind": "diagram", "text": "branch",
+                           "items": ["合成根节点", "合成分支甲", "合成分支乙"], "collapsed": true]]
+            } else if selected == "diagram-flow" {
+                blocks = [["title": "展开合成流程图", "kind": "diagram", "text": "flow",
+                           "items": ["合成起点", "合成步骤甲", "合成步骤乙", "合成终点"], "collapsed": true]]
+            }
             func card(_ id: String, second: Bool = false) -> [String: Any] {
                 let title: String
                 let prompt: String
@@ -186,7 +195,7 @@ extension EnvironmentValues {
             prepared.start(now: now)
             handbookPreviewTrace("fixture-started", ["blocked": prepared.blocked, "error": prepared.error ?? "", "card": prepared.engine?.currentCard?.id ?? "nil"])
             precondition(prepared.engine?.presentation != nil, "Synthetic card must start")
-            if supplemented || ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
+            if supplemented || selected.hasPrefix("diagram-") || ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
                 prepared.reveal(token: prepared.engine!.presentation!.id, now: now)
             }
             if selected == "resume" {
@@ -251,6 +260,11 @@ struct HandbookCardPreview: View {
     @State private var sourceObservation: HandbookSourcePreviewObservation?
     @State private var sourcePhase = 0
     @State private var sourceRecord: ProfessionalRecallRecord?
+    @State private var diagramRequested: Bool?
+    @State private var diagramObserved = false
+    @State private var diagramScrollTarget: String?
+    @State private var diagramPhase = 0
+    @State private var diagramRecord: ProfessionalRecallRecord?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -276,14 +290,15 @@ struct HandbookCardPreview: View {
             .environment(\.handbookCardPreview, .init(didRender: {
                 observation = $0
                 handbookPreviewTrace("observed", ["mode": $0.mode, "fullScreen": $0.fullScreen, "card": $0.cardID ?? "nil", "ratings": $0.ratingCount])
-            }, sourceSheet: sourceSheet, sourceSelectionID: sourceSelectionID, didRenderSources: {
+            }, scrollTarget: diagramScrollTarget, sourceSheet: sourceSheet, sourceSelectionID: sourceSelectionID, didRenderSources: {
                 sourceObservation = $0
-            }))
+            }, diagramExpanded: diagramRequested, didRenderDiagram: { diagramObserved = $0 }))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
             .onChange(of: sourceObservation) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
+            .task { await runDiagramToggle() }
     }
     @MainActor private func waitForFocus(_ value: Bool) async {
         for _ in 0..<200 {
@@ -341,6 +356,29 @@ struct HandbookCardPreview: View {
         sourcePhase = 3
         reportIfReady()
     }
+    @MainActor private func waitForDiagram(_ expanded: Bool) async {
+        for _ in 0..<200 {
+            if diagramObserved == expanded { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        preconditionFailure("Synthetic diagram transition did not render")
+    }
+    @MainActor private func runDiagramToggle() async {
+        guard fixture.selectedCase.hasPrefix("diagram-") else { return }
+        await waitForFocus(true)
+        diagramRecord = fixture.store.engine?.record
+        diagramRequested = true; await waitForDiagram(true)
+        precondition(fixture.store.engine?.record == diagramRecord, "Opening diagram must preserve the study record")
+        diagramRequested = false; await waitForDiagram(false)
+        precondition(fixture.store.engine?.record == diagramRecord, "Closing diagram must preserve the study record")
+        diagramRequested = true; await waitForDiagram(true)
+        precondition(fixture.store.engine?.record == diagramRecord, "Reopening diagram must preserve the study record")
+        diagramScrollTarget = "handbook-relationship-diagram"
+        try? await Task.sleep(for: .milliseconds(350))
+        precondition(fixture.store.engine?.record == diagramRecord, "Scrolling diagram must preserve the study record")
+        diagramPhase = 3
+        reportIfReady()
+    }
     @MainActor private func criticalReady() -> Bool {
         guard selectedTab == 4, selectedSubject == fixture.subject, recalling, !practicing,
               !fixture.store.blocked, fixture.store.error == nil, let engine = fixture.store.engine, let observed = observation,
@@ -356,6 +394,8 @@ struct HandbookCardPreview: View {
         case "multi-source-pages", "lecture-only-pages": return sourcePhase == 3 && engine.record == sourceRecord &&
             observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.sourceSheetPresented &&
             sourceObservation?.sourceID == "additional:synthetic-lecture" && sourceObservation?.missingPageNumbers == [7, 9] && engine.record.attempts.isEmpty
+        case "diagram-branch", "diagram-flow": return diagramPhase == 3 && diagramObserved && engine.record == diagramRecord &&
+            observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
         case "focus-toggle": return togglePhase == 3 && engine.record == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
         case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.attempts.isEmpty
         case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.attempts.count == 2
@@ -369,6 +409,7 @@ struct HandbookCardPreview: View {
             guard !reported, criticalReady(), let raw = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--capture-id=") }),
                   let capture = UUID(uuidString: String(raw.dropFirst("--capture-id=".count))) else { return }
             let id = capture.uuidString.lowercased()
+            let diagramMode = fixture.store.engine?.currentCard?.blocks.first(where: { $0.kind == "diagram" })?.text
             let payload: [String: Any] = ["suite": "handbook-cards", "captureID": id, "subject": fixture.subject.rawValue, "case": fixture.selectedCase,
                 "ready": true, "syntheticOnly": true, "route": "ProfessionalCoursesView", "selectedSubject": selectedSubject.rawValue,
                 "mode": observation!.mode, "revealed": observation!.revealed,
@@ -385,6 +426,9 @@ struct HandbookCardPreview: View {
                 "recallCueMode": observation!.recallCueMode,
                 "fullScreen": observation!.fullScreen,
                 "rootTabShellFixture": true,
+                "diagramExpanded": fixture.selectedCase.hasPrefix("diagram-") && diagramPhase == 3 && diagramObserved,
+                "diagramTogglePreservedRecord": fixture.selectedCase.hasPrefix("diagram-") && diagramPhase == 3 && fixture.store.engine?.record == diagramRecord,
+                "diagramMode": diagramMode.map { $0 as Any } ?? NSNull(),
                 "focusTogglePreservedRecord": fixture.selectedCase == "focus-toggle" && togglePhase == 3 && fixture.store.engine?.record == toggleRecord,
                 "semicolonFormatting": handbookDisplayText("甲；乙;丙") == "甲；\n乙;\n丙",
                 "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",

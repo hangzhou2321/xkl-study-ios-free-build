@@ -560,9 +560,7 @@ private struct HandbookCardFace: View {
                 }
                 ForEach(Array(card.blocks.enumerated()), id: \.offset) { _, block in
                     if block.collapsed {
-                        DisclosureGroup {
-                            HandbookCardBlockView(block: block, focused: focused).padding(.top, 12)
-                        } label: { Text(verbatim: handbookDisplayText(block.title.isEmpty ? "展开补充" : block.title)).font(.headline) }
+                        HandbookCollapsibleBlock(block: block, focused: focused)
                     } else { HandbookCardBlockView(block: block, focused: focused) }
                 }
                 if !card.examples.isEmpty {
@@ -606,6 +604,83 @@ private struct HandbookCardFace: View {
     }
 }
 
+private struct HandbookCollapsibleBlock: View {
+    let block: HandbookCard.Block
+    let focused: Bool
+    @State private var expanded = false
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            HandbookCardBlockView(block: block, focused: focused).padding(.top, 12)
+                #if DEBUG
+                .onAppear { if block.kind == "diagram" { preview.didRenderDiagram(true) } }
+                #endif
+        } label: {
+            Text(verbatim: handbookDisplayText(block.title.isEmpty ? "展开补充" : block.title)).font(.headline)
+        }
+        #if DEBUG
+        .task(id: preview.diagramExpanded) {
+            if block.kind == "diagram", let requested = preview.diagramExpanded { expanded = requested }
+        }
+        .onChange(of: expanded) { _, value in
+            if block.kind == "diagram" && !value { preview.didRenderDiagram(false) }
+        }
+        #endif
+    }
+}
+
+/// Uses only the validated block nodes; it never reads or writes learning state.
+private struct HandbookRelationshipDiagram: View {
+    let mode: String
+    let items: [String]
+    @Environment(\.dynamicTypeSize) private var dynamicType
+    @ScaledMetric(relativeTo: .body) private var textSize: CGFloat = 17
+    private func node(_ text: String, color: Color) -> some View {
+        Text(verbatim: handbookDisplayText(text))
+            .font(.system(size: textSize, weight: .medium)).multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity).padding(12)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.45), lineWidth: 1) }
+    }
+    private func arrow(_ symbol: String, label: String) -> some View {
+        Image(systemName: symbol).font(.body.weight(.bold)).foregroundStyle(.blue)
+            .accessibilityLabel(label)
+    }
+    var body: some View {
+        VStack(spacing: 8) {
+            if mode == "branch", items.count == 3 {
+                node(items[0], color: .blue)
+                if dynamicType.isAccessibilitySize {
+                    Label("由根节点分支一", systemImage: "arrow.turn.down.right")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.blue)
+                    node(items[1], color: .teal)
+                    Label("由根节点分支二", systemImage: "arrow.turn.down.right")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.blue)
+                    node(items[2], color: .orange)
+                } else {
+                    HStack(spacing: 12) {
+                        arrow("arrow.down.left", label: "分支一").frame(maxWidth: .infinity)
+                        arrow("arrow.down.right", label: "分支二").frame(maxWidth: .infinity)
+                    }
+                    HStack(alignment: .top, spacing: 12) {
+                        node(items[1], color: .teal).frame(maxWidth: .infinity)
+                        node(items[2], color: .orange).frame(maxWidth: .infinity)
+                    }
+                }
+            } else if mode == "flow" {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    if index > 0 { arrow("arrow.down", label: "接下来") }
+                    node(item, color: index == 0 ? .blue : .teal)
+                }
+            }
+        }.frame(maxWidth: .infinity).id("handbook-relationship-diagram")
+            .accessibilityIdentifier("handbook-relationship-diagram")
+    }
+}
+
 private struct HandbookCardBlockView: View {
     let block: HandbookCard.Block
     var masked = false
@@ -619,7 +694,9 @@ private struct HandbookCardBlockView: View {
             if !block.title.isEmpty && !block.collapsed && !(focused && ["原文", "原表", "原图"].contains(block.title)) {
                 Text(verbatim: handbookDisplayText(block.title)).font(.headline).foregroundStyle(.secondary)
             }
-            if block.kind == "keyValues" || block.kind == "table" { table }
+            if block.kind == "diagram", !masked, let mode = block.text, let items = block.items {
+                HandbookRelationshipDiagram(mode: mode, items: items)
+            } else if block.kind == "keyValues" || block.kind == "table" { table }
             else if block.kind == "bullets" || block.kind == "steps" {
                 ForEach(Array((block.items ?? []).enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 11) {
