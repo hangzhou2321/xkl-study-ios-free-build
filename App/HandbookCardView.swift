@@ -558,9 +558,10 @@ private struct HandbookCardFace: View {
                 Text(verbatim: handbookDisplayText(card.answerSummary)).font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-summary")
                 }
-                ForEach(Array(card.blocks.enumerated()), id: \.offset) { _, block in
+                ForEach(Array(card.blocks.enumerated()), id: \.offset) { index, block in
                     if block.collapsed {
-                        HandbookCollapsibleBlock(block: block, focused: focused)
+                        HandbookCollapsibleBlock(cardID: card.id, block: block, focused: focused)
+                            .id(HandbookBlockIdentity(cardID: card.id, index: index))
                     } else { HandbookCardBlockView(block: block, focused: focused) }
                 }
                 if !card.examples.isEmpty {
@@ -604,7 +605,13 @@ private struct HandbookCardFace: View {
     }
 }
 
+private struct HandbookBlockIdentity: Hashable {
+    let cardID: String
+    let index: Int
+}
+
 private struct HandbookCollapsibleBlock: View {
+    let cardID: String
     let block: HandbookCard.Block
     let focused: Bool
     @State private var expanded = false
@@ -615,17 +622,20 @@ private struct HandbookCollapsibleBlock: View {
         DisclosureGroup(isExpanded: $expanded) {
             HandbookCardBlockView(block: block, focused: focused).padding(.top, 12)
                 #if DEBUG
-                .onAppear { if block.kind == "diagram" { preview.didRenderDiagram(true) } }
+                .onAppear { if block.kind == "diagram" { preview.didRenderDiagram(cardID, true) } }
                 #endif
         } label: {
             Text(verbatim: handbookDisplayText(block.title.isEmpty ? "展开补充" : block.title)).font(.headline)
         }
         #if DEBUG
+        .onAppear {
+            if block.kind == "diagram" && !expanded { preview.didRenderDiagram(cardID, false) }
+        }
         .task(id: preview.diagramExpanded) {
             if block.kind == "diagram", let requested = preview.diagramExpanded { expanded = requested }
         }
         .onChange(of: expanded) { _, value in
-            if block.kind == "diagram" && !value { preview.didRenderDiagram(false) }
+            if block.kind == "diagram" && !value { preview.didRenderDiagram(cardID, false) }
         }
         #endif
     }

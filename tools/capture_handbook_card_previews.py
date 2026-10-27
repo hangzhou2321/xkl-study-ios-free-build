@@ -19,7 +19,7 @@ OUT = ROOT / "build/handbook-card-previews"
 BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
 CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
-         "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow")
+         "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
 CAPTURES = tuple((subject, case) for subject in SUBJECTS for case in CASES)
 
 
@@ -62,11 +62,12 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "fullScreen": case not in ("normal-front", "normal-back"), "rootTabShellFixture": True,
         "focusTogglePreservedRecord": case == "focus-toggle", "semicolonFormatting": True,
         "diagramExpanded": case in ("diagram-branch", "diagram-flow"),
-        "diagramTogglePreservedRecord": case in ("diagram-branch", "diagram-flow"),
-        "diagramMode": case.removeprefix("diagram-") if case.startswith("diagram-") else None,
+        "diagramTogglePreservedRecord": case in ("diagram-branch", "diagram-flow", "diagram-switch"),
+        "diagramSwitchStartedCollapsed": case == "diagram-switch",
+        "diagramMode": "branch" if case == "diagram-switch" else (case.removeprefix("diagram-") if case.startswith("diagram-") else None),
         "mode": mode, "revealed": mode == "back", "ratingEnabled": mode == "back",
         "selfRatings": 2 if case == "completed" else 0,
-        "cardID": None if case == "completed" else ("synthetic-handbook-second" if case == "postponed" else "synthetic-handbook-first"),
+        "cardID": None if case == "completed" else ("synthetic-handbook-second" if case in ("postponed", "diagram-switch") else "synthetic-handbook-first"),
         "sourceFilesPresent": False, "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
         "sourceSheetPresented": source_sheet, "sourceNavigationPreservedRecord": source_sheet,
         "selectedSourceID": "additional:synthetic-lecture" if source_sheet else None,
