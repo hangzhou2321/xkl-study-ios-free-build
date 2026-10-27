@@ -25,7 +25,7 @@ struct HandbookCardView: View {
     private let startInStudy: Bool
     @Binding private var externalStudying: Bool
     @Binding private var fullScreenEnabled: Bool
-    @StateObject private var store: HandbookCardStore
+    @StateObject private var store: HandbookWordStore
     @State private var studying = false
     @State private var importing = false
     @State private var exporting = false
@@ -45,7 +45,7 @@ struct HandbookCardView: View {
     #endif
 
     init(subject: ConceptSubject = .computer, baseDirectory: URL? = nil,
-         injectedStore: HandbookCardStore? = nil,
+         injectedStore: HandbookWordStore? = nil,
          originalQuestionStore: ProfessionalQuestionStore? = nil, legacyStore: ConceptStore? = nil,
          studying: Binding<Bool> = .constant(false), startInStudy: Bool = false,
          fullScreenEnabled: Binding<Bool> = .constant(false),
@@ -57,7 +57,7 @@ struct HandbookCardView: View {
         _externalStudying = studying
         _fullScreenEnabled = fullScreenEnabled
         _studying = State(initialValue: startInStudy || studying.wrappedValue)
-        _store = StateObject(wrappedValue: injectedStore ?? HandbookCardStore(subject: subject, baseDirectory: baseDirectory))
+        _store = StateObject(wrappedValue: injectedStore ?? HandbookWordStore(subject: subject, baseDirectory: baseDirectory))
     }
 
     var body: some View {
@@ -216,7 +216,7 @@ struct HandbookCardView: View {
             }.allowsHitTesting(false)
         }
         .onChange(of: store.engine?.presentation) { _, _ in reportPreview() }
-        .onChange(of: store.engine?.record.ratings.count) { _, _ in reportPreview() }
+        .onChange(of: store.engine?.record.attempts.count) { _, _ in reportPreview() }
         .onChange(of: store.blocked) { _, _ in reportPreview() }
         #endif
     }
@@ -277,7 +277,7 @@ struct HandbookCardView: View {
         }.padding(.vertical, 36)
     }
 
-    private func home(_ engine: HandbookRecallEngine) -> some View {
+    private func home(_ engine: HandbookWordEngine) -> some View {
         let stats = engine.stats(on: displayDate)
         return VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
@@ -324,7 +324,7 @@ struct HandbookCardView: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func studyCard(_ engine: HandbookRecallEngine, _ card: HandbookCard, _ p: HandbookCardPresentation) -> some View {
+    private func studyCard(_ engine: HandbookWordEngine, _ card: HandbookCard, _ p: HandbookCardPresentation) -> some View {
         let stats = engine.stats(on: displayDate)
         let index = engine.package.cards.firstIndex(where: { $0.id == card.id }).map { $0 + 1 }
         return VStack(alignment: .leading, spacing: 18) {
@@ -335,7 +335,7 @@ struct HandbookCardView: View {
                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
             }.foregroundStyle(.secondary)
             ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
-                .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)张")
+                .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
             }
             HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power, focused: fullScreenActive)
                 .id("handbook-card-face")
@@ -357,12 +357,12 @@ struct HandbookCardView: View {
         }.padding(.top, 10)
     }
 
-    private func completion(_ engine: HandbookRecallEngine) -> some View {
+    private func completion(_ engine: HandbookWordEngine) -> some View {
         let stats = engine.stats(on: displayDate)
         return VStack(alignment: .leading, spacing: 18) {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 48)).foregroundStyle(.blue)
             Text("这一轮先到这里").font(.system(.largeTitle, design: .rounded).weight(.bold))
-            Text("当前可背的卡片已完成或暂缓。记录已经保存，刚自评过的卡不会立即回锅。")
+            Text("当前可背的卡片已完成或暂缓。记录已经保存，本轮未完成的强化会按单词引擎继续安排。")
                 .font(.title3).lineSpacing(6)
             if let date = stats.nextDueAt ?? engine.nextDueAt {
                 VStack(alignment: .leading, spacing: 7) {
@@ -378,8 +378,8 @@ struct HandbookCardView: View {
 
     private var scheduleNote: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("拉开间隔，再检查能否想起来").font(.subheadline.weight(.semibold))
-            Text("没记住至少隔24小时；记住后按3、7、14、30天等间隔再见。翻过答案不会自动记为掌握。")
+            Text("按英语单词引擎继续学习").font(.subheadline.weight(.semibold))
+            Text("新卡首次直接记住会按英语规则标为已会；没记住会进入当轮强化和后续复习。翻答案本身不计分。")
                 .font(.footnote).foregroundStyle(.secondary).lineSpacing(4)
         }.padding(.horizontal, 3)
     }
@@ -496,7 +496,7 @@ struct HandbookCardView: View {
                 }
             } ?? false
             preview.didRender(.init(mode: mode, cardID: card?.id, revealed: p?.revealed ?? false,
-                ratingCount: engine?.record.ratings.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
+                ratingCount: engine?.record.attempts.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
                 sourceFilesPresent: filesPresent,
                 recallCueMode: subject == .power && mode == "front", fullScreen: fullScreenActive))
         }

@@ -12,8 +12,8 @@ struct ProfessionalCoursesView: View {
     var onOverlayChanged: (Bool) -> Void = { _ in }
     var objectiveComputer: ProfessionalQuestionStore? = nil
     var objectivePower: ProfessionalQuestionStore? = nil
-    var handbookComputer: HandbookCardStore? = nil
-    var handbookPower: HandbookCardStore? = nil
+    var handbookComputer: HandbookWordStore? = nil
+    var handbookPower: HandbookWordStore? = nil
     var fullScreenEnabled: Binding<Bool> = .constant(false)
 
     var body: some View {

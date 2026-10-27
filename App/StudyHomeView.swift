@@ -9,8 +9,8 @@ struct StudyHomeView: View {
     @ObservedObject var power: ConceptStore
     @ObservedObject var professionalComputer: ProfessionalQuestionStore
     @ObservedObject var professionalPower: ProfessionalQuestionStore
-    @ObservedObject var handbookComputer: HandbookCardStore
-    @ObservedObject var handbookPower: HandbookCardStore
+    @ObservedObject var handbookComputer: HandbookWordStore
+    @ObservedObject var handbookPower: HandbookWordStore
     @ObservedObject var flow: StudyFlowStore
     var launch: (StudyArea, StudySegmentMode) -> Void
     @State private var selectedArea: StudyArea = .vocabulary

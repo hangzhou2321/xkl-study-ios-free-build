@@ -67,8 +67,8 @@ struct RootView: View {
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var math: MathStore
     @ObservedObject var mathExperience: MathExperienceStore
-    @StateObject private var handbookComputer = HandbookCardStore(subject: .computer)
-    @StateObject private var handbookPower = HandbookCardStore(subject: .power)
+    @StateObject private var handbookComputer = HandbookWordStore(subject: .computer)
+    @StateObject private var handbookPower = HandbookWordStore(subject: .power)
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @State private var importing = false

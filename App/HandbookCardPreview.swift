@@ -31,9 +31,9 @@ extension EnvironmentValues {
     let root: URL
     let subject: ConceptSubject
     let selectedCase: String
-    let store: HandbookCardStore
-    let handbookComputer: HandbookCardStore
-    let handbookPower: HandbookCardStore
+    let store: HandbookWordStore
+    let handbookComputer: HandbookWordStore
+    let handbookPower: HandbookWordStore
     let legacyComputer: ConceptStore
     let legacyPower: ConceptStore
     let expectedCardID: String?
@@ -135,7 +135,7 @@ extension EnvironmentValues {
                     "pixelWidth": 120, "pixelHeight": 160, "crop": ["x": 0, "y": 0, "width": 1, "height": 1], "altText": "故意缺失的合成原页，不影响文字卡自评。"]])
             }
             package["sourcePages"] = sourcePages
-            var prepared = HandbookCardStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
+            var prepared = HandbookWordStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
             prepared.importData(try JSONSerialization.data(withJSONObject: package, options: [.sortedKeys]))
             precondition(!prepared.blocked && prepared.error == nil && prepared.engine != nil, "Synthetic card package must import")
             let now = Date()
@@ -146,13 +146,13 @@ extension EnvironmentValues {
             }
             if selected == "resume" {
                 let token = prepared.engine!.presentation!.id
-                prepared = HandbookCardStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
+                prepared = HandbookWordStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
                 precondition(prepared.engine?.presentation?.id == token && prepared.engine?.presentation?.revealed == true,
                              "Back face and presentation token must restore without rating")
             }
             if selected == "postponed" {
                 prepared.postpone(token: prepared.engine!.presentation!.id, now: now)
-                precondition(prepared.engine?.currentCard?.id == "synthetic-handbook-second" && prepared.engine?.record.ratings.isEmpty == true,
+                precondition(prepared.engine?.currentCard?.id == "synthetic-handbook-second" && prepared.engine?.record.attempts.isEmpty == true,
                              "Postponement must move behind another card without rating")
             }
             if selected == "completed" {
@@ -161,15 +161,15 @@ extension EnvironmentValues {
                     prepared.reveal(token: token, now: now)
                     prepared.rate(remembered: true, token: token, now: now)
                 }
-                precondition(prepared.engine?.presentation == nil && prepared.engine?.record.ratings.count == 2,
+                precondition(prepared.engine?.presentation == nil && prepared.engine?.record.attempts.count == 2,
                              "Self-rated cards must leave this round")
-                precondition((prepared.engine?.nextDueAt?.timeIntervalSince(now) ?? 0) >= 72 * 3600,
-                             "First remembered review must wait at least 72 hours")
+                precondition(prepared.engine?.nextDueAt == nil,
+                             "Original English first-known graduation must remain unchanged")
             }
             precondition(!prepared.blocked && prepared.error == nil, "Synthetic card changes must persist")
             store = prepared
             let otherSubject: ConceptSubject = selectedSubject == .computer ? .power : .computer
-            let otherStore = HandbookCardStore(subject: otherSubject, baseDirectory: root, documentsDirectory: root)
+            let otherStore = HandbookWordStore(subject: otherSubject, baseDirectory: root, documentsDirectory: root)
             precondition(otherStore.engine == nil && !otherStore.blocked && otherStore.error == nil,
                          "Other subject must have its own empty synthetic store")
             handbookComputer = selectedSubject == .computer ? prepared : otherStore
@@ -184,7 +184,7 @@ extension EnvironmentValues {
             legacyPower = powerArchive
             expectedCardID = prepared.engine?.currentCard?.id
             expectedToken = prepared.engine?.presentation?.id
-            expectedRatings = prepared.engine?.record.ratings.count ?? 0
+            expectedRatings = prepared.engine?.record.attempts.count ?? 0
         } catch { fatalError("Synthetic handbook fixture failed: \(error)") }
     }
 }
@@ -199,7 +199,7 @@ struct HandbookCardPreview: View {
     @State private var fullScreenEnabled: Bool
     @State private var selectedTab = 4
     @State private var togglePhase = 0
-    @State private var toggleRecord: HandbookCardRecord?
+    @State private var toggleRecord: ProfessionalRecallRecord?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -243,17 +243,17 @@ struct HandbookCardPreview: View {
         guard selectedTab == 4, selectedSubject == fixture.subject, recalling, !practicing,
               !fixture.store.blocked, fixture.store.error == nil, let engine = fixture.store.engine, let observed = observation,
               observed.cardID == fixture.expectedCardID, observed.ratingCount == fixture.expectedRatings,
-              engine.record.ratings.count == fixture.expectedRatings, engine.package.subject == fixture.subject,
+              engine.record.attempts.count == fixture.expectedRatings, engine.package.subject == fixture.subject,
               engine.record.subject == fixture.subject,
               engine.presentation?.id == fixture.expectedToken,
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
-        case "front", "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.ratings.isEmpty && observed.recallCueMode == (fixture.subject == .power)
-        case "back", "table", "long", "resume", "normal-back": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.ratings.isEmpty
-        case "focus-toggle": return togglePhase == 3 && engine.record == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.ratings.isEmpty
-        case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.ratings.isEmpty
-        case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.ratings.count == 2
+        case "front", "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode == (fixture.subject == .power)
+        case "back", "table", "long", "resume", "normal-back": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
+        case "focus-toggle": return togglePhase == 3 && engine.record == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
+        case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.attempts.isEmpty
+        case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.attempts.count == 2
         default: return false
         }
     }
