@@ -9,6 +9,9 @@ struct HandbookWordState: Codable, Equatable {
     var word: ProfessionalRecallRecord
     var frozenCard: HandbookCard?
     var frozenToken: UUID?
+    /// A presented guide is frozen with the card, including across package updates.
+    /// Missing in pre-guide records, which therefore retain their existing display.
+    var frozenGuide: HandbookCardPackage.MemoryGuide? = nil
 }
 
 /// Uses the existing English PocketEngine through its already tested professional adapter.
@@ -19,10 +22,12 @@ struct HandbookWordState: Codable, Equatable {
     private var core: ProfessionalRecallEngine
     private var frozenCard: HandbookCard?
     private var frozenToken: UUID?
+    private var frozenGuide: HandbookCardPackage.MemoryGuide?
     var record: ProfessionalRecallRecord { core.record }
     var state: HandbookWordState { .init(package: package, originalCardIDs: originalIDs, word: core.record,
-                                       frozenCard: frozenCard, frozenToken: frozenToken) }
+                                       frozenCard: frozenCard, frozenToken: frozenToken, frozenGuide: frozenGuide) }
     var currentCard: HandbookCard? { core.record.presentation == nil ? nil : frozenCard }
+    var currentMemoryGuide: HandbookCardPackage.MemoryGuide? { core.record.presentation == nil ? nil : frozenGuide }
     var presentation: HandbookCardPresentation? {
         guard let p = core.record.presentation, let card = frozenCard else { return nil }
         return .init(id: p.id, cardID: card.id, definitionID: card.definitionID, revealed: p.revealed,
@@ -45,25 +50,27 @@ struct HandbookWordState: Codable, Equatable {
               Set(state.originalCardIDs) == Set(state.package.cards.map(\.id)) else { throw ExamError.invalid("宝典单词调度的卡片映射不一致。") }
         package = state.package; originalIDs = state.originalCardIDs
         core = try ProfessionalRecallEngine(deck: Self.catalog(package, ids: originalIDs), record: state.word)
-        frozenCard = state.frozenCard; frozenToken = state.frozenToken
+        frozenCard = state.frozenCard; frozenToken = state.frozenToken; frozenGuide = state.frozenGuide
         if let p = core.record.presentation {
             guard p.id == frozenToken, let index = core.record.cardIDs.firstIndex(of: p.cardID),
-                  frozenCard?.id == originalIDs[index] else { throw ExamError.invalid("宝典单词调度断点缺失，原文件保留。") }
-        } else if frozenCard != nil || frozenToken != nil { throw ExamError.invalid("宝典单词调度存在过期断点。") }
+                  frozenCard?.id == originalIDs[index],
+                  frozenGuide == nil || (frozenGuide?.isValid == true && frozenGuide?.cardID == frozenCard?.id) else { throw ExamError.invalid("宝典单词调度断点缺失，原文件保留。") }
+        } else if frozenCard != nil || frozenToken != nil || frozenGuide != nil { throw ExamError.invalid("宝典单词调度存在过期断点。") }
     }
     private init(package: HandbookCardPackage, ids: [String], core: ProfessionalRecallEngine,
-                 card: HandbookCard?, token: UUID?) {
-        self.package = package; originalIDs = ids; self.core = core; frozenCard = card; frozenToken = token
+                 card: HandbookCard?, token: UUID?, guide: HandbookCardPackage.MemoryGuide?) {
+        self.package = package; originalIDs = ids; self.core = core; frozenCard = card; frozenToken = token; frozenGuide = guide
     }
     func fork() throws -> HandbookWordEngine {
-        .init(package: package, ids: originalIDs, core: try core.fork(), card: frozenCard, token: frozenToken)
+        .init(package: package, ids: originalIDs, core: try core.fork(), card: frozenCard, token: frozenToken, guide: frozenGuide)
     }
     private func refreshCard() {
         guard let p = core.record.presentation, let index = core.record.cardIDs.firstIndex(of: p.cardID) else {
-            frozenCard = nil; frozenToken = nil; return
+            frozenCard = nil; frozenToken = nil; frozenGuide = nil; return
         }
         if frozenToken != p.id {
             frozenToken = p.id; frozenCard = package.cards.first { $0.id == originalIDs[index] }
+            frozenGuide = frozenCard.flatMap { package.memoryGuide(for: $0) }
         }
     }
     func start(now: Date = Date(), conservative: Bool = true) throws {

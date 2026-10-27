@@ -111,6 +111,20 @@ struct HandbookCardPackage: Codable, Equatable {
         let sourcePage: Int
         let cardIDs: [String]
     }
+    /// Presentation-only guidance is kept outside the immutable card definition.
+    /// Each guide is explicitly assigned to an existing knowledge-point card.
+    struct MemoryGuide: Codable, Equatable {
+        struct Row: Codable, Equatable { let cue: String; let answer: String }
+        let cardID: String
+        let explanation: String?
+        let rows: [Row]
+        let mnemonic: String?
+        var isValid: Bool {
+            handbookText(cardID, 200) && (1...6).contains(rows.count) &&
+            rows.allSatisfy { handbookText($0.cue, 80) && handbookText($0.answer, 300) } &&
+            (explanation?.count ?? 0) <= 300 && (mnemonic?.count ?? 0) <= 160
+        }
+    }
     struct AdditionalSource: Codable, Equatable, Identifiable {
         let id: String
         let source: Source
@@ -128,6 +142,7 @@ struct HandbookCardPackage: Codable, Equatable {
     var additionalSources: [AdditionalSource]? = nil
     /// Optional package-level presentation metadata; it does not alter card definitions or scheduling.
     var topicFrequencies: [TopicFrequency]? = nil
+    var memoryGuides: [MemoryGuide]? = nil
 
     var hash: String { handbookHash(self) }
     static func load(_ data: Data) throws -> Self {
@@ -145,9 +160,23 @@ struct HandbookCardPackage: Codable, Equatable {
         try Self.validateSource(source, sourcePages: sourcePages)
         try Self.validateAdditionalSources(additionalSources)
         try validateTopicFrequencies()
+        try validateMemoryGuides()
         for card in cards {
             try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
         }
+    }
+    private func validateMemoryGuides() throws {
+        guard let guides = memoryGuides else { return }
+        let cardIDs = Set(cards.map(\.id))
+        guard guides.count <= cards.count, Set(guides.map(\.cardID)).count == guides.count,
+              guides.allSatisfy({ guide in
+                  guide.isValid && cardIDs.contains(guide.cardID)
+              }) else {
+            throw ExamError.invalid("宝典回忆骨架的卡片对应或内容不完整。")
+        }
+    }
+    func memoryGuide(for card: HandbookCard) -> MemoryGuide? {
+        memoryGuides?.first { $0.cardID == card.id }
     }
     private func validateTopicFrequencies() throws {
         guard let frequencies = topicFrequencies else { return }

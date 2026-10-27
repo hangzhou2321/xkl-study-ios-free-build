@@ -56,6 +56,16 @@ final class HandbookWordTests: XCTestCase {
         object["cards"] = Array(rows.reversed())
         return try HandbookCardPackage.load(JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
     }
+    private func guidedPackage(_ original: HandbookCardPackage, revision: String, suffix: String) throws -> HandbookCardPackage {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
+        object["revision"] = revision
+        object["memoryGuides"] = original.cards.map { card in
+            ["cardID": card.id, "explanation": "Synthetic explanation \(suffix)",
+             "rows": [["cue": "Synthetic cue \(suffix)", "answer": "Synthetic answer \(suffix)"]],
+             "mnemonic": "Synthetic hint \(suffix)"] as [String: Any]
+        }
+        return try HandbookCardPackage.load(JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+    }
     @MainActor func testExactEnglishAnswerPathRepeatsLevelsAndDueDays() async throws {
         let book = try HandbookWordEngine(package: package(), now: now), direct = try english(3)
         let day = UInt32(try ConceptCalendar.studyDay(now))
@@ -135,6 +145,69 @@ final class HandbookWordTests: XCTestCase {
         XCTAssertEqual(reopened.record, before)
         XCTAssertEqual(reopened.package.frequencyLabel(for: annotated.cards[0]), "宝典考点频率 ★★★★★")
         XCTAssertEqual(reopened.package.frequencyLabel(for: annotated.cards[2]), "宝典未单独标注")
+    }
+    @MainActor func testFirstGuideImportPreservesOldActiveFrontAndBackThenUsesGuideOnNextCard() async throws {
+        for revealed in [false, true] {
+            let original = package(), book = try HandbookWordEngine(package: original, now: now)
+            try book.start(now: now)
+            let token = try XCTUnwrap(book.presentation?.id)
+            if revealed { try book.reveal(token: token, now: now) }
+            let before = book.record, frozen = book.currentCard, slots = book.state.originalCardIDs
+            XCTAssertNil(book.currentMemoryGuide)
+            var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(book.state)) as? [String: Any])
+            legacyObject.removeValue(forKey: "frozenGuide")
+            let legacyState = try JSONDecoder().decode(HandbookWordState.self, from: JSONSerialization.data(withJSONObject: legacyObject))
+            let legacyRestored = try HandbookWordEngine(state: legacyState)
+            XCTAssertEqual(legacyRestored.record, before)
+            XCTAssertEqual(legacyRestored.presentation?.id, token)
+            XCTAssertNil(legacyRestored.currentMemoryGuide)
+            let withGuide = try guidedPackage(original, revision: "1.1", suffix: "new")
+            XCTAssertEqual(original.cards.map(\.definitionID), withGuide.cards.map(\.definitionID))
+            try book.updatePackage(withGuide, now: now)
+            XCTAssertEqual(book.record, before)
+            XCTAssertEqual(book.currentCard, frozen)
+            XCTAssertEqual(book.presentation?.id, token)
+            XCTAssertEqual(book.presentation?.revealed, revealed)
+            XCTAssertNil(book.currentMemoryGuide, "An already displayed legacy face must not gain a guide mid-card")
+            XCTAssertEqual(book.state.originalCardIDs, slots)
+            let restored = try HandbookWordEngine(state: JSONDecoder().decode(HandbookWordState.self, from: JSONEncoder().encode(book.state)))
+            XCTAssertEqual(restored.record, before)
+            XCTAssertNil(restored.currentMemoryGuide)
+            if !revealed { try restored.reveal(token: token, now: now) }
+            XCTAssertTrue(restored.record.attempts.isEmpty)
+            try restored.rate(remembered: true, token: token, now: now)
+            XCTAssertEqual(restored.record.attempts.count, 1)
+            XCTAssertEqual(restored.currentMemoryGuide?.cardID, restored.currentCard?.id)
+            XCTAssertEqual(restored.currentMemoryGuide?.rows.first?.answer, "Synthetic answer new")
+            let after = restored.state
+            try restored.rate(remembered: false, token: token, now: now)
+            XCTAssertEqual(restored.state, after, "The same presentation cannot be graded twice")
+        }
+    }
+    @MainActor func testGuideIsFrozenAcrossUpdateAndRestoreWhileCoreRecordIsUnchanged() async throws {
+        let original = package(), first = try guidedPackage(original, revision: "1.1", suffix: "first")
+        let book = try HandbookWordEngine(package: first, now: now)
+        try book.start(now: now)
+        let token = try XCTUnwrap(book.presentation?.id), guide = try XCTUnwrap(book.currentMemoryGuide)
+        XCTAssertEqual(guide.rows.first?.answer, "Synthetic answer first")
+        try book.reveal(token: token, now: now)
+        let before = book.record, frozen = book.currentCard, slots = book.state.originalCardIDs
+        let second = try guidedPackage(original, revision: "1.2", suffix: "second")
+        try book.updatePackage(second, now: now)
+        XCTAssertEqual(book.record, before)
+        XCTAssertEqual(book.currentCard, frozen)
+        XCTAssertEqual(book.currentMemoryGuide, guide)
+        XCTAssertEqual(book.state.originalCardIDs, slots)
+        XCTAssertEqual(book.presentation?.id, token)
+        let once = book.state
+        try book.updatePackage(second, now: now)
+        XCTAssertEqual(book.state, once)
+        let reopened = try HandbookWordEngine(state: JSONDecoder().decode(HandbookWordState.self, from: JSONEncoder().encode(book.state)))
+        XCTAssertEqual(reopened.record, before)
+        XCTAssertEqual(reopened.currentMemoryGuide, guide)
+        try reopened.rate(remembered: true, token: token, now: now)
+        XCTAssertEqual(reopened.record.attempts.count, 1)
+        XCTAssertEqual(reopened.currentMemoryGuide?.rows.first?.answer, "Synthetic answer second")
     }
     @MainActor func testContentSourceUpdateAndAddedCardPreserveAnsweredStreamAndFrozenFace() async throws {
         let original = package(), book = try HandbookWordEngine(package: original, now: now)

@@ -66,6 +66,32 @@ final class HandbookCardTests: XCTestCase {
             XCTAssertThrowsError(try changed(legacy) { $0["topicFrequencies"] = bad })
         }
     }
+    func testMemoryGuidesAreExplicitOptionalAndValidatedWithoutChangingCardDefinitions() throws {
+        let old = fixture()
+        XCTAssertNil(old.memoryGuides)
+        XCTAssertNil(old.memoryGuide(for: old.cards[0]))
+        let next = try changed(old) { object in
+            object["memoryGuides"] = [["cardID": "synthetic-knowledge-1", "explanation": "Synthetic explanation",
+                                        "rows": [["cue": "Synthetic cue", "answer": "Synthetic answer"]],
+                                        "mnemonic": "Synthetic hint"]]
+        }
+        XCTAssertEqual(next.cards.map(\.definitionID), old.cards.map(\.definitionID))
+        XCTAssertEqual(next.memoryGuide(for: next.cards[0])?.rows.first?.answer, "Synthetic answer")
+        XCTAssertNil(next.memoryGuide(for: next.cards[1]))
+        XCTAssertEqual(try HandbookCardPackage.load(JSONEncoder().encode(next)), next)
+        let valid: [String: Any] = ["cardID": "synthetic-knowledge-1", "rows": [["cue": "a", "answer": "b"]]]
+        let invalidGuides: [[[String: Any]]] = [
+            [["cardID": "missing-card", "rows": [["cue": "a", "answer": "b"]]]],
+            [["cardID": "synthetic-knowledge-1", "rows": []]],
+            [["cardID": "synthetic-knowledge-1", "rows": [["cue": " ", "answer": "b"]]]],
+            [["cardID": "synthetic-knowledge-1", "rows": [["cue": "a", "answer": " "]]]],
+            [["cardID": "synthetic-knowledge-1", "rows": Array(repeating: ["cue": "a", "answer": "b"], count: 7)]],
+            [valid, valid]
+        ]
+        for bad in invalidGuides {
+            XCTAssertThrowsError(try changed(old) { $0["memoryGuides"] = bad })
+        }
+    }
     func testOriginalTableBlankCellsAndUnlabelledHeadersRemainBlank() throws {
         let pack = try changed(fixture()) { object in
             var cards = object["cards"] as! [[String: Any]]

@@ -351,8 +351,9 @@ struct HandbookCardView: View {
             }
             HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
                              focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
-                             frequencyLabel: engine.package.frequencyLabel(for: card))
-                .id("handbook-card-face")
+                             frequencyLabel: engine.package.frequencyLabel(for: card),
+                             memoryGuide: engine.currentMemoryGuide)
+                .id(p.id)
             if p.revealed {
                 Button { showingSources = true } label: {
                     Label { Text(verbatim: sourceLabel(card)).multilineTextAlignment(.leading) }
@@ -418,7 +419,8 @@ struct HandbookCardView: View {
                                 .padding(.vertical, 6)
                         }.buttonStyle(.borderedProminent).accessibilityIdentifier("handbook-remembered")
                     }
-                    Text(subject == .power ? "按整张卡遮住的内容自评，下一张会自动出现。" : "按现在能否回忆来选，下一张会自动出现。")
+                    Text(engine.currentMemoryGuide != nil ? "按本卡核心自评；完整内容和做题表现另行核对。" :
+                         (subject == .power ? "按整张卡遮住的内容自评，下一张会自动出现。" : "按现在能否回忆来选，下一张会自动出现。"))
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     Button { store.reveal(token: p.id) } label: {
@@ -467,7 +469,8 @@ struct HandbookCardView: View {
                             NavigationLink {
                                 ScrollView {
                                     HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
-                                                     frequencyLabel: package.frequencyLabel(for: card))
+                                                     frequencyLabel: package.frequencyLabel(for: card),
+                                                     memoryGuide: package.memoryGuide(for: card))
                                         .padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
                                     Text("目录预览不产生自评，也不改变复习日期。")
                                         .font(.footnote).foregroundStyle(.secondary).padding()
@@ -525,7 +528,7 @@ struct HandbookCardView: View {
             preview.didRender(.init(mode: mode, cardID: card?.id, revealed: p?.revealed ?? false,
                 ratingCount: engine?.record.attempts.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
                 sourceFilesPresent: filesPresent,
-                recallCueMode: subject == .power && mode == "front", fullScreen: fullScreenActive,
+                recallCueMode: (subject == .power || engine?.currentMemoryGuide != nil) && mode == "front", fullScreen: fullScreenActive,
                 sourceSheetPresented: showingSources || showingAllSources,
                 frequencyLabel: card.flatMap { engine?.package.frequencyLabel(for: $0) }))
         }
@@ -540,6 +543,7 @@ private struct HandbookCardFace: View {
     var focused = false
     var primarySourceTitle: String? = nil
     var frequencyLabel: String? = nil
+    var memoryGuide: HandbookCardPackage.MemoryGuide? = nil
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -560,7 +564,16 @@ private struct HandbookCardFace: View {
                 Text(verbatim: label).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
                     .accessibilityIdentifier("handbook-topic-frequency")
             }
-            if !revealed && showRecallCues {
+            if let guide = memoryGuide {
+                HandbookMemoryGuideView(guide: guide, revealed: revealed)
+                if revealed {
+                    Text("按本卡核心自评；完整内容与做题表现另行核对。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    DisclosureGroup("查看完整讲义内容") {
+                        fullAnswer.padding(.top, 12)
+                    }.font(.headline).accessibilityIdentifier("handbook-guide-full-answer")
+                }
+            } else if !revealed && showRecallCues {
                 if !focused {
                     Text("冒号前作提示，后面遮住；翻一次核对整张。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -577,6 +590,15 @@ private struct HandbookCardFace: View {
                     .accessibilityIdentifier("handbook-card-prompt")
                     .padding(.top, 5).padding(.bottom, 34)
             } else {
+                fullAnswer
+            }
+        }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 24).stroke(Color.primary.opacity(0.045), lineWidth: 1) }
+    }
+
+    private var fullAnswer: some View {
+        VStack(alignment: .leading, spacing: 18) {
                 if !focused || card.answerSummary != "讲义原文" {
                 Text(verbatim: handbookDisplayText(card.answerSummary)).font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-summary")
@@ -621,10 +643,80 @@ private struct HandbookCardFace: View {
                         }.padding(.top, 10)
                     }.font(.headline)
                 }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A guide is only a compact aid; opening it never grades or advances the card.
+private struct HandbookMemoryGuideView: View {
+    let guide: HandbookCardPackage.MemoryGuide
+    let revealed: Bool
+    @ScaledMetric(relativeTo: .body) private var rowSize: CGFloat = 19
+    @State private var helpExpanded = false
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
+
+    private func rows(showAnswers: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(guide.rows.enumerated()), id: \.offset) { _, row in
+                HStack(alignment: .top, spacing: 4) {
+                    Text(verbatim: handbookDisplayText(row.cue) + "：")
+                        .font(.system(size: rowSize, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if showAnswers {
+                        Text(verbatim: handbookDisplayText(row.answer))
+                            .font(.system(size: rowSize)).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("已遮住").font(.subheadline).foregroundStyle(.secondary)
+                            .padding(.horizontal, 12).padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 24).stroke(Color.primary.opacity(0.045), lineWidth: 1) }
+        }
+    }
+    @ViewBuilder private var explanation: some View {
+        if let text = guide.explanation, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(verbatim: handbookDisplayText(text)).font(.body).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    @ViewBuilder private var mnemonic: some View {
+        if let text = guide.mnemonic, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(verbatim: "记忆提示：" + handbookDisplayText(text))
+                .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if revealed {
+                explanation
+                rows(showAnswers: true).accessibilityIdentifier("handbook-guide-answers")
+                mnemonic
+            } else {
+                rows(showAnswers: false).accessibilityIdentifier("handbook-guide-cues")
+                DisclosureGroup(isExpanded: $helpExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        explanation
+                        rows(showAnswers: true)
+                        mnemonic
+                    }.padding(.top, 10)
+                } label: {
+                    Text("先看懂，不计成绩")
+                }.font(.headline).accessibilityIdentifier("handbook-guide-study-first")
+                #if DEBUG
+                .onAppear { preview.didRenderGuideHelp(guide.cardID, helpExpanded) }
+                .task(id: preview.guideHelpExpanded) {
+                    if let requested = preview.guideHelpExpanded { helpExpanded = requested }
+                }
+                .onChange(of: helpExpanded) { _, value in preview.didRenderGuideHelp(guide.cardID, value) }
+                #endif
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+        #if DEBUG
+        .onAppear { preview.didRenderGuide(guide.cardID, revealed) }
+        .onChange(of: revealed) { _, value in preview.didRenderGuide(guide.cardID, value) }
+        #endif
     }
 }
 

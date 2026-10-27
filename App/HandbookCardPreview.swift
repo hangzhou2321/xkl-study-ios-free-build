@@ -37,6 +37,9 @@ struct HandbookCardPreviewState {
     var didRenderSources: (HandbookSourcePreviewObservation) -> Void = { _ in }
     var diagramExpanded: Bool? = nil
     var didRenderDiagram: (String, Bool) -> Void = { _, _ in }
+    var guideHelpExpanded: Bool? = nil
+    var didRenderGuide: (String, Bool) -> Void = { _, _ in }
+    var didRenderGuideHelp: (String, Bool) -> Void = { _, _ in }
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -181,6 +184,13 @@ extension EnvironmentValues {
                 package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
             }
+            if ["front", "back"].contains(selected) {
+                package["memoryGuides"] = [["cardID": "synthetic-handbook-first",
+                    "explanation": "仅用于验证简短骨架，不含真实课程。",
+                    "rows": [["cue": "合成提示甲", "answer": "合成答案甲"],
+                             ["cue": "合成提示乙", "answer": "合成答案乙"]],
+                    "mnemonic": "合成记忆提示"]]
+            }
             var sourcePages: [[String: Any]] = [["number": archivePage, "asset": ["sha256": String(repeating: "c", count: 64), "mimeType": "image/png", "byteCount": 128,
                 "pixelWidth": 120, "pixelHeight": 160, "crop": ["x": 0, "y": 0, "width": 1, "height": 1], "altText": "纯合成档案原页，仅查阅，不在任何卡片的调度中。"]]]
             if selected == "missing-source" {
@@ -277,6 +287,13 @@ struct HandbookCardPreview: View {
     @State private var diagramScrollTarget: String?
     @State private var diagramPhase = 0
     @State private var diagramRecord: ProfessionalRecallRecord?
+    @State private var guideRequested: Bool?
+    @State private var guideObservedCardID: String?
+    @State private var guideObservedRevealed = false
+    @State private var guideHelpObservedCardID: String?
+    @State private var guideHelpObserved = false
+    @State private var guidePhase = 0
+    @State private var guideRecord: ProfessionalRecallRecord?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -306,14 +323,21 @@ struct HandbookCardPreview: View {
                 sourceObservation = $0
             }, diagramExpanded: diagramRequested, didRenderDiagram: { cardID, expanded in
                 diagramObservedCardID = cardID; diagramObserved = expanded
+            }, guideHelpExpanded: guideRequested, didRenderGuide: { cardID, revealed in
+                guideObservedCardID = cardID; guideObservedRevealed = revealed
+            }, didRenderGuideHelp: { cardID, expanded in
+                guideHelpObservedCardID = cardID; guideHelpObserved = expanded
             }))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
             .onChange(of: sourceObservation) { _, _ in reportIfReady() }
+            .onChange(of: guideObservedCardID) { _, _ in reportIfReady() }
+            .onChange(of: guideObservedRevealed) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
             .task { await runDiagramSwitch() }
+            .task { await runGuideHelpToggle() }
     }
     @MainActor private func waitForFocus(_ value: Bool) async {
         for _ in 0..<200 {
@@ -418,6 +442,25 @@ struct HandbookCardPreview: View {
         diagramPhase = 3
         reportIfReady()
     }
+    @MainActor private func waitForGuideHelp(_ expanded: Bool) async {
+        for _ in 0..<200 {
+            if guideHelpObservedCardID == "synthetic-handbook-first" && guideHelpObserved == expanded { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        preconditionFailure("Synthetic guide help transition did not render")
+    }
+    @MainActor private func runGuideHelpToggle() async {
+        guard fixture.selectedCase == "front" else { return }
+        await waitForFocus(true)
+        guideRecord = fixture.store.engine?.record
+        await waitForGuideHelp(false)
+        guideRequested = true; await waitForGuideHelp(true)
+        precondition(fixture.store.engine?.record == guideRecord, "Opening guide help must not grade or change study state")
+        guideRequested = false; await waitForGuideHelp(false)
+        precondition(fixture.store.engine?.record == guideRecord, "Closing guide help must not grade or change study state")
+        guidePhase = 3
+        reportIfReady()
+    }
     @MainActor private func criticalReady() -> Bool {
         guard selectedTab == 4, selectedSubject == fixture.subject, recalling, !practicing,
               !fixture.store.blocked, fixture.store.error == nil, let engine = fixture.store.engine, let observed = observation,
@@ -429,8 +472,10 @@ struct HandbookCardPreview: View {
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
-        case "front", "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode == (fixture.subject == .power)
-        case "back", "table", "long", "resume", "normal-back", "multi-source", "lecture-only": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
+        case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.record == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode
+        case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode == (fixture.subject == .power)
+        case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
+        case "table", "long", "resume", "normal-back", "multi-source", "lecture-only": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
         case "multi-source-pages", "lecture-only-pages": return sourcePhase == 3 && engine.record == sourceRecord &&
             observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.sourceSheetPresented &&
             sourceObservation?.sourceID == "additional:synthetic-lecture" && sourceObservation?.missingPageNumbers == [7, 9] && engine.record.attempts.isEmpty
@@ -468,6 +513,8 @@ struct HandbookCardPreview: View {
                 "recallCueMode": observation!.recallCueMode,
                 "fullScreen": observation!.fullScreen,
                 "topicFrequencyLabel": observation!.frequencyLabel.map { $0 as Any } ?? NSNull(),
+                "memoryGuideRendered": ["front", "back"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
+                "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.record == guideRecord,
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,
                 "diagramSwitchStartedCollapsed": fixture.selectedCase == "diagram-switch" && diagramPhase == 3 &&
