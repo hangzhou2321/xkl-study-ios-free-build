@@ -105,7 +105,8 @@ def main():
     run("xcodebuild", "-project", "XKLStudy.xcodeproj", "-scheme", "XKLStudy", "-configuration", "Debug",
         "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator",
         "-derivedDataPath", "build/DerivedData", "CODE_SIGNING_ALLOWED=NO",
-        "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=", "build")
+        "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=", "ARCHS=" + platform.machine(),
+        "ONLY_ACTIVE_ARCH=YES", "build")
     app = ROOT / "build/DerivedData/Build/Products/Debug-iphonesimulator/XKLStudy.app"
     if not app.is_dir():
         raise RuntimeError("Synthetic simulator app did not build")
