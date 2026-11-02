@@ -30,7 +30,7 @@ final class ProfessionalRecallEngineTests: XCTestCase {
             let restored = try ProfessionalRecallEngine(deck: original.deck, record: saved)
             try restored.start(day: day + 1, now: date(day + 1))
             XCTAssertNotEqual(restored.record.presentation?.cardID, shown.cardID)
-            XCTAssertEqual(try restored.packedCard(id: shown.cardID), original.packedCard(id: shown.cardID))
+            XCTAssertEqual(try restored.packedCard(id: shown.cardID), try original.packedCard(id: shown.cardID))
             XCTAssertTrue(restored.record.attempts.isEmpty)
         }
     }
