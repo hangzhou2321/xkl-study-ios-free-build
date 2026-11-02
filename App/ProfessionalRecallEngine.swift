@@ -412,6 +412,22 @@ final class ProfessionalRecallEngine {
         }
     }
 
+    /// Explicit user skip, stored as the engine's FAMILIAR event, never as a grade.
+    func markFamiliar(token: UUID, now: Date = Date()) throws {
+        guard let shown = record.presentation, shown.id == token else { return }
+        try startIfNeeded(now: now)
+        guard record.presentation?.id == token else { return }
+        try transaction {
+            let before = try engine.info
+            try engine.answer(2)
+            guard let event = try engine.events(from: before.log_records + 1).first(where: { $0.kind == 7 }),
+                  Int(event.word) < record.cardIDs.count, record.cardIDs[Int(event.word)] == shown.cardID else {
+                throw ExamError.invalid("熟记标记未完整保存。")
+            }
+            try present(keeping: nil)
+        }
+    }
+
     func dueCount(on day: UInt32) -> Int {
         engine.dueCount(on: day, limit: record.cardIDs.count) + (record.deferredCards ?? [:]).values.filter {
             $0.packed & (1 << 20) != 0 && $0.packed & (1 << 21) == 0 &&

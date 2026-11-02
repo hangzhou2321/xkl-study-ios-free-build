@@ -81,6 +81,9 @@ struct HandbookWordState: Codable, Equatable {
     func rate(remembered: Bool, token: UUID, now: Date = Date()) throws {
         try core.grade(remembered: remembered, token: token, now: now); refreshCard()
     }
+    func markFamiliar(token: UUID, now: Date = Date()) throws {
+        try core.markFamiliar(token: token, now: now); refreshCard()
+    }
     func postpone(token: UUID, now: Date = Date()) throws {
         guard try core.postpone(token: token, now: now) else { throw ExamError.invalid("当前只剩这张卡，暂时不能再延后；可退出后接着背。") }
         refreshCard()
@@ -110,7 +113,8 @@ struct HandbookWordState: Codable, Equatable {
     func stats(on now: Date = Date()) -> HandbookCardStats {
         let day = UInt32((try? ConceptCalendar.studyDay(now)) ?? 0)
         let values = packedValues()
-        let seen = Set(record.attempts.map(\.cardID) + (record.postponements ?? []).map(\.cardID) + [record.presentation?.cardID].compactMap { $0 }).count
+        let familiarIDs = (try? core.allEvents())?.filter { $0.kind == 7 && Int($0.word) < record.cardIDs.count }.map { record.cardIDs[Int($0.word)] } ?? []
+        let seen = Set(record.attempts.map(\.cardID) + (record.postponements ?? []).map(\.cardID) + familiarIDs + [record.presentation?.cardID].compactMap { $0 }).count
         let start = Calendar.current.startOfDay(for: now), end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
         return .init(total: originalIDs.count, seen: seen,
             due: values.filter { $0 & (1 << 20) != 0 && $0 & (1 << 21) == 0 && (1...10).contains(($0 >> 16) & 15) && ($0 & 65_535) <= day }.count,

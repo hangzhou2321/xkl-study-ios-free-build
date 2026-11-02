@@ -209,6 +209,7 @@ enum HandbookWordArchivePath {
     func start(now: Date = Date()) { change { try $0.start(now: now, conservative: policy()) } }
     func reveal(token: UUID, now: Date = Date()) { change { try $0.reveal(token: token, now: now) } }
     func rate(remembered: Bool, token: UUID, now: Date = Date()) { change { try $0.rate(remembered: remembered, token: token, now: now) } }
+    func markFamiliar(token: UUID, now: Date = Date()) { change { try $0.markFamiliar(token: token, now: now) } }
     func postpone(token: UUID, now: Date = Date()) { change { try $0.postpone(token: token, now: now) } }
     func importContent(_ url: URL) {
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }

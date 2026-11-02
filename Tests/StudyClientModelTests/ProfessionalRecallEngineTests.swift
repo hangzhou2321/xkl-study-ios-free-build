@@ -7,6 +7,33 @@ import StudyCore
 final class ProfessionalRecallEngineTests: XCTestCase {
     private let day: UInt32 = 20_750
     private func date(_ day: UInt32) -> Date { Date(timeIntervalSince1970: Double(day) * 86_400 + 43_200) }
+    @MainActor func testFamiliarIsNotAGradeAndPersistsAcrossRestart() async throws {
+        for reveal in [false, true] {
+            let original = try ProfessionalRecallEngine.fresh(deck: deck(4), now: date(day))
+            try original.start(day: day, now: date(day))
+            let shown = try XCTUnwrap(original.record.presentation)
+            if reveal { try original.reveal(token: shown.id, now: date(day)) }
+            let before = try original.record.cardIDs.map { try original.packedCard(id: $0) }
+            let priorEvents = try original.allEvents()
+            try original.markFamiliar(token: shown.id, now: date(day))
+            XCTAssertTrue(original.record.attempts.isEmpty)
+            let events = try original.allEvents()
+            XCTAssertEqual(Array(events.prefix(priorEvents.count)), priorEvents)
+            XCTAssertEqual(events.filter { $0.kind == 7 }.count, 1)
+            for (index, id) in original.record.cardIDs.enumerated() where id != shown.cardID {
+                XCTAssertEqual(try original.packedCard(id: id), before[index])
+            }
+            XCTAssertNotEqual(try XCTUnwrap(original.packedCard(id: shown.cardID)) & (1 << 21), 0)
+            let saved = original.record
+            try original.markFamiliar(token: shown.id, now: date(day))
+            XCTAssertEqual(original.record, saved)
+            let restored = try ProfessionalRecallEngine(deck: original.deck, record: saved)
+            try restored.start(day: day + 1, now: date(day + 1))
+            XCTAssertNotEqual(restored.record.presentation?.cardID, shown.cardID)
+            XCTAssertEqual(try restored.packedCard(id: shown.cardID), original.packedCard(id: shown.cardID))
+            XCTAssertTrue(restored.record.attempts.isEmpty)
+        }
+    }
     private func deck(_ count: Int = 60) -> RecallDeck {
         RecallDeck(subject: .computer, bankID: ConceptSubject.computer.bankID, cards: (0..<count).map {
             RecallDeck.Item(conceptID: "synthetic-\($0 / 10)", conceptTitle: "Synthetic topic \($0 / 10)",
