@@ -226,7 +226,7 @@ extension EnvironmentValues {
             }
             if selected == "postponed" {
                 prepared.postpone(token: prepared.engine!.presentation!.id, now: now)
-                precondition(prepared.engine?.currentCard?.id == "synthetic-handbook-second" && prepared.engine?.record.attempts.isEmpty == true,
+                precondition(prepared.engine?.currentCard?.id == "synthetic-handbook-second" && prepared.engine?.stats(on: now).remembered == 0,
                              "Postponement must move behind another card without rating")
             }
             if selected == "completed" {
@@ -235,10 +235,10 @@ extension EnvironmentValues {
                     prepared.reveal(token: token, now: now)
                     prepared.rate(remembered: true, token: token, now: now)
                 }
-                precondition(prepared.engine?.presentation == nil && prepared.engine?.record.attempts.count == 2,
+                precondition(prepared.engine?.presentation == nil && prepared.engine?.stats(on: now).remembered == 2,
                              "Self-rated cards must leave this round")
-                precondition(prepared.engine?.nextDueAt == nil,
-                             "Original English first-known graduation must remain unchanged")
+                precondition(prepared.engine?.nextDueAt != nil,
+                             "FSRS must schedule a later review of newly remembered cards")
             }
             precondition(!prepared.blocked && prepared.error == nil, "Synthetic card changes must persist")
             store = prepared
@@ -258,7 +258,7 @@ extension EnvironmentValues {
             legacyPower = powerArchive
             expectedCardID = prepared.engine?.currentCard?.id
             expectedToken = prepared.engine?.presentation?.id
-            expectedRatings = prepared.engine?.record.attempts.count ?? 0
+            expectedRatings = prepared.engine.map { $0.stats(on: now).remembered + $0.stats(on: now).forgotten } ?? 0
             handbookPreviewTrace("fixture-ready", ["card": expectedCardID ?? "nil", "ratings": expectedRatings])
         } catch { fatalError("Synthetic handbook fixture failed: \(error)") }
     }
@@ -274,26 +274,26 @@ struct HandbookCardPreview: View {
     @State private var fullScreenEnabled: Bool
     @State private var selectedTab = 4
     @State private var togglePhase = 0
-    @State private var toggleRecord: ProfessionalRecallRecord?
+    @State private var toggleRecord: HandbookWordState?
     @State private var sourceSheet: String?
     @State private var sourceSelectionID: String?
     @State private var sourceObservation: HandbookSourcePreviewObservation?
     @State private var sourcePhase = 0
-    @State private var sourceRecord: ProfessionalRecallRecord?
+    @State private var sourceRecord: HandbookWordState?
     @State private var diagramRequested: Bool?
     @State private var diagramObserved = false
     @State private var diagramObservedCardID: String?
     @State private var diagramSwitchToken: UUID?
     @State private var diagramScrollTarget: String?
     @State private var diagramPhase = 0
-    @State private var diagramRecord: ProfessionalRecallRecord?
+    @State private var diagramRecord: HandbookWordState?
     @State private var guideRequested: Bool?
     @State private var guideObservedCardID: String?
     @State private var guideObservedRevealed = false
     @State private var guideHelpObservedCardID: String?
     @State private var guideHelpObserved = false
     @State private var guidePhase = 0
-    @State private var guideRecord: ProfessionalRecallRecord?
+    @State private var guideRecord: HandbookWordState?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -349,16 +349,16 @@ struct HandbookCardPreview: View {
     @MainActor private func runFocusToggle() async {
         guard fixture.selectedCase == "focus-toggle" else { return }
         await waitForFocus(false)
-        toggleRecord = fixture.store.engine?.record
+        toggleRecord = fixture.store.engine?.state
         print("FOCUS_TOGGLE initial record captured")
         fullScreenEnabled = true; await waitForFocus(true)
-        precondition(fixture.store.engine?.record == toggleRecord, "Entering fullscreen must not mutate a study record")
+        precondition(fixture.store.engine?.state == toggleRecord, "Entering fullscreen must not mutate a study record")
         print("FOCUS_TOGGLE entered; record unchanged")
         fullScreenEnabled = false; await waitForFocus(false)
-        precondition(fixture.store.engine?.record == toggleRecord, "Exiting fullscreen must keep the exact card/face/queue/grades")
+        precondition(fixture.store.engine?.state == toggleRecord, "Exiting fullscreen must keep the exact card/face/queue/grades")
         print("FOCUS_TOGGLE exited; record unchanged")
         fullScreenEnabled = true; await waitForFocus(true)
-        precondition(fixture.store.engine?.record == toggleRecord, "Re-entering fullscreen must keep the exact study record")
+        precondition(fixture.store.engine?.state == toggleRecord, "Re-entering fullscreen must keep the exact study record")
         togglePhase = 3
         reportIfReady()
     }
@@ -375,23 +375,23 @@ struct HandbookCardPreview: View {
     @MainActor private func runSourceNavigation() async {
         guard fixture.selectedCase.hasSuffix("-pages") else { return }
         await waitForFocus(true)
-        sourceRecord = fixture.store.engine?.record
+        sourceRecord = fixture.store.engine?.state
         sourceSheet = "card"
         let lectureOnly = fixture.selectedCase.hasPrefix("lecture-only")
         await waitForSource(lectureOnly ? "additional:synthetic-lecture" : "primary",
                             pages: lectureOnly ? [7] : [fixture.subject == .power ? 102 : 2])
         sourceSelectionID = "additional:synthetic-lecture"
         await waitForSource("additional:synthetic-lecture", pages: [7])
-        precondition(fixture.store.engine?.record == sourceRecord, "Switching source must preserve the exact study record")
+        precondition(fixture.store.engine?.state == sourceRecord, "Switching source must preserve the exact study record")
         sourceSheet = nil
         await waitForSource(nil)
-        precondition(fixture.store.engine?.record == sourceRecord, "Closing sources must preserve card, face, queue and grades")
+        precondition(fixture.store.engine?.state == sourceRecord, "Closing sources must preserve card, face, queue and grades")
         // Allow the sheet dismissal transition to finish before opening the complete source catalog.
         try? await Task.sleep(for: .milliseconds(600))
         sourceObservation = nil
         sourceSheet = "all"
         await waitForSource("additional:synthetic-lecture", pages: [7, 9])
-        precondition(fixture.store.engine?.record == sourceRecord, "Opening all sources must preserve the exact study record")
+        precondition(fixture.store.engine?.state == sourceRecord, "Opening all sources must preserve the exact study record")
         sourcePhase = 3
         reportIfReady()
     }
@@ -405,26 +405,26 @@ struct HandbookCardPreview: View {
     @MainActor private func runDiagramToggle() async {
         guard ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) else { return }
         await waitForFocus(true)
-        diagramRecord = fixture.store.engine?.record
+        diagramRecord = fixture.store.engine?.state
         diagramRequested = true; await waitForDiagram(true)
-        precondition(fixture.store.engine?.record == diagramRecord, "Opening diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == diagramRecord, "Opening diagram must preserve the study record")
         diagramRequested = false; await waitForDiagram(false)
-        precondition(fixture.store.engine?.record == diagramRecord, "Closing diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == diagramRecord, "Closing diagram must preserve the study record")
         diagramRequested = true; await waitForDiagram(true)
-        precondition(fixture.store.engine?.record == diagramRecord, "Reopening diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == diagramRecord, "Reopening diagram must preserve the study record")
         diagramScrollTarget = "handbook-relationship-diagram"
         try? await Task.sleep(for: .milliseconds(350))
-        precondition(fixture.store.engine?.record == diagramRecord, "Scrolling diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == diagramRecord, "Scrolling diagram must preserve the study record")
         diagramPhase = 3
         reportIfReady()
     }
     @MainActor private func runDiagramSwitch() async {
         guard fixture.selectedCase == "diagram-switch" else { return }
         await waitForFocus(true)
-        let firstRecord = fixture.store.engine?.record
+        let firstRecord = fixture.store.engine?.state
         await waitForDiagram(false)
         diagramRequested = true; await waitForDiagram(true)
-        precondition(fixture.store.engine?.record == firstRecord, "Opening first diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == firstRecord, "Opening first diagram must preserve the study record")
         // Stop controlling expansion before the legal card change; the next block must begin closed.
         diagramRequested = nil
         guard let oldToken = fixture.store.engine?.presentation?.id else { preconditionFailure("Missing first card") }
@@ -434,11 +434,11 @@ struct HandbookCardPreview: View {
         fixture.store.reveal(token: newToken)
         await waitForDiagram(false, cardID: "synthetic-handbook-second")
         diagramSwitchToken = newToken
-        diagramRecord = fixture.store.engine?.record
+        diagramRecord = fixture.store.engine?.state
         diagramRequested = true; await waitForDiagram(true, cardID: "synthetic-handbook-second")
-        precondition(fixture.store.engine?.record == diagramRecord, "Opening second diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == diagramRecord, "Opening second diagram must preserve the study record")
         diagramRequested = false; await waitForDiagram(false, cardID: "synthetic-handbook-second")
-        precondition(fixture.store.engine?.record == diagramRecord, "Closing second diagram must preserve the study record")
+        precondition(fixture.store.engine?.state == diagramRecord, "Closing second diagram must preserve the study record")
         diagramPhase = 3
         reportIfReady()
     }
@@ -452,12 +452,12 @@ struct HandbookCardPreview: View {
     @MainActor private func runGuideHelpToggle() async {
         guard fixture.selectedCase == "front" else { return }
         await waitForFocus(true)
-        guideRecord = fixture.store.engine?.record
+        guideRecord = fixture.store.engine?.state
         await waitForGuideHelp(false)
         guideRequested = true; await waitForGuideHelp(true)
-        precondition(fixture.store.engine?.record == guideRecord, "Opening guide help must not grade or change study state")
+        precondition(fixture.store.engine?.state == guideRecord, "Opening guide help must not grade or change study state")
         guideRequested = false; await waitForGuideHelp(false)
-        precondition(fixture.store.engine?.record == guideRecord, "Closing guide help must not grade or change study state")
+        precondition(fixture.store.engine?.state == guideRecord, "Closing guide help must not grade or change study state")
         guidePhase = 3
         reportIfReady()
     }
@@ -466,26 +466,26 @@ struct HandbookCardPreview: View {
               !fixture.store.blocked, fixture.store.error == nil, let engine = fixture.store.engine, let observed = observation,
               observed.cardID == (fixture.selectedCase == "diagram-switch" ? "synthetic-handbook-second" : fixture.expectedCardID),
               observed.ratingCount == fixture.expectedRatings,
-              engine.record.attempts.count == fixture.expectedRatings, engine.package.subject == fixture.subject,
+              engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == fixture.expectedRatings, engine.package.subject == fixture.subject,
               engine.record.subject == fixture.subject,
               engine.presentation?.id == (fixture.selectedCase == "diagram-switch" ? diagramSwitchToken : fixture.expectedToken),
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
-        case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.record == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode
-        case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.record.attempts.isEmpty && observed.recallCueMode == (fixture.subject == .power)
-        case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
-        case "table", "long", "resume", "normal-back", "multi-source", "lecture-only": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
-        case "multi-source-pages", "lecture-only-pages": return sourcePhase == 3 && engine.record == sourceRecord &&
+        case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
+        case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
+        case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "table", "long", "resume", "normal-back", "multi-source", "lecture-only": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "multi-source-pages", "lecture-only-pages": return sourcePhase == 3 && engine.state == sourceRecord &&
             observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.sourceSheetPresented &&
-            sourceObservation?.sourceID == "additional:synthetic-lecture" && sourceObservation?.missingPageNumbers == [7, 9] && engine.record.attempts.isEmpty
+            sourceObservation?.sourceID == "additional:synthetic-lecture" && sourceObservation?.missingPageNumbers == [7, 9] && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
         case "diagram-switch": return diagramPhase == 3 && diagramObservedCardID == "synthetic-handbook-second" && !diagramObserved &&
-            engine.record == diagramRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
-        case "diagram-branch", "diagram-flow": return diagramPhase == 3 && diagramObserved && engine.record == diagramRecord &&
-            observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
-        case "focus-toggle": return togglePhase == 3 && engine.record == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.record.attempts.isEmpty
-        case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.record.attempts.isEmpty
-        case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.record.attempts.count == 2
+            engine.state == diagramRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "diagram-branch", "diagram-flow": return diagramPhase == 3 && diagramObserved && engine.state == diagramRecord &&
+            observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "focus-toggle": return togglePhase == 3 && engine.state == toggleRecord && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "missing-source": return observed.mode == "back" && observed.ratingEnabled && !observed.sourceFilesPresent && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "completed": return observed.mode == "completed" && engine.presentation == nil && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 2
         default: return false
         }
     }
@@ -505,7 +505,7 @@ struct HandbookCardPreview: View {
                 "presentationID": (fixture.selectedCase == "diagram-switch" ? diagramSwitchToken : fixture.expectedToken).map { $0.uuidString.lowercased() as Any } ?? NSNull(),
                 "sourceFilesPresent": observation!.sourceFilesPresent,
                 "sourceSheetPresented": observation!.sourceSheetPresented,
-                "sourceNavigationPreservedRecord": fixture.selectedCase.hasSuffix("-pages") && sourcePhase == 3 && fixture.store.engine?.record == sourceRecord,
+                "sourceNavigationPreservedRecord": fixture.selectedCase.hasSuffix("-pages") && sourcePhase == 3 && fixture.store.engine?.state == sourceRecord,
                 "selectedSourceID": sourceObservation.map { $0.sourceID as Any } ?? NSNull(),
                 "selectedSourceTitle": sourceObservation.map { $0.title as Any } ?? NSNull(),
                 "selectedSourcePageNumbers": sourceObservation?.pageNumbers ?? [],
@@ -514,14 +514,14 @@ struct HandbookCardPreview: View {
                 "fullScreen": observation!.fullScreen,
                 "topicFrequencyLabel": observation!.frequencyLabel.map { $0 as Any } ?? NSNull(),
                 "memoryGuideRendered": ["front", "back"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
-                "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.record == guideRecord,
+                "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.state == guideRecord,
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,
                 "diagramSwitchStartedCollapsed": fixture.selectedCase == "diagram-switch" && diagramPhase == 3 &&
                     diagramObservedCardID == "synthetic-handbook-second" && !diagramObserved,
-                "diagramTogglePreservedRecord": fixture.selectedCase.hasPrefix("diagram-") && diagramPhase == 3 && fixture.store.engine?.record == diagramRecord,
+                "diagramTogglePreservedRecord": fixture.selectedCase.hasPrefix("diagram-") && diagramPhase == 3 && fixture.store.engine?.state == diagramRecord,
                 "diagramMode": diagramMode.map { $0 as Any } ?? NSNull(),
-                "focusTogglePreservedRecord": fixture.selectedCase == "focus-toggle" && togglePhase == 3 && fixture.store.engine?.record == toggleRecord,
+                "focusTogglePreservedRecord": fixture.selectedCase == "focus-toggle" && togglePhase == 3 && fixture.store.engine?.state == toggleRecord,
                 "semicolonFormatting": handbookDisplayText("甲；乙;丙") == "甲；\n乙;\n丙",
                 "sourcePageNumbering": "physical-pdf", "textRenderingMode": "verbatim",
                 "literalSymbolsFixture": fixture.subject == .power && !fixture.selectedCase.hasPrefix("multi-source") && !fixture.selectedCase.hasPrefix("lecture-only"),

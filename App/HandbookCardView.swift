@@ -133,6 +133,14 @@ struct HandbookCardView: View {
                         }
                         Button("选择卡片文件", systemImage: "square.and.arrow.down") { importing = true }.disabled(store.blocked)
                         Button("导出背卡记录", systemImage: "square.and.arrow.up") { exportRecords() }.disabled(store.engine == nil)
+                        if !studying && store.canRollbackToLegacy {
+                            Button("撤回本次算法切换", systemImage: "arrow.uturn.backward") { store.rollbackToLegacy() }
+                                .accessibilityIdentifier("handbook-rollback-scheduler")
+                        }
+                        if !studying && store.canEnableDualFSRS {
+                            Button("重新启用双 FSRS", systemImage: "arrow.triangle.2.circlepath") { store.reenableDualFSRS() }
+                                .accessibilityIdentifier("handbook-reenable-fsrs")
+                        }
                         if originalQuestionStore != nil {
                             Button("原题与旧资料", systemImage: "books.vertical") { showingOldQuestions = true }
                         }
@@ -218,7 +226,7 @@ struct HandbookCardView: View {
             }.allowsHitTesting(false)
         }
         .onChange(of: store.engine?.presentation) { _, _ in reportPreview() }
-        .onChange(of: store.engine?.record.attempts.count) { _, _ in reportPreview() }
+        .onChange(of: store.engine.map { $0.stats(on: displayDate).remembered + $0.stats(on: displayDate).forgotten }) { _, _ in reportPreview() }
         .onChange(of: store.blocked) { _, _ in reportPreview() }
         .onChange(of: preview.sourceSheet) { _, route in
             showingSources = route == "card"
@@ -313,6 +321,11 @@ struct HandbookCardView: View {
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.blocked)
                     .accessibilityIdentifier("handbook-continue")
+                if engine.presentation == nil && engine.retryCount(on: displayDate) > 0 {
+                    Button { store.startRetry(); if store.error == nil, store.engine?.presentation != nil { studying = true; onStart() } } label: {
+                        Label("可选补练没记住的卡（\(engine.retryCount(on: displayDate))）", systemImage: "arrow.clockwise")
+                    }.accessibilityIdentifier("handbook-retry-optional").disabled(store.blocked)
+                }
             }.padding(22).background(.background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             Button { showingOutline = true } label: {
                 HStack { Label("按章节查看卡片", systemImage: "list.bullet.rectangle"); Spacer(); Image(systemName: "chevron.right") }
@@ -338,7 +351,7 @@ struct HandbookCardView: View {
 
     private func studyCard(_ engine: HandbookWordEngine, _ card: HandbookCard, _ p: HandbookCardPresentation) -> some View {
         let stats = engine.stats(on: displayDate)
-        let index = engine.package.cards.firstIndex(where: { $0.id == card.id }).map { $0 + 1 }
+        let index = engine.activePosition(of: card.id)
         return VStack(alignment: .leading, spacing: 18) {
             if !fullScreenActive { HStack {
                 Text(verbatim: handbookDisplayText(engine.package.chapter(for: card)?.title ?? "宝典知识点")).font(.subheadline.weight(.medium))
@@ -346,8 +359,16 @@ struct HandbookCardView: View {
                 Text(index.map { "\($0) / \(stats.total)" } ?? "复习中")
                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
             }.foregroundStyle(.secondary)
-            ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
-                .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
+            if engine.usesDualFSRS {
+                HStack {
+                    Text("本轮还剩 \(stats.remainingToday) 张")
+                    Spacer()
+                    Text("今日自评 \(stats.ratedToday) 次")
+                }.font(.footnote).foregroundStyle(.secondary)
+            } else {
+                ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
+                    .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
+            }
             }
             HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
                              focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
@@ -379,8 +400,14 @@ struct HandbookCardView: View {
         return VStack(alignment: .leading, spacing: 18) {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 48)).foregroundStyle(.blue)
             Text("这一轮先到这里").font(.system(.largeTitle, design: .rounded).weight(.bold))
-            Text("当前可背的卡片已完成或暂缓。记录已经保存，本轮未完成的强化会按单词引擎继续安排。")
+            Text(engine.usesDualFSRS ? "本轮已完成，记录已经保存。回到首页可以继续下一轮，到期卡会按双 FSRS 安排。" :
+                 "当前可背的卡片已完成或暂缓。记录已经保存，本轮未完成的强化会按单词引擎继续安排。")
                 .font(.title3).lineSpacing(6)
+            if engine.presentation == nil && engine.retryCount(on: displayDate) > 0 {
+                Button { store.startRetry() } label: {
+                    Label("可选补练没记住的卡（\(engine.retryCount(on: displayDate))）", systemImage: "arrow.clockwise")
+                }.buttonStyle(.bordered).disabled(store.blocked).accessibilityIdentifier("handbook-retry-optional")
+            }
             if let date = stats.nextDueAt ?? engine.nextDueAt {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("下次复习").font(.subheadline).foregroundStyle(.secondary)
@@ -395,8 +422,13 @@ struct HandbookCardView: View {
 
     private var scheduleNote: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("按英语单词引擎继续学习").font(.subheadline.weight(.semibold))
-            Text("新卡首次直接记住会按英语规则标为已会；没记住会进入当轮强化和后续复习。翻答案本身不计分。")
+            Text(store.isDualMigrationPending ? "先接续旧的暂存卡" :
+                 (store.engine?.usesDualFSRS == true ? "按双 FSRS 继续学习" : "按英语单词引擎继续学习"))
+                .font(.subheadline.weight(.semibold))
+            Text(store.isDualMigrationPending ? "旧档还有未完成的暂存卡，先按原断点继续；待它们进入队列后，再开始时会保留记录并切换双 FSRS。" :
+                 (store.engine?.usesDualFSRS == true ?
+                  "每天首次正常背卡自评安排下次复习；可选补练单独记录，不推迟计划。没记住不要求当轮固定重复七次；当天错卡满10分钟可选补练。每轮最多20张，可随时退出续学。翻答案本身不计分。" :
+                  "新卡首次直接记住会按英语规则标为已会；没记住会进入当轮强化和后续复习。翻答案本身不计分。"))
                 .font(.footnote).foregroundStyle(.secondary).lineSpacing(4)
         }.padding(.horizontal, 3)
     }
@@ -533,7 +565,7 @@ struct HandbookCardView: View {
                 }
             } ?? false
             preview.didRender(.init(mode: mode, cardID: card?.id, revealed: p?.revealed ?? false,
-                ratingCount: engine?.record.attempts.count ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
+                ratingCount: engine.map { $0.stats(on: displayDate).remembered + $0.stats(on: displayDate).forgotten } ?? 0, ratingEnabled: studying && p?.revealed == true && !store.blocked,
                 sourceFilesPresent: filesPresent,
                 recallCueMode: (subject == .power || engine?.currentMemoryGuide != nil) && mode == "front", fullScreen: fullScreenActive,
                 sourceSheetPresented: showingSources || showingAllSources,
