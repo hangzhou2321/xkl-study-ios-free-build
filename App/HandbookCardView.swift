@@ -50,9 +50,9 @@ struct HandbookCardView: View {
         _externalStudying = studying
         _fullScreenEnabled = fullScreenEnabled
         _studying = State(initialValue: startInStudy || studying.wrappedValue)
-        let actualStore = injectedStore ?? HandbookWordStore(subject: subject, baseDirectory: baseDirectory)
-        _store = StateObject(wrappedValue: actualStore)
-        _highlightStore = StateObject(wrappedValue: HandbookHighlightStore(subject: subject, baseDirectory: actualStore.annotationBaseDirectory))
+        _store = StateObject(wrappedValue: injectedStore ?? HandbookWordStore(subject: subject, baseDirectory: baseDirectory))
+        _highlightStore = StateObject(wrappedValue: HandbookHighlightStore(subject: subject,
+            baseDirectory: injectedStore?.annotationBaseDirectory ?? baseDirectory))
     }
 
     var body: some View {
