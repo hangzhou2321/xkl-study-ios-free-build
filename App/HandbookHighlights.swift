@@ -63,6 +63,26 @@ struct HandbookHighlightState: Codable, Equatable {
         if a.textSHA256 != b.textSHA256 { return a.textSHA256 < b.textSHA256 }
         return a.location < b.location
     }
+    /// Foundation's NSRange-to-String conversion is not consistent across OS
+    /// releases for an offset inside a surrogate pair. Count actual Swift
+    /// Characters so both ends are always whole user-visible characters.
+    private static func characterBoundary(_ target: Int, in text: String) -> Bool {
+        guard target >= 0 else { return false }
+        var offset = 0
+        if target == 0 { return true }
+        for character in text {
+            offset += String(character).utf16.count
+            if offset == target { return true }
+            if offset > target { return false }
+        }
+        return false
+    }
+    private static func validCharacterRange(_ range: NSRange, in text: String) -> Bool {
+        let total = text.utf16.count
+        guard range.location != NSNotFound, range.location >= 0, range.length >= 0,
+              range.location <= total, range.length <= total - range.location else { return false }
+        return characterBoundary(range.location, in: text) && characterBoundary(range.location + range.length, in: text)
+    }
     private static func canonical(_ input: [HandbookHighlightSpan]) -> [HandbookHighlightSpan] {
         var result: [HandbookHighlightSpan] = []
         for item in input.sorted(by: before) {
@@ -83,7 +103,7 @@ struct HandbookHighlightState: Codable, Equatable {
         let total = (document.text as NSString).length
         guard selection.location != NSNotFound, selection.location >= 0, selection.length > 0,
               selection.location <= total, selection.length <= total - selection.location,
-              Range(selection, in: document.text) != nil else {
+              Self.validCharacterRange(selection, in: document.text), Range(selection, in: document.text) != nil else {
             throw ExamError.invalid("请先选择要标红或取消标红的文字。")
         }
         var next = spans, touched = false
@@ -91,7 +111,7 @@ struct HandbookHighlightState: Codable, Equatable {
             let part = NSIntersectionRange(selection, field.range)
             guard part.length > 0 else { continue }
             let local = NSRange(location: part.location - field.range.location, length: part.length)
-            guard Range(local, in: field.text) != nil else {
+            guard Self.validCharacterRange(local, in: field.text), Range(local, in: field.text) != nil else {
                 throw ExamError.invalid("选中文字不完整，请重新选择。")
             }
             touched = true
@@ -126,7 +146,7 @@ struct HandbookHighlightState: Codable, Equatable {
         let view = visible ?? whole
         guard view.location != NSNotFound, view.location >= 0, view.length >= 0,
               view.location <= whole.length, view.length <= whole.length - view.location,
-              Range(view, in: text) != nil else { return [] }
+              Self.validCharacterRange(view, in: text), Range(view, in: text) != nil else { return [] }
         let hash = Self.hash(text)
         let matching = spans.filter { $0.cardID == cardID && $0.fieldID == fieldID && $0.textSHA256 == hash }
         var runs: [Run] = [], position = view.location
@@ -136,8 +156,9 @@ struct HandbookHighlightState: Codable, Equatable {
         }
         for span in matching {
             let end = span.location + span.length
-            guard end <= whole.length, Range(NSRange(location: span.location, length: span.length), in: text) != nil else { continue }
-            let part = NSIntersectionRange(view, NSRange(location: span.location, length: span.length))
+            let spanRange = NSRange(location: span.location, length: span.length)
+            guard end <= whole.length, Self.validCharacterRange(spanRange, in: text), Range(spanRange, in: text) != nil else { continue }
+            let part = NSIntersectionRange(view, spanRange)
             guard part.length > 0 else { continue }
             append(NSRange(location: position, length: max(0, part.location - position)), false)
             append(part, true); position = part.location + part.length

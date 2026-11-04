@@ -76,12 +76,34 @@ final class HandbookHighlightTests: XCTestCase {
         let emoji = try selected(f, "😀")
         XCTAssertThrowsError(try state.applying(doc, selection: NSRange(location: emoji.location + 1, length: 1), remove: false))
         XCTAssertEqual(state, keep)
+        // A syntactically valid but externally damaged span must never split
+        // a surrogate pair during display, even on a permissive Foundation.
+        let localEmoji = (f.text as NSString).range(of: "😀")
+        var damaged = HandbookHighlightState(subject: .power)
+        damaged.spans = [.init(cardID: card.id, fieldID: f.id, textSHA256: HandbookHighlightState.hash(f.text),
+                               location: localEmoji.location + 1, length: 1)]
+        try damaged.validate()
+        XCTAssertEqual(damaged.runs(cardID: card.id, fieldID: f.id, text: f.text), [.init(text: f.text, red: false)])
         XCTAssertFalse(state.runs(cardID: "other", fieldID: f.id, text: f.text).contains(where: \.red))
         XCTAssertFalse(state.runs(cardID: card.id, fieldID: "other-field", text: f.text).contains(where: \.red))
         XCTAssertFalse(state.runs(cardID: card.id, fieldID: f.id, text: f.text + "新").contains(where: \.red))
         XCTAssertEqual(state, keep) // stale marks are retained for the old text, not reassigned
         state = try state.applying(doc, selection: emoji, remove: true)
         XCTAssertTrue(state.spans.isEmpty)
+    }
+
+    func testCombiningCharacterCannotBePartiallyHighlighted() throws {
+        let (card, _) = fixture()
+        let guide = HandbookCardPackage.MemoryGuide(cardID: card.id, explanation: nil,
+            rows: [.init(cue: "组合", answer: "甲e\u{301}乙")], mnemonic: nil)
+        let doc = HandbookHighlightDocument(card: card, guide: guide), f = try field(doc, "guide.rows.0.answer")
+        let combined = try selected(f, "e\u{301}")
+        XCTAssertEqual(combined.length, 2)
+        let empty = HandbookHighlightState(subject: .computer)
+        XCTAssertThrowsError(try empty.applying(doc, selection: NSRange(location: combined.location, length: 1), remove: false))
+        let marked = try empty.applying(doc, selection: combined, remove: false)
+        XCTAssertEqual(marked.runs(cardID: card.id, fieldID: f.id, text: f.text), [
+            .init(text: "甲", red: false), .init(text: "e\u{301}", red: true), .init(text: "乙", red: false)])
     }
 
     func testVisibleCueNeverReturnsHiddenAnswerText() throws {
