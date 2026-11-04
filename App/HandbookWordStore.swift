@@ -92,6 +92,9 @@ enum HandbookWordArchivePath {
     private var currentURL: URL { directory.appendingPathComponent("current.json") }
     private var legacyMarkerURL: URL { directory.appendingPathComponent("legacy-mode.json") }
     private var legacyWitnessURL: URL { directory.appendingPathComponent("legacy-mode-witness.json") }
+    /// The UI's independent personal annotations use the same per-subject
+    /// support root, including when tests inject an isolated store.
+    var annotationBaseDirectory: URL { base }
     init(subject: ConceptSubject = .computer, baseDirectory: URL? = nil, documentsDirectory: URL? = nil,
          now: Date? = nil,
          writer: @escaping (Data, URL) throws -> Void = DurableFile.write) {

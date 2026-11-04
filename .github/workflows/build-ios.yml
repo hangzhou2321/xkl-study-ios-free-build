@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      preview_cases:
+        description: Optional comma-separated synthetic handbook preview cases
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -79,6 +84,8 @@ jobs:
           assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
           PY
       - name: Capture native synthetic handbook-card previews
+        env:
+          HANDBOOK_CARD_PREVIEW_CASES: ${{ inputs.preview_cases }}
         run: python3 tools/capture_handbook_card_previews.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

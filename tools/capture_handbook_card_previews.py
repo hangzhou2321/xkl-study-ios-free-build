@@ -18,14 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/handbook-card-previews"
 BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power")
-CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
+DEFAULT_CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
          "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
+CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor")
 CAPTURES = tuple((subject, case) for subject in SUBJECTS for case in CASES)
 
 
 def selected_cases(raw):
     if not raw.strip():
-        return CASES
+        return DEFAULT_CASES
     cases = tuple(x.strip() for x in raw.split(","))
     if len(cases) > len(CASES) or len(cases) != len(set(cases)) or any(x not in CASES for x in cases):
         raise ValueError("HANDBOOK_CARD_PREVIEW_CASES must contain distinct allowed cases")
@@ -51,18 +52,20 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
-    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front") else "back")
+    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     supplemented = case.startswith(("multi-source", "lecture-only"))
     lecture_only = case.startswith("lecture-only")
     source_sheet = case.endswith("-pages")
     expected_state = {
         "route": "ProfessionalCoursesView", "selectedSubject": subject,
-        "recallCueMode": mode == "front" and (subject == "power" or case == "front"),
+        "recallCueMode": mode == "front" and (subject == "power" or case in ("front", "highlight-front")),
         "fullScreen": case not in ("normal-front", "normal-back"), "rootTabShellFixture": True,
-        "topicFrequencyLabel": ("宝典考点频率 ★★★★☆" if case in ("front", "back") else
+        "topicFrequencyLabel": ("宝典考点频率 ★★★★☆" if case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor") else
                                 ("宝典未单独标注" if case == "normal-front" else None)),
-        "memoryGuideRendered": case in ("front", "back"),
+        "memoryGuideRendered": case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor"),
+        "highlightSpanCount": 2 if case.startswith("highlight-") else 0,
+        "highlightEditorRendered": case == "highlight-editor",
         "memoryGuideHelpPreservedRecord": case == "front",
         "focusTogglePreservedRecord": case == "focus-toggle", "semicolonFormatting": True,
         "diagramExpanded": case in ("diagram-branch", "diagram-flow"),

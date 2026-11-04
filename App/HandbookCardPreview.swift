@@ -22,6 +22,7 @@ struct HandbookCardPreviewObservation: Equatable {
     let fullScreen: Bool
     let sourceSheetPresented: Bool
     let frequencyLabel: String?
+    let highlightSpanCount: Int
 }
 struct HandbookSourcePreviewObservation: Equatable {
     let sourceID: String
@@ -40,6 +41,8 @@ struct HandbookCardPreviewState {
     var guideHelpExpanded: Bool? = nil
     var didRenderGuide: (String, Bool) -> Void = { _, _ in }
     var didRenderGuideHelp: (String, Bool) -> Void = { _, _ in }
+    var openHighlightEditor = false
+    var didRenderHighlightEditor: () -> Void = {}
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -63,7 +66,7 @@ extension EnvironmentValues {
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -180,11 +183,11 @@ extension EnvironmentValues {
                 "title": "纯合成卡组 · 不含用户资料", "revision": "synthetic-1",
                 "source": ["title": "纯合成来源", "fileName": "synthetic.pdf", "sha256": String(repeating: "b", count: 64), "pdfPageCount": archivePage, "includedPages": [sourcePage, archivePage]],
                 "chapters": [["id": "synthetic-chapter", "title": "合成章节 · 仅用于页面检查"]], "cards": cards]
-            if ["front", "back", "normal-front"].contains(selected) {
+            if ["front", "back", "normal-front", "highlight-front", "highlight-back", "highlight-editor"].contains(selected) {
                 package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
             }
-            if ["front", "back"].contains(selected) {
+            if ["front", "back", "highlight-front", "highlight-back", "highlight-editor"].contains(selected) {
                 package["memoryGuides"] = [["cardID": "synthetic-handbook-first",
                     "explanation": "仅用于验证简短骨架，不含真实课程。",
                     "rows": [["cue": "合成提示甲", "answer": "合成答案甲"],
@@ -215,8 +218,24 @@ extension EnvironmentValues {
             prepared.start(now: now)
             handbookPreviewTrace("fixture-started", ["blocked": prepared.blocked, "error": prepared.error ?? "", "card": prepared.engine?.currentCard?.id ?? "nil"])
             precondition(prepared.engine?.presentation != nil, "Synthetic card must start")
-            if supplemented || selected.hasPrefix("diagram-") || ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle"].contains(selected) {
+            if supplemented || selected.hasPrefix("diagram-") || ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle", "highlight-back", "highlight-editor"].contains(selected) {
                 prepared.reveal(token: prepared.engine!.presentation!.id, now: now)
+            }
+            if selected.hasPrefix("highlight-") {
+                let before = prepared.engine!.state
+                let current = prepared.engine!.currentCard!, guide = prepared.engine!.currentMemoryGuide!
+                let document = HandbookHighlightDocument(card: current, guide: guide)
+                let marks = HandbookHighlightStore(subject: selectedSubject, baseDirectory: root)
+                for (fieldID, value) in [("guide.rows.0.cue", "提示甲"), ("guide.rows.0.answer", "答案甲")] {
+                    let field = document.fields.first { $0.id == fieldID }!
+                    let local = (field.text as NSString).range(of: value)
+                    precondition(local.location != NSNotFound)
+                    marks.apply(document: document, selection: NSRange(location: field.range.location + local.location, length: local.length), remove: false)
+                }
+                precondition(!marks.blocked && marks.error == nil && marks.state.spans.count == 2)
+                let reopened = HandbookHighlightStore(subject: selectedSubject, baseDirectory: root)
+                precondition(!reopened.blocked && reopened.state == marks.state && prepared.engine!.state == before,
+                             "Synthetic marks must survive restart without changing the scheduler")
             }
             if selected == "resume" {
                 let token = prepared.engine!.presentation!.id
@@ -294,6 +313,7 @@ struct HandbookCardPreview: View {
     @State private var guideHelpObserved = false
     @State private var guidePhase = 0
     @State private var guideRecord: HandbookWordState?
+    @State private var highlightEditorObserved = false
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -327,12 +347,15 @@ struct HandbookCardPreview: View {
                 guideObservedCardID = cardID; guideObservedRevealed = revealed
             }, didRenderGuideHelp: { cardID, expanded in
                 guideHelpObservedCardID = cardID; guideHelpObserved = expanded
+            }, openHighlightEditor: fixture.selectedCase == "highlight-editor", didRenderHighlightEditor: {
+                highlightEditorObserved = true
             }))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
             .onChange(of: sourceObservation) { _, _ in reportIfReady() }
             .onChange(of: guideObservedCardID) { _, _ in reportIfReady() }
             .onChange(of: guideObservedRevealed) { _, _ in reportIfReady() }
+            .onChange(of: highlightEditorObserved) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
@@ -475,6 +498,8 @@ struct HandbookCardPreview: View {
         case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
         case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
+        case "highlight-front": return guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && observed.mode == "front" && !observed.revealed && observed.highlightSpanCount == 2 && observed.ratingCount == 0
+        case "highlight-back", "highlight-editor": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.highlightSpanCount == 2 && observed.ratingCount == 0 && (fixture.selectedCase != "highlight-editor" || highlightEditorObserved)
         case "table", "long", "resume", "normal-back", "multi-source", "lecture-only": return observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
         case "multi-source-pages", "lecture-only-pages": return sourcePhase == 3 && engine.state == sourceRecord &&
             observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.sourceSheetPresented &&
@@ -513,7 +538,9 @@ struct HandbookCardPreview: View {
                 "recallCueMode": observation!.recallCueMode,
                 "fullScreen": observation!.fullScreen,
                 "topicFrequencyLabel": observation!.frequencyLabel.map { $0 as Any } ?? NSNull(),
-                "memoryGuideRendered": ["front", "back"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
+                "memoryGuideRendered": ["front", "back", "highlight-front", "highlight-back", "highlight-editor"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
+                "highlightSpanCount": observation!.highlightSpanCount,
+                "highlightEditorRendered": fixture.selectedCase == "highlight-editor" && highlightEditorObserved,
                 "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.state == guideRecord,
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,
