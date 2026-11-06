@@ -186,7 +186,7 @@ extension EnvironmentValues {
                 "title": "纯合成卡组 · 不含用户资料", "revision": "synthetic-1",
                 "source": ["title": "纯合成来源", "fileName": "synthetic.pdf", "sha256": String(repeating: "b", count: 64), "pdfPageCount": archivePage, "includedPages": [sourcePage, archivePage]],
                 "chapters": [["id": "synthetic-chapter", "title": "合成章节 · 仅用于页面检查"]], "cards": cards]
-            if ["related-question", "related-review"].contains(selected) {
+            if ["front", "back", "related-question", "related-review"].contains(selected) {
                 var question: [String: Any] = ["id": "synthetic-question", "cardID": "synthetic-handbook-first",
                     "type": "single", "prompt": "合成原题：哪个选项是示例？",
                     "options": [["id": "A", "text": "合成选项甲"], ["id": "B", "text": "合成选项乙"]],
@@ -199,10 +199,17 @@ extension EnvironmentValues {
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
             }
             if ["front", "back", "highlight-front", "highlight-back", "highlight-editor"].contains(selected) {
+                let rows: [[String: String]] = selectedSubject == .circuit ? [
+                    ["cue": "合成提示甲", "answer": "合成测试：先判断适用条件，再核对各项数量。"],
+                    ["cue": "合成提示乙", "answer": "合成测试：按照约定方向分别计算并检查。"],
+                    ["cue": "合成提示丙", "answer": "合成测试：确认转换关系后再使用结果。"],
+                    ["cue": "合成提示丁", "answer": "合成测试：保留原先条件并比较不同情况。"],
+                    ["cue": "合成提示戊", "answer": "合成测试：最后检查结果的范围和单位。"]
+                ] : [["cue": "合成提示甲", "answer": "合成答案甲"],
+                     ["cue": "合成提示乙", "answer": "合成答案乙"]]
                 package["memoryGuides"] = [["cardID": "synthetic-handbook-first",
                     "explanation": "仅用于验证简短骨架，不含真实课程。",
-                    "rows": [["cue": "合成提示甲", "answer": "合成答案甲"],
-                             ["cue": "合成提示乙", "answer": "合成答案乙"]],
+                    "rows": rows,
                     "mnemonic": "合成记忆提示"]]
             }
             var sourcePages: [[String: Any]] = [["number": archivePage, "asset": ["sha256": String(repeating: "c", count: 64), "mimeType": "image/png", "byteCount": 128,
