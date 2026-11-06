@@ -134,7 +134,7 @@ struct RootView: View {
     private var professionalTab: some View {
             ProfessionalCoursesView(computer: concepts, power: power, subject: $subject,
                                     practicing: $professionalPracticing, recalling: $professionalRecalling,
-                                    onStart: { began(selectedProfessionalArea) },
+                                    onStart: { beganProfessional(selectedProfessionalArea) },
                                     onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() },
                                     onEffectiveOverlayChanged: { learning, blocked in
                                         professionalEffectiveContentOverlay = learning
@@ -386,6 +386,11 @@ struct RootView: View {
     private func began(_ area: StudyArea) {
         if flow.state.activeArea == area { flow.resume() }
         else { flow.begin(area: area, mode: .standard) }
+        trackStudyVisibility()
+    }
+
+    private func beganProfessional(_ area: StudyArea) {
+        flow.enterProfessionalPractice(area: area)
         trackStudyVisibility()
     }
 

@@ -163,6 +163,19 @@ final class StudyFlowStore: ObservableObject {
         }
     }
 
+    /// Starting a professional card view after navigating between subjects is
+    /// still the same learning segment. A paused segment remains paused until
+    /// the user explicitly resumes it; a five-minute budget is never reset.
+    func enterProfessionalPractice(area: StudyArea, now: Date = Date(),
+                                   uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard area == .computer || area == .power || area == .circuit || area == .mechanics else { return }
+        if state.activeArea == nil {
+            begin(area: area, mode: .standard, now: now, uptime: uptime)
+        } else if state.activeArea != area {
+            followNavigation(to: area, now: now, uptime: uptime)
+        }
+    }
+
     /// An explicit home-screen choice, e.g. standard -> "today, just 5 minutes".
     /// Reopening an existing five-minute segment never resets its remaining
     /// time. A completed timer needs extendFiveMinutes or finish first.

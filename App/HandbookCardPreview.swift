@@ -82,7 +82,14 @@ extension EnvironmentValues {
     let expectedToken: UUID?
     let expectedRatings: Int
     let expectedState: HandbookWordState
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "paused-front", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
+    let switchTarget: HandbookWordStore?
+    let switchTargetState: HandbookWordState?
+    let switchFlow: StudyFlowStore?
+    let switchFlowState: StudyFlowState?
+    let switchSourceBytes: Data?
+    let switchTargetBytes: Data?
+    let switchFlowBytes: Data?
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "paused-front", "paused-switch", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -100,6 +107,8 @@ extension EnvironmentValues {
                      "Linked table preview requires a table-enabled subject")
         precondition(selected != "effective-import" || selectedSubject == .power, "Import picker fixture is power-only")
         precondition(selected != "table-index" || selectedSubject == .mechanics, "Optional directory fixture is mechanics-only")
+        precondition(selected != "paused-switch" || selectedSubject == .power || selectedSubject == .mechanics,
+                     "Synthetic switch fixture requires power or mechanics")
         subject = selectedSubject
         selectedCase = selected
         root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-handbook-" + rawSubject + "-" + UUID().uuidString, isDirectory: true)
@@ -198,7 +207,7 @@ extension EnvironmentValues {
                 return result
             }
             var cards = [card("synthetic-handbook-first")]
-            if ["resume", "postponed", "completed", "diagram-switch"].contains(selected) { cards.append(card("synthetic-handbook-second", second: true)) }
+            if ["resume", "postponed", "completed", "diagram-switch", "paused-switch"].contains(selected) { cards.append(card("synthetic-handbook-second", second: true)) }
             var package: [String: Any] = ["format": "xkl-handbook-cards-v1", "id": "synthetic-handbook-package", "subject": rawSubject,
                 "title": "纯合成卡组 · 不含用户资料", "revision": "synthetic-1",
                 "source": ["title": "纯合成来源", "fileName": "synthetic.pdf", "sha256": String(repeating: "b", count: 64), "pdfPageCount": archivePage, "includedPages": [sourcePage, archivePage]],
@@ -295,6 +304,14 @@ extension EnvironmentValues {
             prepared.start(now: now)
             handbookPreviewTrace("fixture-started", ["blocked": prepared.blocked, "error": prepared.error ?? "", "card": prepared.engine?.currentCard?.id ?? "nil"])
             precondition(prepared.engine?.presentation != nil, "Synthetic card must start")
+            if selected == "paused-switch" {
+                let first = prepared.engine!.presentation!.id
+                prepared.reveal(token: first, now: now)
+                prepared.rate(remembered: true, token: first, now: now)
+                let next = prepared.engine!.presentation!.id
+                prepared.reveal(token: next, now: now)
+                precondition(prepared.engine?.presentation?.revealed == true, "Synthetic old card must retain its revealed face")
+            }
             if supplemented || selected.hasPrefix("diagram-") || ["back", "table", "long", "resume", "postponed", "missing-source", "normal-back", "focus-toggle", "highlight-back", "highlight-editor"].contains(selected) {
                 prepared.reveal(token: prepared.engine!.presentation!.id, now: now)
             }
@@ -344,6 +361,30 @@ extension EnvironmentValues {
             handbookMechanics = selectedSubject == .mechanics ? prepared : HandbookWordStore(subject: .mechanics, baseDirectory: root, documentsDirectory: root)
             for other in [handbookComputer, handbookPower, handbookCircuit, handbookMechanics] where other.subject != selectedSubject {
                 precondition(other.engine == nil && !other.blocked && other.error == nil, "Other subject must have its own empty synthetic store")
+            }
+            if selected == "paused-switch" {
+                let target = selectedSubject == .power ? handbookMechanics : handbookPower
+                var targetPackage = package
+                targetPackage["subject"] = target.subject.rawValue
+                targetPackage["id"] = "synthetic-switch-target"
+                target.importData(try JSONSerialization.data(withJSONObject: targetPackage, options: [.sortedKeys]))
+                precondition(!target.blocked && target.error == nil && target.engine?.presentation == nil)
+                switchTarget = target
+                switchTargetState = target.engine!.state
+                let flow = StudyFlowStore(baseDirectory: root)
+                let area: StudyArea = selectedSubject == .power ? .power : .mechanics
+                flow.setVisible(true, now: now, uptime: 100)
+                flow.begin(area: area, mode: .fiveMinutes, now: now, uptime: 100)
+                flow.pause(now: now.addingTimeInterval(40), uptime: 140)
+                precondition(flow.state.isPaused && flow.state.elapsedSeconds == 40 && flow.state.budgetSeconds == 300)
+                switchFlow = flow
+                switchFlowState = flow.state
+                switchSourceBytes = try Data(contentsOf: root.appendingPathComponent("HandbookWordRecall/\(selectedSubject.rawValue)/current.json"))
+                switchTargetBytes = try Data(contentsOf: root.appendingPathComponent("HandbookWordRecall/\(target.subject.rawValue)/current.json"))
+                switchFlowBytes = try Data(contentsOf: root.appendingPathComponent("StudyFlow/current.json"))
+            } else {
+                switchTarget = nil; switchTargetState = nil; switchFlow = nil; switchFlowState = nil
+                switchSourceBytes = nil; switchTargetBytes = nil; switchFlowBytes = nil
             }
             let computerArchive = ConceptStore(subject: .computer, baseDirectory: root)
             let powerArchive = ConceptStore(subject: .power, baseDirectory: root)
@@ -434,11 +475,14 @@ struct HandbookCardPreview: View {
     @State private var effectiveContentOverlay = false
     @State private var effectiveBlockedOverlay = false
     @State private var systemPickerObserved = false
+    @State private var switchStartCalls = 0
+    @State private var switchSegmentEvent = false
+    @State private var switchPhase = 0
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
         _selectedSubject = State(initialValue: prepared.subject)
-        _fullScreenEnabled = State(initialValue: !["normal-front", "normal-back", "paused-front", "focus-toggle"].contains(prepared.selectedCase))
+        _fullScreenEnabled = State(initialValue: !["normal-front", "normal-back", "paused-front", "paused-switch", "focus-toggle"].contains(prepared.selectedCase))
     }
     var body: some View { finalPreviewTasks }
 
@@ -447,13 +491,19 @@ struct HandbookCardPreview: View {
             Text("合成首页，不含学习资料").tabItem { Label("今天", systemImage: "house") }.tag(5)
             ProfessionalCoursesView(computer: fixture.legacyComputer, power: fixture.legacyPower,
                                 subject: $selectedSubject, practicing: $practicing, recalling: $recalling,
+                                onStart: {
+                                    if let flow = fixture.switchFlow {
+                                        switchStartCalls += 1
+                                        flow.enterProfessionalPractice(area: selectedSubject == .power ? .power : .mechanics)
+                                    }
+                                },
                                 onEffectiveOverlayChanged: { content, blocked in
                                     effectiveContentOverlay = content; effectiveBlockedOverlay = blocked
                                 },
                                 handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower, handbookCircuit: fixture.handbookCircuit,
                                 handbookMechanics: fixture.handbookMechanics, handbookBaseDirectory: fixture.root,
-                                contentDisabled: fixture.selectedCase == "paused-front",
-                                segmentBar: AnyView(syntheticSegmentBar),
+                                contentDisabled: fixture.selectedCase == "paused-front" || (fixture.selectedCase == "paused-switch" && recalling),
+                                segmentBar: fixture.selectedCase == "paused-switch" && !recalling ? nil : AnyView(syntheticSegmentBar),
                                 fullScreenEnabled: $fullScreenEnabled)
                 .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }.tag(4)
@@ -469,7 +519,7 @@ struct HandbookCardPreview: View {
     }
 
     private var syntheticSegmentBar: some View {
-        SyntheticPreviewSegmentBar(paused: fixture.selectedCase == "paused-front", frameChanged: { frame in
+        SyntheticPreviewSegmentBar(paused: ["paused-front", "paused-switch"].contains(fixture.selectedCase), frameChanged: { frame in
             if segmentBarFrame != frame { segmentBarFrame = frame }
         }, enabledChanged: { enabled in
             if segmentBarEnabled != enabled { segmentBarEnabled = enabled }
@@ -556,8 +606,15 @@ struct HandbookCardPreview: View {
             .onChange(of: systemPickerObserved) { _, _ in reportIfReady() }
     }
 
-    private var firstPreviewTasks: some View {
+    private var previewSwitchObserved: some View {
         previewOverlayObserved
+            .onChange(of: selectedSubject) { _, _ in reportIfReady() }
+            .onChange(of: recalling) { _, _ in reportIfReady() }
+            .onChange(of: switchPhase) { _, _ in reportIfReady() }
+    }
+
+    private var firstPreviewTasks: some View {
+        previewSwitchObserved
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
@@ -569,6 +626,84 @@ struct HandbookCardPreview: View {
             .task { await runGuideHelpToggle() }
             .task { await observeSystemPicker() }
             .task { await monitorLinkedTableReadiness() }
+            .task { await runPausedSubjectSwitch() }
+    }
+
+    @MainActor private func runPausedSubjectSwitch() async {
+        guard fixture.selectedCase == "paused-switch", let target = fixture.switchTarget else { return }
+        func picker(in view: UIView) -> UISegmentedControl? {
+            if let control = view as? UISegmentedControl, control.numberOfSegments == 4,
+               (0..<control.numberOfSegments).contains(where: { control.titleForSegment(at: $0) == target.subject.shortTitle }) {
+                return control
+            }
+            for child in view.subviews { if let found = picker(in: child) { return found } }
+            return nil
+        }
+        for _ in 0..<1_200 {
+            if subjectPickerEnabled == true, studyContentEnabled == false, segmentBarEnabled == true,
+               observation?.mode == "back", validFrame(segmentBarFrame), validFrame(subjectPickerFrame),
+               !segmentBarFrame!.intersects(subjectPickerFrame!) {
+                let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+                if let control = windows.compactMap({ picker(in: $0) }).first, control.isEnabled,
+                   let index = (0..<control.numberOfSegments).first(where: { control.titleForSegment(at: $0) == target.subject.shortTitle }) {
+                    control.selectedSegmentIndex = index
+                    control.sendActions(for: .valueChanged)
+                    switchSegmentEvent = true
+                    switchPhase = 1
+                    reportIfReady()
+                    return
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+            if Task.isCancelled { return }
+        }
+        handbookPreviewTrace("paused-switch-control-not-ready", ["pickerEnabled": subjectPickerEnabled ?? false,
+            "studyEnabled": studyContentEnabled ?? true, "barEnabled": segmentBarEnabled ?? false])
+    }
+
+    private func switchBytesMatch(_ relative: String, _ expected: Data?) -> Bool {
+        guard let expected, let actual = try? Data(contentsOf: fixture.root.appendingPathComponent(relative)) else { return false }
+        return actual == expected
+    }
+
+    @MainActor private func pausedSwitchReady() -> Bool {
+        guard let target = fixture.switchTarget, let flow = fixture.switchFlow, let flowState = fixture.switchFlowState,
+              switchPhase == 1, switchSegmentEvent, selectedSubject == target.subject, !recalling, !practicing,
+              switchStartCalls == 0, fixture.store.engine?.state == fixture.expectedState,
+              fixture.store.engine?.presentation?.id == fixture.expectedToken,
+              fixture.store.engine?.presentation?.revealed == true, fixture.expectedRatings == 1,
+              target.engine?.state == fixture.switchTargetState, target.engine?.presentation == nil,
+              flow.state == flowState, flow.state.isPaused, !flow.state.needsBreak,
+              flow.state.mode == .fiveMinutes, flow.state.elapsedSeconds == 40, flow.state.budgetSeconds == 300,
+              observation?.mode == "home", !fixture.store.blocked, !target.blocked else { return false }
+        return switchBytesMatch("HandbookWordRecall/\(fixture.subject.rawValue)/current.json", fixture.switchSourceBytes) &&
+            switchBytesMatch("HandbookWordRecall/\(target.subject.rawValue)/current.json", fixture.switchTargetBytes) &&
+            switchBytesMatch("StudyFlow/current.json", fixture.switchFlowBytes)
+    }
+
+    @MainActor private func reportPausedSwitch() {
+        guard !reported, pausedSwitchReady() else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !reported, pausedSwitchReady(), let target = fixture.switchTarget, let flow = fixture.switchFlow,
+                  let raw = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--capture-id=") }),
+                  let capture = UUID(uuidString: String(raw.dropFirst("--capture-id=".count))) else { return }
+            let payload: [String: Any] = ["suite": "handbook-cards", "captureID": capture.uuidString.lowercased(),
+                "subject": fixture.subject.rawValue, "case": fixture.selectedCase, "ready": true, "syntheticOnly": true,
+                "route": "ProfessionalCoursesView", "selectedSubject": target.subject.rawValue,
+                "nativePickerEvent": switchSegmentEvent, "sourceStateAndFilesUnchanged": true,
+                "sourceFrozenAnswerPreserved": true, "sourceRatings": fixture.expectedRatings,
+                "targetStateAndFilesUnchanged": true, "targetNotStarted": true, "startCallbacks": switchStartCalls,
+                "flowStateAndFileUnchanged": true, "flowPaused": flow.state.isPaused,
+                "flowFiveMinuteBudget": flow.state.budgetSeconds ?? -1, "flowElapsed": flow.state.elapsedSeconds,
+                "destinationMode": observation?.mode ?? "missing"]
+            do {
+                let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("handbook-card-preview-ready-" + capture.uuidString.lowercased() + ".json")
+                try data.write(to: file, options: .atomic)
+                reported = true
+            } catch { print("HANDBOOK_CARD_PREVIEW_RECEIPT_FAILED \(error)") }
+        }
     }
 
     @MainActor private func monitorLinkedTableReadiness() async {
@@ -787,7 +922,7 @@ struct HandbookCardPreview: View {
             let layoutReady = !checksLayout ||
                 (validFrame(segmentBarFrame) && validFrame(subjectPickerFrame) && !segmentBarFrame!.intersects(subjectPickerFrame!))
             let expectedEnabled = fixture.selectedCase != "paused-front"
-            let controlsReady = !checksLayout || (segmentBarEnabled == true && subjectPickerEnabled == expectedEnabled && studyContentEnabled == expectedEnabled)
+            let controlsReady = !checksLayout || (segmentBarEnabled == true && subjectPickerEnabled == true && studyContentEnabled == expectedEnabled)
             return layoutReady && controlsReady && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
         case "highlight-front": return guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && observed.mode == "front" && !observed.revealed && observed.highlightSpanCount == 2 && observed.ratingCount == 0
@@ -815,6 +950,7 @@ struct HandbookCardPreview: View {
         return ["x": Double(frame.origin.x), "y": Double(frame.origin.y), "width": Double(frame.width), "height": Double(frame.height)]
     }
     @MainActor private func reportIfReady() {
+        if fixture.selectedCase == "paused-switch" { reportPausedSwitch(); return }
         traceLinkedTableReadiness()
         guard !reported, criticalReady() else { return }
         Task { @MainActor in

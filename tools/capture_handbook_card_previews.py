@@ -147,7 +147,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         if overlap:
             raise RuntimeError("Synthetic layout segment bar overlaps the professional subject picker")
         expected_enabled = case != "paused-front"
-        for key, expected in (("segmentBarEnabled", True), ("subjectPickerEnabled", expected_enabled), ("studyContentEnabled", expected_enabled)):
+        for key, expected in (("segmentBarEnabled", True), ("subjectPickerEnabled", True), ("studyContentEnabled", expected_enabled)):
             if type(value.get(key)) is not bool or value[key] != expected:
                 raise RuntimeError(f"Synthetic paused-state control mismatch: {subject}/{case} {key}")
     token = value.get("presentationID")

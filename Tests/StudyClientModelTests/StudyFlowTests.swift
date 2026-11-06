@@ -305,6 +305,62 @@ final class StudyFlowTests: XCTestCase {
     }
 
     @MainActor
+    func testProfessionalStartPreservesPausedFiveMinuteBudgetAndBreakLock() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = StudyFlowStore(baseDirectory: root)
+        store.setVisible(true, now: start, uptime: 0)
+        store.begin(area: .computer, mode: .fiveMinutes, now: start, uptime: 0)
+        store.pause(now: start.addingTimeInterval(100), uptime: 100)
+        let old = store.state
+        XCTAssertTrue(old.isPaused)
+        XCTAssertEqual(old.elapsedSeconds, 100)
+        XCTAssertEqual(old.budgetSeconds, 300)
+
+        // User starts the newly selected professional subject; this is still
+        // the existing paused segment, not a fresh unlimited standard segment.
+        store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(140), uptime: 140)
+        XCTAssertEqual(store.state.activeArea, .power)
+        XCTAssertEqual(store.state.segmentID, old.segmentID)
+        XCTAssertEqual(store.state.mode, .fiveMinutes)
+        XCTAssertEqual(store.state.elapsedSeconds, 100)
+        XCTAssertEqual(store.state.budgetSeconds, 300)
+        XCTAssertTrue(store.state.isPaused)
+        store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(150), uptime: 150)
+        XCTAssertTrue(store.state.isPaused, "Starting the card view is not an implicit resume")
+        store.tick(now: start.addingTimeInterval(200), uptime: 200)
+        XCTAssertEqual(store.state.elapsedSeconds, 100)
+
+        store.resume(now: start.addingTimeInterval(200), uptime: 200)
+        store.tick(now: start.addingTimeInterval(400), uptime: 400)
+        XCTAssertEqual(store.state.elapsedSeconds, 300)
+        XCTAssertTrue(store.state.needsBreak)
+        XCTAssertTrue(store.state.isPaused)
+        store.enterProfessionalPractice(area: .mechanics, now: start.addingTimeInterval(500), uptime: 500)
+        store.resume(now: start.addingTimeInterval(501), uptime: 501)
+        XCTAssertEqual(store.state.segmentID, old.segmentID)
+        XCTAssertEqual(store.state.budgetSeconds, 300)
+        XCTAssertEqual(store.state.elapsedSeconds, 300)
+        XCTAssertTrue(store.state.needsBreak)
+        XCTAssertTrue(store.state.isPaused)
+        XCTAssertEqual(try read(root), store.state)
+    }
+
+    @MainActor
+    func testProfessionalStartWithoutSegmentCreatesStandardSegmentOnlyForProfessionalAreas() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = StudyFlowStore(baseDirectory: root)
+        store.enterProfessionalPractice(area: .vocabulary, now: start, uptime: 0)
+        XCTAssertNil(store.state.activeArea)
+        store.enterProfessionalPractice(area: .circuit, now: start, uptime: 0)
+        XCTAssertEqual(store.state.activeArea, .circuit)
+        XCTAssertEqual(store.state.mode, .standard)
+        XCTAssertFalse(store.state.isPaused)
+        XCTAssertNil(store.state.budgetSeconds)
+    }
+
+    @MainActor
     func testNavigationWriteFailureKeepsPreviousAreaAndDurableMetadata() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

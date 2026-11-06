@@ -42,7 +42,6 @@ struct ProfessionalCoursesView: View {
             #if DEBUG
             .modifier(HandbookSubjectPickerGeometry())
             #endif
-            .disabled(contentDisabled)
             }
             HandbookCardView(subject: subject, baseDirectory: handbookBaseDirectory,
                              injectedStore: selectedHandbook,
