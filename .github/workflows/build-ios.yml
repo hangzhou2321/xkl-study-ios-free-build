@@ -66,7 +66,7 @@ jobs:
           retention-days: 1
   preview:
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content from build context
@@ -92,7 +92,10 @@ jobs:
         env:
           HANDBOOK_CARD_PREVIEW_CASES: ${{ inputs.preview_cases }}
           HANDBOOK_CARD_PREVIEW_SUBJECTS: ${{ inputs.preview_subjects }}
-        run: python3 tools/capture_handbook_card_previews.py
+          HANDBOOK_CARD_PREVIEW_TIMEOUT: '180'
+        run: |
+          python3 -m unittest discover -s tools/tests -p 'test_handbook_preview_timeout.py'
+          python3 tools/capture_handbook_card_previews.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -161,6 +161,16 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
     return value
 
 
+def read_after_timeout_diagnostic(container, receipt, capture_id, subject, case, launched_at, diagnostic):
+    """A diagnostic screenshot can take seconds while the app finishes rendering.
+
+    Accept a receipt produced during that interval only after the same complete
+    identity, freshness, learning-state and layout validation as ordinary polling.
+    """
+    diagnostic()
+    return read_receipt(container, receipt, capture_id, subject, case, launched_at)
+
+
 def validate_completed_captures(fixtures, captures):
     actual = [(item["subject"], item["case"]) for item in fixtures]
     if len(actual) != len(captures) or set(actual) != set(captures):
@@ -238,10 +248,15 @@ def main():
                                 trace = debug.read_text(encoding="utf8")
                                 (OUT / f"failure-{subject}-{case}-{retries}.json").write_text(trace, encoding="utf8")
                                 print("Native diagnostic:", trace, flush=True)
-                            try:
-                                sim("io", device, "screenshot", "--type=png", str(OUT / f"failure-{subject}-{case}-{retries}.png"))
-                            except Exception as error:
-                                print("Failure screenshot unavailable:", type(error).__name__, flush=True)
+                            def timeout_screenshot():
+                                try:
+                                    sim("io", device, "screenshot", "--type=png", str(OUT / f"failure-{subject}-{case}-{retries}.png"))
+                                except Exception as error:
+                                    print("Failure screenshot unavailable:", type(error).__name__, flush=True)
+                            ready = read_after_timeout_diagnostic(container, receipt, capture_id, subject, case, launched_at, timeout_screenshot)
+                            if ready is not None:
+                                print(f"Readiness completed during timeout diagnostics: {subject}/{case}", flush=True)
+                                break
                             if retries == 0:
                                 retries += 1
                                 try:
