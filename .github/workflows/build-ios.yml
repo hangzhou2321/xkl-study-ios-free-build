@@ -27,7 +27,7 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: professional-touch-release-power-tap-and-drag
+          name: professional-touch-release-frozen-target-power-tap-and-drag
           path: |
             build/professional-touch-uitest/*.log
             build/professional-touch-uitest/summary.json
