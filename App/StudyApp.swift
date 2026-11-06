@@ -144,10 +144,10 @@ struct RootView: View {
                                     objectiveComputer: professionalComputer, objectivePower: professionalPower,
                                     handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
                                     handbookMechanics: handbookMechanics,
+                                    contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling),
+                                    segmentBar: AnyView(segmentBar),
                                     fullScreenEnabled: handbookFullScreenBinding)
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
-                .disabled(flow.state.activeArea == selectedProfessionalArea
-                          && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
     }
@@ -174,7 +174,7 @@ struct RootView: View {
             if acceptsEffectiveTouch { effectiveTime.noteActivity() }
         })
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !handbookFullScreenActive { segmentBar }
+            if selectedTab != 4 && !handbookFullScreenActive { segmentBar }
         }
         .statusBarHidden(handbookFullScreenActive)
         .onAppear {

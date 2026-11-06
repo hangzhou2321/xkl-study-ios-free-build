@@ -53,7 +53,8 @@ struct HandbookCardPreviewState {
     var didRenderTableIndex: (Int, Int) -> Void = { _, _ in }
     var didRenderSourceNote: (String, CGFloat) -> Void = { _, _ in }
     var didRenderTableImage: (String, CGFloat) -> Void = { _, _ in }
-    var didRenderSubjectPicker: (CGRect) -> Void = { _ in }
+    var didRenderSubjectPicker: (CGRect, Bool) -> Void = { _, _ in }
+    var didRenderStudyEnabled: (Bool) -> Void = { _ in }
     var openImportPicker = false
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
@@ -81,7 +82,7 @@ extension EnvironmentValues {
     let expectedToken: UUID?
     let expectedRatings: Int
     let expectedState: HandbookWordState
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "paused-front", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -361,6 +362,33 @@ extension EnvironmentValues {
     }
 }
 
+private struct SyntheticPreviewSegmentBar: View {
+    let paused: Bool
+    let frameChanged: (CGRect) -> Void
+    let enabledChanged: (Bool) -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    init(paused: Bool, frameChanged: @escaping (CGRect) -> Void, enabledChanged: @escaping (Bool) -> Void) {
+        self.paused = paused; self.frameChanged = frameChanged; self.enabledChanged = enabledChanged
+    }
+    var body: some View {
+        HStack(spacing: 12) {
+            if paused {
+                Button("继续这一段", systemImage: "play.fill") {}
+            } else {
+                Text("随时可以暂停").font(.subheadline)
+            }
+            Spacer()
+            Text("0:00").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+            Button("暂停") {}.font(.subheadline.weight(.medium))
+        }.padding(.horizontal, 20).padding(.vertical, 10).background(.bar)
+            .background(GeometryReader { geometry in
+                Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in frameChanged(frame) }
+            })
+            .onChange(of: isEnabled, initial: true) { _, enabled in enabledChanged(enabled) }
+    }
+}
+
 struct HandbookCardPreview: View {
     @StateObject private var fixture: HandbookCardPreviewFixture
     @State private var selectedSubject: ConceptSubject
@@ -400,6 +428,9 @@ struct HandbookCardPreview: View {
     @State private var imageTop: CGFloat?
     @State private var segmentBarFrame: CGRect?
     @State private var subjectPickerFrame: CGRect?
+    @State private var segmentBarEnabled: Bool?
+    @State private var subjectPickerEnabled: Bool?
+    @State private var studyContentEnabled: Bool?
     @State private var effectiveContentOverlay = false
     @State private var effectiveBlockedOverlay = false
     @State private var systemPickerObserved = false
@@ -407,7 +438,7 @@ struct HandbookCardPreview: View {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
         _selectedSubject = State(initialValue: prepared.subject)
-        _fullScreenEnabled = State(initialValue: !["normal-front", "normal-back", "focus-toggle"].contains(prepared.selectedCase))
+        _fullScreenEnabled = State(initialValue: !["normal-front", "normal-back", "paused-front", "focus-toggle"].contains(prepared.selectedCase))
     }
     var body: some View { finalPreviewTasks }
 
@@ -421,6 +452,8 @@ struct HandbookCardPreview: View {
                                 },
                                 handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower, handbookCircuit: fixture.handbookCircuit,
                                 handbookMechanics: fixture.handbookMechanics, handbookBaseDirectory: fixture.root,
+                                contentDisabled: fixture.selectedCase == "paused-front",
+                                segmentBar: AnyView(syntheticSegmentBar),
                                 fullScreenEnabled: $fullScreenEnabled)
                 .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }.tag(4)
@@ -430,21 +463,17 @@ struct HandbookCardPreview: View {
     private var previewBars: some View {
         previewTabs
             .safeAreaInset(edge: .top, spacing: 0) {
-                if !(fullScreenEnabled && recalling) {
-                    HStack(spacing: 12) {
-                        Text("随时可以暂停").font(.subheadline)
-                        Spacer()
-                        Text("0:00").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                        Button("暂停") {}.font(.subheadline.weight(.medium))
-                    }.padding(.horizontal, 20).padding(.vertical, 10).background(.bar)
-                        .background(GeometryReader { geometry in
-                            Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
-                                if segmentBarFrame != frame { segmentBarFrame = frame }
-                            }
-                        })
-                }
+                if selectedTab != 4 && !(fullScreenEnabled && recalling) { syntheticSegmentBar }
             }
             .statusBarHidden(fullScreenEnabled && recalling)
+    }
+
+    private var syntheticSegmentBar: some View {
+        SyntheticPreviewSegmentBar(paused: fixture.selectedCase == "paused-front", frameChanged: { frame in
+            if segmentBarFrame != frame { segmentBarFrame = frame }
+        }, enabledChanged: { enabled in
+            if segmentBarEnabled != enabled { segmentBarEnabled = enabled }
+        })
     }
 
     private var cardPreviewEnvironment: HandbookCardPreviewState {
@@ -474,7 +503,11 @@ struct HandbookCardPreview: View {
         state.didRenderTableIndex = { linked, optional in tableIndexCounts = [linked, optional] }
         state.didRenderSourceNote = { tableID, bottom in if tableID == "synthetic-shared-table" { noteBottom = bottom } }
         state.didRenderTableImage = { _, top in imageTop = top }
-        state.didRenderSubjectPicker = { frame in if subjectPickerFrame != frame { subjectPickerFrame = frame } }
+        state.didRenderSubjectPicker = { frame, enabled in
+            if subjectPickerFrame != frame { subjectPickerFrame = frame }
+            if subjectPickerEnabled != enabled { subjectPickerEnabled = enabled }
+        }
+        state.didRenderStudyEnabled = { enabled in if studyContentEnabled != enabled { studyContentEnabled = enabled } }
         state.openImportPicker = fixture.selectedCase == "effective-import"
         return state
     }
@@ -509,8 +542,15 @@ struct HandbookCardPreview: View {
             .onChange(of: subjectPickerFrame) { _, _ in reportIfReady() }
     }
 
-    private var previewOverlayObserved: some View {
+    private var previewEnabledObserved: some View {
         previewGeometryObserved
+            .onChange(of: segmentBarEnabled) { _, _ in reportIfReady() }
+            .onChange(of: subjectPickerEnabled) { _, _ in reportIfReady() }
+            .onChange(of: studyContentEnabled) { _, _ in reportIfReady() }
+    }
+
+    private var previewOverlayObserved: some View {
+        previewEnabledObserved
             .onChange(of: effectiveContentOverlay) { _, _ in reportIfReady() }
             .onChange(of: effectiveBlockedOverlay) { _, _ in reportIfReady() }
             .onChange(of: systemPickerObserved) { _, _ in reportIfReady() }
@@ -722,7 +762,7 @@ struct HandbookCardPreview: View {
               engine.record.subject == fixture.subject,
               engine.presentation?.id == (fixture.selectedCase == "diagram-switch" ? diagramSwitchToken : fixture.expectedToken),
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
-              observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
+              observed.fullScreen == !["normal-front", "normal-back", "paused-front"].contains(fixture.selectedCase) else { return false }
         let expectsContent = ["related-question", "related-review", "linked-table-page", "table-index", "highlight-editor", "multi-source-pages", "lecture-only-pages"].contains(fixture.selectedCase)
         guard effectiveContentOverlay == expectsContent,
               effectiveBlockedOverlay == (fixture.selectedCase == "effective-import") else { return false }
@@ -742,9 +782,13 @@ struct HandbookCardPreview: View {
             engine.state == fixture.expectedState && observed.mode == "front" && !observed.revealed &&
             !observed.ratingEnabled && observed.ratingCount == 0
         case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
-        case "table-front", "postponed", "normal-front":
-            let layoutReady = fixture.selectedCase != "normal-front" || (validFrame(segmentBarFrame) && validFrame(subjectPickerFrame))
-            return layoutReady && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
+        case "table-front", "postponed", "normal-front", "paused-front":
+            let checksLayout = ["normal-front", "paused-front"].contains(fixture.selectedCase)
+            let layoutReady = !checksLayout ||
+                (validFrame(segmentBarFrame) && validFrame(subjectPickerFrame) && !segmentBarFrame!.intersects(subjectPickerFrame!))
+            let expectedEnabled = fixture.selectedCase != "paused-front"
+            let controlsReady = !checksLayout || (segmentBarEnabled == true && subjectPickerEnabled == expectedEnabled && studyContentEnabled == expectedEnabled)
+            return layoutReady && controlsReady && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
         case "highlight-front": return guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && observed.mode == "front" && !observed.revealed && observed.highlightSpanCount == 2 && observed.ratingCount == 0
         case "highlight-back", "highlight-editor": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.highlightSpanCount == 2 && observed.ratingCount == 0 && (fixture.selectedCase != "highlight-editor" || highlightEditorObserved)
@@ -810,6 +854,9 @@ struct HandbookCardPreview: View {
                 "segmentBarFrame": framePayload(segmentBarFrame),
                 "subjectPickerFrame": framePayload(subjectPickerFrame),
                 "segmentBarOverlapsPicker": (segmentBarFrame != nil && subjectPickerFrame != nil) ? (segmentBarFrame!.intersects(subjectPickerFrame!) as Any) : NSNull(),
+                "segmentBarEnabled": segmentBarEnabled.map { $0 as Any } ?? NSNull(),
+                "subjectPickerEnabled": subjectPickerEnabled.map { $0 as Any } ?? NSNull(),
+                "studyContentEnabled": studyContentEnabled.map { $0 as Any } ?? NSNull(),
                 "effectiveContentOverlay": effectiveContentOverlay,
                 "effectiveBlockedOverlay": effectiveBlockedOverlay,
                 "systemPickerObserved": systemPickerObserved,

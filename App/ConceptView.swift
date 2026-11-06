@@ -18,11 +18,14 @@ struct ProfessionalCoursesView: View {
     var handbookCircuit: HandbookWordStore? = nil
     var handbookMechanics: HandbookWordStore? = nil
     var handbookBaseDirectory: URL? = nil
+    var contentDisabled = false
+    var segmentBar: AnyView? = nil
     var fullScreenEnabled: Binding<Bool> = .constant(false)
 
     var body: some View {
         VStack(spacing: 0) {
             if !(recalling && fullScreenEnabled.wrappedValue) {
+                if let segmentBar { segmentBar }
                 Picker("专业课", selection: Binding(get: { subject }, set: {
                 practicing = false
                 recalling = false
@@ -39,6 +42,7 @@ struct ProfessionalCoursesView: View {
             #if DEBUG
             .modifier(HandbookSubjectPickerGeometry())
             #endif
+            .disabled(contentDisabled)
             }
             HandbookCardView(subject: subject, baseDirectory: handbookBaseDirectory,
                              injectedStore: selectedHandbook,
@@ -47,6 +51,10 @@ struct ProfessionalCoursesView: View {
                              fullScreenEnabled: fullScreenEnabled,
                              onStart: onStart, onOverlayChanged: onOverlayChanged,
                              onEffectiveOverlayChanged: onEffectiveOverlayChanged)
+                #if DEBUG
+                .modifier(HandbookStudyEnabledProbe())
+                #endif
+                .disabled(contentDisabled)
                 .id(subject.rawValue)
         }
     }
@@ -66,12 +74,22 @@ struct ProfessionalCoursesView: View {
 /// Observe the actual subject picker only in the synthetic simulator harness.
 private struct HandbookSubjectPickerGeometry: ViewModifier {
     @Environment(\.handbookCardPreview) private var preview
+    @Environment(\.isEnabled) private var isEnabled
     func body(content: Content) -> some View {
         content.background(GeometryReader { geometry in
             Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
-                preview.didRenderSubjectPicker(frame)
+                preview.didRenderSubjectPicker(frame, isEnabled)
+            }.onChange(of: isEnabled) { _, enabled in
+                preview.didRenderSubjectPicker(geometry.frame(in: .global), enabled)
             }
         })
+    }
+}
+private struct HandbookStudyEnabledProbe: ViewModifier {
+    @Environment(\.handbookCardPreview) private var preview
+    @Environment(\.isEnabled) private var isEnabled
+    func body(content: Content) -> some View {
+        content.onChange(of: isEnabled, initial: true) { _, enabled in preview.didRenderStudyEnabled(enabled) }
     }
 }
 #endif

@@ -21,7 +21,7 @@ BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power", "circuit", "mechanics")
 DEFAULT_CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
          "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
-CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import")
+CASES = DEFAULT_CASES + ("paused-front", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import")
 
 
 def capture_pairs(cases, subjects=SUBJECTS):
@@ -74,7 +74,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
-    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import") else "back")
+    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "paused-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     supplemented = case.startswith(("multi-source", "lecture-only"))
     lecture_only = case.startswith("lecture-only")
@@ -82,7 +82,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
     expected_state = {
         "route": "ProfessionalCoursesView", "selectedSubject": subject,
         "recallCueMode": mode == "front" and (subject == "power" or case in ("front", "highlight-front", "linked-table-entry", "linked-table-page")),
-        "fullScreen": case not in ("normal-front", "normal-back"), "rootTabShellFixture": True,
+        "fullScreen": case not in ("normal-front", "normal-back", "paused-front"), "rootTabShellFixture": True,
         "topicFrequencyLabel": None if subject == "mechanics" else ("宝典考点频率 ★★★★☆" if case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page") else
                                 ("宝典未单独标注" if case == "normal-front" else None)),
         "memoryGuideRendered": case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"),
@@ -132,7 +132,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         actual = value.get(key)
         if key not in value or type(actual) is not type(expected_value) or actual != expected_value:
             raise RuntimeError(f"Native receipt state mismatch: {subject}/{case} {key}")
-    if case == "normal-front":
+    if case in ("normal-front", "paused-front"):
         bar, picker = value.get("segmentBarFrame"), value.get("subjectPickerFrame")
         for frame in (bar, picker):
             if not isinstance(frame, dict) or set(frame) != {"x", "y", "width", "height"} or any(
@@ -144,6 +144,12 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
                    bar["y"] < picker["y"] + picker["height"] and picker["y"] < bar["y"] + bar["height"])
         if type(value.get("segmentBarOverlapsPicker")) is not bool or value["segmentBarOverlapsPicker"] != overlap:
             raise RuntimeError("Synthetic layout overlap receipt disagrees with its measured frames")
+        if overlap:
+            raise RuntimeError("Synthetic layout segment bar overlaps the professional subject picker")
+        expected_enabled = case != "paused-front"
+        for key, expected in (("segmentBarEnabled", True), ("subjectPickerEnabled", expected_enabled), ("studyContentEnabled", expected_enabled)):
+            if type(value.get(key)) is not bool or value[key] != expected:
+                raise RuntimeError(f"Synthetic paused-state control mismatch: {subject}/{case} {key}")
     token = value.get("presentationID")
     if "presentationID" not in value:
         raise RuntimeError("Fixture omitted its presentation token state")

@@ -851,7 +851,9 @@ private struct HandbookSharedTableView: View {
                     .accessibilityIdentifier("handbook-mechanics-source-note")
                     #if DEBUG
                     .background(GeometryReader { proxy in
-                        Color.clear.onAppear { preview.didRenderSourceNote(table.id, proxy.frame(in: .global).maxY) }
+                        Color.clear.onChange(of: proxy.frame(in: .named("handbook-shared-table")), initial: true) { _, frame in
+                            preview.didRenderSourceNote(table.id, frame.maxY)
+                        }
                     })
                     #endif
             }
@@ -881,6 +883,7 @@ private struct HandbookSharedTableView: View {
             }
         }
         #if DEBUG
+        .coordinateSpace(name: "handbook-shared-table")
         .onAppear { preview.didRenderLinkedTablePage(table.id) }
         #endif
     }
@@ -917,7 +920,9 @@ private struct HandbookSharedTableSourceImage: View {
                         .accessibilityLabel(asset.altText)
                         #if DEBUG
                         .background(GeometryReader { proxy in
-                            Color.clear.onAppear { preview.didRenderTableImage(asset.sha256, proxy.frame(in: .global).minY) }
+                            Color.clear.onChange(of: proxy.frame(in: .named("handbook-shared-table")), initial: true) { _, frame in
+                                preview.didRenderTableImage(asset.sha256, frame.minY)
+                            }
                         })
                         #endif
                     Button("放大原表") { zoomed = true }.font(.footnote).buttonStyle(.bordered)
