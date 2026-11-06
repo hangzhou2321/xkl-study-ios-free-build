@@ -21,14 +21,15 @@ BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power", "circuit", "mechanics")
 DEFAULT_CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
          "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
-CASES = DEFAULT_CASES + ("paused-front", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import")
+CASES = DEFAULT_CASES + ("paused-front", "paused-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import")
 
 
 def capture_pairs(cases, subjects=SUBJECTS):
     return tuple((subject, case) for subject in subjects for case in cases
                  if (not case.startswith("linked-table-") or subject in ("power", "mechanics"))
                  and (case != "effective-import" or subject == "power")
-                 and (case != "table-index" or subject == "mechanics"))
+                 and (case != "table-index" or subject == "mechanics")
+                 and (case != "paused-switch" or subject in ("power", "mechanics")))
 
 
 CAPTURES = capture_pairs(CASES)
@@ -59,7 +60,8 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or subject not in SUBJECTS or case not in CASES
             or (case.startswith("linked-table-") and subject not in ("power", "mechanics"))
             or (case == "effective-import" and subject != "power")
-            or (case == "table-index" and subject != "mechanics")):
+            or (case == "table-index" and subject != "mechanics")
+            or (case == "paused-switch" and subject not in ("power", "mechanics"))):
         raise RuntimeError("Invalid readiness receipt identity")
     temporary = container / "tmp"
     if temporary.resolve().parent != container or receipt.resolve().parent != temporary.resolve():
@@ -74,6 +76,30 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
+    if case == "paused-switch":
+        expected_switch = {
+            "route": "ProfessionalCoursesView",
+            "selectedSubject": "mechanics" if subject == "power" else "power",
+            "nativePickerEvent": True,
+            "sourceStateAndFilesUnchanged": True,
+            "sourceFrozenAnswerPreserved": True,
+            "sourceRatings": 1,
+            "targetStateAndFilesUnchanged": True,
+            "targetNotStarted": True,
+            "startCallbacks": 0,
+            "flowStateAndFileUnchanged": True,
+            "flowPaused": True,
+            "destinationMode": "home",
+        }
+        for key, expected_value in expected_switch.items():
+            actual = value.get(key)
+            if key not in value or type(actual) is not type(expected_value) or actual != expected_value:
+                raise RuntimeError(f"Native switch receipt state mismatch: {subject}/{case} {key}")
+        for key, expected_value in (("flowFiveMinuteBudget", 300), ("flowElapsed", 40)):
+            actual = value.get(key)
+            if type(actual) not in (int, float) or not math.isfinite(actual) or actual != expected_value:
+                raise RuntimeError(f"Native switch receipt budget mismatch: {subject}/{case} {key}")
+        return value
     mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "paused-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     supplemented = case.startswith(("multi-source", "lecture-only"))

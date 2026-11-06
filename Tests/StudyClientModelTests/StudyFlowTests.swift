@@ -317,30 +317,73 @@ final class StudyFlowTests: XCTestCase {
         XCTAssertEqual(old.elapsedSeconds, 100)
         XCTAssertEqual(old.budgetSeconds, 300)
 
-        // User starts the newly selected professional subject; this is still
-        // the existing paused segment, not a fresh unlimited standard segment.
+        // Explicitly starting another subject resumes the existing segment,
+        // not a fresh unlimited standard segment.
         store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(140), uptime: 140)
         XCTAssertEqual(store.state.activeArea, .power)
         XCTAssertEqual(store.state.segmentID, old.segmentID)
         XCTAssertEqual(store.state.mode, .fiveMinutes)
         XCTAssertEqual(store.state.elapsedSeconds, 100)
         XCTAssertEqual(store.state.budgetSeconds, 300)
-        XCTAssertTrue(store.state.isPaused)
-        store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(150), uptime: 150)
-        XCTAssertTrue(store.state.isPaused, "Starting the card view is not an implicit resume")
-        store.tick(now: start.addingTimeInterval(200), uptime: 200)
-        XCTAssertEqual(store.state.elapsedSeconds, 100)
-
-        store.resume(now: start.addingTimeInterval(200), uptime: 200)
-        store.tick(now: start.addingTimeInterval(400), uptime: 400)
+        XCTAssertFalse(store.state.isPaused)
+        store.tick(now: start.addingTimeInterval(190), uptime: 190)
+        XCTAssertEqual(store.state.elapsedSeconds, 150)
+        store.pause(now: start.addingTimeInterval(190), uptime: 190)
+        store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(220), uptime: 220)
+        XCTAssertFalse(store.state.isPaused, "Explicitly starting the same subject resumes it")
+        XCTAssertEqual(store.state.segmentID, old.segmentID)
+        XCTAssertEqual(store.state.budgetSeconds, 300)
+        store.tick(now: start.addingTimeInterval(370), uptime: 370)
         XCTAssertEqual(store.state.elapsedSeconds, 300)
         XCTAssertTrue(store.state.needsBreak)
         XCTAssertTrue(store.state.isPaused)
+        let locked = store.state
+        let lockedBytes = try Data(contentsOf: current(root))
         store.enterProfessionalPractice(area: .mechanics, now: start.addingTimeInterval(500), uptime: 500)
         store.resume(now: start.addingTimeInterval(501), uptime: 501)
+        XCTAssertEqual(store.state, locked)
+        XCTAssertEqual(try Data(contentsOf: current(root)), lockedBytes)
         XCTAssertEqual(store.state.segmentID, old.segmentID)
         XCTAssertEqual(store.state.budgetSeconds, 300)
         XCTAssertEqual(store.state.elapsedSeconds, 300)
+        XCTAssertTrue(store.state.needsBreak)
+        XCTAssertTrue(store.state.isPaused)
+        XCTAssertEqual(try read(root), store.state)
+    }
+
+    @MainActor
+    func testProfessionalStartDoesNotResumeIfChangingAreaCannotBeSaved() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = Writer()
+        let store = StudyFlowStore(baseDirectory: root, writer: writer.write)
+        store.begin(area: .computer, mode: .fiveMinutes, now: start, uptime: 0)
+        store.pause(now: start.addingTimeInterval(1), uptime: 1)
+        let before = store.state
+        let bytes = try Data(contentsOf: current(root))
+        writer.shouldFail = true
+        store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(2), uptime: 2)
+        XCTAssertNotNil(store.error)
+        XCTAssertEqual(store.state.activeArea, .computer)
+        XCTAssertEqual(store.state.segmentID, before.segmentID)
+        XCTAssertEqual(store.state.budgetSeconds, before.budgetSeconds)
+        XCTAssertTrue(store.state.isPaused)
+        XCTAssertEqual(try Data(contentsOf: current(root)), bytes)
+    }
+
+    @MainActor
+    func testProfessionalStartCannotResumeWhenDeadlineIsReachedDuringSwitch() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = StudyFlowStore(baseDirectory: root)
+        store.setVisible(true, now: start, uptime: 0)
+        store.begin(area: .computer, mode: .fiveMinutes, now: start, uptime: 0)
+        let segment = store.state.segmentID
+        store.tick(now: start.addingTimeInterval(295), uptime: 295)
+        store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(305), uptime: 305)
+        XCTAssertEqual(store.state.segmentID, segment)
+        XCTAssertEqual(store.state.elapsedSeconds, 300)
+        XCTAssertEqual(store.state.budgetSeconds, 300)
         XCTAssertTrue(store.state.needsBreak)
         XCTAssertTrue(store.state.isPaused)
         XCTAssertEqual(try read(root), store.state)

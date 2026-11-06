@@ -163,16 +163,20 @@ final class StudyFlowStore: ObservableObject {
         }
     }
 
-    /// Starting a professional card view after navigating between subjects is
-    /// still the same learning segment. A paused segment remains paused until
-    /// the user explicitly resumes it; a five-minute budget is never reset.
+    /// Explicitly starting a professional card view resumes the existing
+    /// segment. Switching subject preserves its budget and elapsed time.
     func enterProfessionalPractice(area: StudyArea, now: Date = Date(),
                                    uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard area == .computer || area == .power || area == .circuit || area == .mechanics else { return }
+        guard (area == .computer || area == .power || area == .circuit || area == .mechanics),
+              !state.needsBreak else { return }
         if state.activeArea == nil {
             begin(area: area, mode: .standard, now: now, uptime: uptime)
-        } else if state.activeArea != area {
-            followNavigation(to: area, now: now, uptime: uptime)
+        } else {
+            if state.activeArea != area {
+                followNavigation(to: area, now: now, uptime: uptime)
+                guard state.activeArea == area, !state.needsBreak else { return }
+            }
+            resume(now: now, uptime: uptime)
         }
     }
 
