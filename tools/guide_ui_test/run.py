@@ -40,8 +40,10 @@ def seed_fixture(device, source, target, env):
     subprocess.run(command, check=True, capture_output=True, text=True, env=env, timeout=180)
     deadline = time.monotonic() + 300
     root = None
+    diagnostic = {'subject': source, 'candidates': 0}
     while time.monotonic() < deadline:
         candidates = list((container / 'tmp').glob('synthetic-handbook-' + source + '-*'))
+        diagnostic['candidates'] = len(candidates)
         for candidate in candidates:
             a = candidate / 'HandbookWordRecall' / source / 'current.json'
             b = candidate / 'HandbookWordRecall' / target / 'current.json'
@@ -52,18 +54,23 @@ def seed_fixture(device, source, target, env):
                 other = json.loads(b.read_text(encoding='utf8'))
                 state = data['state']; word = state['word']; dual = state.get('dualFSRS')
                 present = ((dual.get('shown') or {}).get('presentation') or {}) if dual else (word.get('presentation') or {})
-                ratings = len(dual.get('events', [])) if dual else len(word.get('attempts', []))
+                ratings = sum(1 for event in dual.get('events', []) if event.get('kind') == 'grade') if dual else len(word.get('attempts', []))
+                diagnostic.update({'paused': flow.get('isPaused'), 'activeArea': flow.get('activeArea'),
+                                   'mode': flow.get('mode'), 'budget': flow.get('budgetSeconds'),
+                                   'elapsed': flow.get('elapsedSeconds'), 'revealed': present.get('revealed'),
+                                   'gradeCount': ratings, 'target': other.get('subject'),
+                                   'dualEventKinds': [event.get('kind') for event in dual.get('events', [])] if dual else None})
                 if (flow.get('isPaused') is True and flow.get('activeArea') == source
                         and flow.get('mode') == 'fiveMinutes' and flow.get('budgetSeconds') == 300
                         and flow.get('elapsedSeconds') == 40 and present.get('revealed') is True
                         and ratings == 1 and other.get('subject') == target):
                     root = candidate
                     break
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                diagnostic['lastReadError'] = type(error).__name__
         if root is not None: break
         time.sleep(0.25)
-    if root is None: raise RuntimeError('Synthetic paused source/target fixture did not become ready')
+    if root is None: raise RuntimeError('Synthetic paused source/target fixture did not become ready: ' + json.dumps(diagnostic))
     try: sim('terminate', device, BUNDLE)
     except subprocess.CalledProcessError: pass
     return container, root
