@@ -36,6 +36,9 @@ struct ProfessionalCoursesView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
                 .padding(.vertical, 8)
+            #if DEBUG
+            .modifier(HandbookSubjectPickerGeometry())
+            #endif
             }
             HandbookCardView(subject: subject, baseDirectory: handbookBaseDirectory,
                              injectedStore: selectedHandbook,
@@ -58,6 +61,20 @@ struct ProfessionalCoursesView: View {
         switch subject { case .computer: return computer; case .power: return power; case .circuit, .mechanics: return nil }
     }
 }
+
+#if DEBUG
+/// Observe the actual subject picker only in the synthetic simulator harness.
+private struct HandbookSubjectPickerGeometry: ViewModifier {
+    @Environment(\.handbookCardPreview) private var preview
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { geometry in
+            Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
+                preview.didRenderSubjectPicker(frame)
+            }
+        })
+    }
+}
+#endif
 
 struct ConceptView: View {
     @ObservedObject var store: ConceptStore

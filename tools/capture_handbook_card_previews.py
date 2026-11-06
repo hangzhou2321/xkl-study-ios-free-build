@@ -2,6 +2,7 @@
 """Capture production flashcard layout with only synthetic native fixtures."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -131,6 +132,18 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         actual = value.get(key)
         if key not in value or type(actual) is not type(expected_value) or actual != expected_value:
             raise RuntimeError(f"Native receipt state mismatch: {subject}/{case} {key}")
+    if case == "normal-front":
+        bar, picker = value.get("segmentBarFrame"), value.get("subjectPickerFrame")
+        for frame in (bar, picker):
+            if not isinstance(frame, dict) or set(frame) != {"x", "y", "width", "height"} or any(
+                    type(frame[k]) not in (int, float) or not math.isfinite(frame[k]) for k in frame):
+                raise RuntimeError("Synthetic layout frame missing or invalid")
+            if frame["width"] <= 0 or frame["height"] <= 0:
+                raise RuntimeError("Synthetic layout frame must have a positive size")
+        overlap = (bar["x"] < picker["x"] + picker["width"] and picker["x"] < bar["x"] + bar["width"] and
+                   bar["y"] < picker["y"] + picker["height"] and picker["y"] < bar["y"] + bar["height"])
+        if type(value.get("segmentBarOverlapsPicker")) is not bool or value["segmentBarOverlapsPicker"] != overlap:
+            raise RuntimeError("Synthetic layout overlap receipt disagrees with its measured frames")
     token = value.get("presentationID")
     if "presentationID" not in value:
         raise RuntimeError("Fixture omitted its presentation token state")

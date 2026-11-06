@@ -53,6 +53,7 @@ struct HandbookCardPreviewState {
     var didRenderTableIndex: (Int, Int) -> Void = { _, _ in }
     var didRenderSourceNote: (String, CGFloat) -> Void = { _, _ in }
     var didRenderTableImage: (String, CGFloat) -> Void = { _, _ in }
+    var didRenderSubjectPicker: (CGRect) -> Void = { _ in }
     var openImportPicker = false
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
@@ -397,6 +398,8 @@ struct HandbookCardPreview: View {
     @State private var tableIndexCounts: [Int] = []
     @State private var noteBottom: CGFloat?
     @State private var imageTop: CGFloat?
+    @State private var segmentBarFrame: CGRect?
+    @State private var subjectPickerFrame: CGRect?
     @State private var effectiveContentOverlay = false
     @State private var effectiveBlockedOverlay = false
     @State private var systemPickerObserved = false
@@ -422,13 +425,24 @@ struct HandbookCardPreview: View {
         }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if !(fullScreenEnabled && recalling) {
-                    Text("合成学习段栏 · 非真实学习记录").font(.footnote).padding(8)
+                    HStack(spacing: 12) {
+                        Text("随时可以暂停").font(.subheadline)
+                        Spacer()
+                        Text("0:00").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                        Button("暂停") {}.font(.subheadline.weight(.medium))
+                    }.padding(.horizontal, 20).padding(.vertical, 10).background(.bar)
+                        .background(GeometryReader { geometry in
+                            Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
+                                if segmentBarFrame != frame { segmentBarFrame = frame }
+                            }
+                        })
                 }
             }
             .statusBarHidden(fullScreenEnabled && recalling)
             .environment(\.handbookCardPreview, .init(didRender: {
                 observation = $0
                 handbookPreviewTrace("observed", ["mode": $0.mode, "fullScreen": $0.fullScreen, "card": $0.cardID ?? "nil", "ratings": $0.ratingCount])
+                reportIfReady()
             }, scrollTarget: diagramScrollTarget, sourceSheet: sourceSheet, sourceSelectionID: sourceSelectionID, didRenderSources: {
                 sourceObservation = $0
             }, diagramExpanded: diagramRequested, didRenderDiagram: { cardID, expanded in
@@ -451,6 +465,8 @@ struct HandbookCardPreview: View {
                 if tableID == "synthetic-shared-table" { noteBottom = bottom }
             }, didRenderTableImage: { _, top in
                 imageTop = top
+            }, didRenderSubjectPicker: { frame in
+                if subjectPickerFrame != frame { subjectPickerFrame = frame }
             }, openImportPicker: fixture.selectedCase == "effective-import"))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
@@ -464,6 +480,8 @@ struct HandbookCardPreview: View {
             .onChange(of: tableIndexCounts) { _, _ in reportIfReady() }
             .onChange(of: noteBottom) { _, _ in reportIfReady() }
             .onChange(of: imageTop) { _, _ in reportIfReady() }
+            .onChange(of: segmentBarFrame) { _, _ in reportIfReady() }
+            .onChange(of: subjectPickerFrame) { _, _ in reportIfReady() }
             .onChange(of: effectiveContentOverlay) { _, _ in reportIfReady() }
             .onChange(of: effectiveBlockedOverlay) { _, _ in reportIfReady() }
             .onChange(of: systemPickerObserved) { _, _ in reportIfReady() }
@@ -473,6 +491,50 @@ struct HandbookCardPreview: View {
             .task { await runDiagramSwitch() }
             .task { await runGuideHelpToggle() }
             .task { await observeSystemPicker() }
+            .task { await monitorLinkedTableReadiness() }
+    }
+    @MainActor private func monitorLinkedTableReadiness() async {
+        guard fixture.subject == .mechanics && fixture.selectedCase == "linked-table-page" else { return }
+        for _ in 0..<45 {
+            try? await Task.sleep(for: .seconds(2))
+            if Task.isCancelled || reported { return }
+            traceLinkedTableReadiness()
+        }
+    }
+    @MainActor private func traceLinkedTableReadiness() {
+        guard !reported, fixture.subject == .mechanics, fixture.selectedCase == "linked-table-page" else { return }
+        let engine = fixture.store.engine
+        var fields: [String: Any] = [
+            "ready": criticalReady(), "selectedTab": selectedTab, "subjectMatches": selectedSubject == fixture.subject,
+            "recalling": recalling, "practicing": practicing, "storeBlocked": fixture.store.blocked,
+            "storeError": fixture.store.error ?? "", "enginePresent": engine != nil, "observationPresent": observation != nil
+        ]
+        let engineFields: [String: Any] = [
+            "cardMatches": observation?.cardID == fixture.expectedCardID,
+            "ratingsMatch": observation?.ratingCount == fixture.expectedRatings,
+            "actualRatingsMatch": engine.map { $0.stats(on: Date()).remembered + $0.stats(on: Date()).forgotten == fixture.expectedRatings } ?? false,
+            "packageSubjectMatches": engine?.package.subject == fixture.subject,
+            "recordSubjectMatches": engine?.record.subject == fixture.subject,
+            "presentationMatches": engine?.presentation?.id == fixture.expectedToken,
+            "allCardsSynthetic": engine?.package.cards.allSatisfy { $0.id.hasPrefix("synthetic-handbook-") } ?? false,
+            "stateMatches": engine?.state == fixture.expectedState
+        ]
+        let visualFields: [String: Any] = [
+            "observedMode": observation?.mode ?? "missing", "observedFullScreen": observation?.fullScreen ?? false,
+            "observedRevealed": observation?.revealed ?? false, "observedRatingEnabled": observation?.ratingEnabled ?? false,
+            "effectiveContentOverlay": effectiveContentOverlay, "effectiveBlockedOverlay": effectiveBlockedOverlay,
+            "guideObservedCardID": guideObservedCardID ?? "missing", "guideObservedRevealed": guideObservedRevealed,
+            "linkedTablePageID": linkedTablePageID ?? "missing",
+            "noteBottom": diagnosticNumber(noteBottom), "imageTop": diagnosticNumber(imageTop),
+            "noteBeforeImage": noteBottom != nil && imageTop != nil && noteBottom! <= imageTop!
+        ]
+        fields.merge(engineFields) { _, new in new }
+        fields.merge(visualFields) { _, new in new }
+        handbookPreviewTrace("critical-readiness", fields)
+    }
+    private func diagnosticNumber(_ number: CGFloat?) -> Any {
+        guard let number else { return NSNull() }
+        return number.isFinite ? Double(number) as Any : "non-finite"
     }
     @MainActor private func observeSystemPicker() async {
         guard fixture.selectedCase == "effective-import" else { return }
@@ -642,7 +704,9 @@ struct HandbookCardPreview: View {
             engine.state == fixture.expectedState && observed.mode == "front" && !observed.revealed &&
             !observed.ratingEnabled && observed.ratingCount == 0
         case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
-        case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
+        case "table-front", "postponed", "normal-front":
+            let layoutReady = fixture.selectedCase != "normal-front" || (validFrame(segmentBarFrame) && validFrame(subjectPickerFrame))
+            return layoutReady && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
         case "highlight-front": return guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && observed.mode == "front" && !observed.revealed && observed.highlightSpanCount == 2 && observed.ratingCount == 0
         case "highlight-back", "highlight-editor": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && observed.highlightSpanCount == 2 && observed.ratingCount == 0 && (fixture.selectedCase != "highlight-editor" || highlightEditorObserved)
@@ -660,7 +724,16 @@ struct HandbookCardPreview: View {
         default: return false
         }
     }
+    private func validFrame(_ frame: CGRect?) -> Bool {
+        guard let frame else { return false }
+        return frame.origin.x.isFinite && frame.origin.y.isFinite && frame.width.isFinite && frame.height.isFinite && frame.width > 0 && frame.height > 0
+    }
+    private func framePayload(_ frame: CGRect?) -> Any {
+        guard let frame, validFrame(frame) else { return NSNull() }
+        return ["x": Double(frame.origin.x), "y": Double(frame.origin.y), "width": Double(frame.width), "height": Double(frame.height)]
+    }
     @MainActor private func reportIfReady() {
+        traceLinkedTableReadiness()
         guard !reported, criticalReady() else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
@@ -696,6 +769,9 @@ struct HandbookCardPreview: View {
                 "tableIndexRendered": fixture.selectedCase == "table-index" && tableIndexCounts == [1, 1],
                 "noteBeforeImage": fixture.subject == .mechanics && fixture.selectedCase == "linked-table-page" && noteBottom != nil && imageTop != nil && noteBottom! <= imageTop!,
                 "optionalDirectoryExcludedFromCards": fixture.selectedCase == "table-index" && fixture.store.package?.sharedTables?.last?.cardIDs.isEmpty == true,
+                "segmentBarFrame": framePayload(segmentBarFrame),
+                "subjectPickerFrame": framePayload(subjectPickerFrame),
+                "segmentBarOverlapsPicker": (segmentBarFrame != nil && subjectPickerFrame != nil) ? (segmentBarFrame!.intersects(subjectPickerFrame!) as Any) : NSNull(),
                 "effectiveContentOverlay": effectiveContentOverlay,
                 "effectiveBlockedOverlay": effectiveBlockedOverlay,
                 "systemPickerObserved": systemPickerObserved,
