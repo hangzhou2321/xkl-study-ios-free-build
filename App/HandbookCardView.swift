@@ -248,7 +248,7 @@ struct HandbookCardView: View {
         } message: { Text(store.error ?? "") }
     }
 
-    private var activityContent: some View {
+    private var startupContent: some View {
         practiceSheetContent
         .task {
             recommendedStagedFile = store.recommendedStagedFile()
@@ -267,15 +267,27 @@ struct HandbookCardView: View {
             reportPreview()
             #endif
         }
+    }
+
+    private var studyBindingContent: some View {
+        startupContent
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
         .onChange(of: fullScreenEnabled) { _, _ in reportPreviewIfEnabled() }
+    }
+
+    private var overlayObservationContent: some View {
+        studyBindingContent
         .onChange(of: hasAnyOverlay) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
             onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
         }
+    }
+
+    private var activityContent: some View {
+        overlayObservationContent
         .onChange(of: scenePhase) { _, phase in
             displayDate = Date()
             if phase == .active { recommendedStagedFile = store.recommendedStagedFile() }
@@ -292,8 +304,8 @@ struct HandbookCardView: View {
         }
     }
 
-    private var previewMonitoredContent: some View {
-        #if DEBUG
+    #if DEBUG
+    private var previewLayoutContent: some View {
         activityContent
         .background {
             GeometryReader { geometry in
@@ -306,18 +318,30 @@ struct HandbookCardView: View {
                 }
             }.allowsHitTesting(false)
         }
+    }
+
+    private var previewStateContent: some View {
+        previewLayoutContent
         .onChange(of: store.engine?.presentation) { _, _ in reportPreview() }
-        .onChange(of: store.engine.map { $0.stats(on: displayDate).remembered + $0.stats(on: displayDate).forgotten }) { _, _ in reportPreview() }
+        .onChange(of: previewRatingCount) { _, _ in reportPreview() }
         .onChange(of: store.blocked) { _, _ in reportPreview() }
+    }
+
+    private var previewMonitoredContent: some View {
+        previewStateContent
         .onChange(of: preview.sourceSheet) { _, route in
             showingSources = route == "card"
             showingAllSources = route == "all"
         }
         .onChange(of: showingSources || showingAllSources) { _, _ in reportPreview() }
-        #else
-        activityContent
-        #endif
     }
+
+    private var previewRatingCount: Int? {
+        store.engine.map { $0.stats(on: displayDate).remembered + $0.stats(on: displayDate).forgotten }
+    }
+    #else
+    private var previewMonitoredContent: some View { activityContent }
+    #endif
 
     private var hasAnyOverlay: Bool {
         importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex ||
