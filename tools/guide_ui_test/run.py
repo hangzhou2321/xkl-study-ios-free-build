@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,10 @@ BUNDLE = 'local.xkl.study'
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def tree_hashes(root):
+    return {p.relative_to(root).as_posix(): sha(p) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
 
 
 def run_logged(cmd, path, env, timeout):
@@ -125,6 +130,7 @@ def main():
     launch_env, workaround = simulator_webkit_workaround(info)
     env = dict(os.environ)
     env['GUIDE_TEST_DYLD_FALLBACK'] = launch_env.get('SIMCTL_CHILD_DYLD_FALLBACK_LIBRARY_PATH', '')
+    env['GUIDE_TEST_CONFIGURATION'] = 'Release'
     template_path = ROOT / 'tools/guide_ui_test/GuideDisclosureUITests.swift'
     template = template_path.read_text(encoding='utf8')
     marker = '"__GUIDE_TEST_FALLBACK_PLACEHOLDER__"'
@@ -135,34 +141,60 @@ def main():
     report = {'status': 'INCOMPLETE', 'syntheticOnly': True, 'physicalDeviceTested': False,
               'source': source, 'target': target, 'device': name, 'runtime': info.get('version'), 'cases': {},
               'simulatorWorkaround': workaround, 'productionRootUnmodified': True,
+              'testedAppConfiguration': 'Release', 'seedAppConfiguration': 'Debug',
               'selectionMethod': 'XCUITest coordinate tap and drag on actual segmented control',
               'limitations': ['Destination synthetic card package has no existing presentation.',
                               'Simulator test does not demonstrate physical iPhone behavior.']}
     try:
         sim('boot', device); sim('bootstatus', device, '-b')
         subprocess.run(['open', '-a', 'Simulator', '--args', '-CurrentDeviceUDID', device], check=True)
-        base = ['xcodebuild', '-project', 'XKLStudy.xcodeproj', '-scheme', 'XKLStudy', '-configuration', 'Debug',
+        base = ['xcodebuild', '-project', 'XKLStudy.xcodeproj', '-scheme', 'XKLStudy',
                 '-destination', 'platform=iOS Simulator,id=' + device, '-derivedDataPath', str(OUT / 'DerivedData'),
                 'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=',
                 'ARCHS=' + platform.machine(), 'ONLY_ACTIVE_ARCH=YES']
-        run_logged(base + ['build-for-testing'], OUT / 'build.log', env, 1200)
-        app = OUT / 'DerivedData/Build/Products/Debug-iphonesimulator/XKLStudy.app'
-        if not app.is_dir(): raise RuntimeError('Simulator app not built')
+        debug_base = base + ['-configuration', 'Debug']
+        release_base = base + ['-configuration', 'Release']
+        run_logged(debug_base + ['build'], OUT / 'build-debug-seed.log', env, 1200)
+        run_logged(release_base + ['build-for-testing'], OUT / 'build-release-test.log', env, 1200)
+        debug_app = OUT / 'DerivedData/Build/Products/Debug-iphonesimulator/XKLStudy.app'
+        release_app = OUT / 'DerivedData/Build/Products/Release-iphonesimulator/XKLStudy.app'
+        if not debug_app.is_dir() or not release_app.is_dir(): raise RuntimeError('Both Debug seed and Release app are required')
+        release_binary_hash = sha(release_app / 'XKLStudy')
+        report['releaseBinarySHA256'] = release_binary_hash
         for gesture in ('tap', 'drag'):
             case_dir = OUT / gesture; case_dir.mkdir(exist_ok=True)
             result = case_dir / 'ProfessionalTouch.xcresult'
             case_report = {'status': 'INCOMPLETE', 'gesture': gesture}
             report['cases'][gesture] = case_report
             try:
-                sim('install', device, str(app))
+                sim('install', device, str(debug_app))
                 container, baseline = seed(device, source, target, {**env, **launch_env})
+                support = container / 'Library' / 'Application Support'
+                seeded_hashes = tree_hashes(support)
+                if not seeded_hashes: raise RuntimeError('Synthetic app support is empty before Release install')
+                sim('install', device, str(release_app))
+                release_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
+                if release_container != container or tree_hashes(support) != seeded_hashes:
+                    raise RuntimeError('Release over-install did not preserve the complete synthetic support sandbox')
+                installed_app = Path(sim('get_app_container', device, BUNDLE, 'app').strip()).resolve()
+                if sha(installed_app / 'XKLStudy') != release_binary_hash:
+                    raise RuntimeError('Installed executable is not the compiled Release binary')
+                case_report['syntheticSupportFilesPreservedAcrossInstall'] = len(seeded_hashes)
+                case_report['releaseBinarySHA256'] = release_binary_hash
                 case = ('testPowerToMechanics' if source == 'power' else 'testMechanicsToPower') + gesture.capitalize()
-                run_logged(base + ['test-without-building', '-resultBundlePath', str(result), '-parallel-testing-enabled', 'NO',
+                test_log = case_dir / 'xcodebuild-test.log'
+                run_logged(release_base + ['test-without-building', '-resultBundlePath', str(result), '-parallel-testing-enabled', 'NO',
                                    '-only-testing:GuideDisclosureUITests/GuideDisclosureUITests/' + case,
                                    '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180',
-                                   '-maximum-test-execution-time-allowance', '240'], case_dir / 'xcodebuild-test.log', env, 1200)
+                                   '-maximum-test-execution-time-allowance', '240'], test_log, env, 1200)
+                log_text = test_log.read_text(encoding='utf8', errors='replace')
+                if not re.search(r'Test Case[^\n]*\b' + re.escape(case) + r'\b[^\n]*passed', log_text):
+                    raise RuntimeError('Selected real-coordinate XCTest did not explicitly pass')
                 actual_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
                 if actual_container != container: raise RuntimeError('App container changed during UI test')
+                final_app = Path(sim('get_app_container', device, BUNDLE, 'app').strip()).resolve()
+                if sha(final_app / 'XKLStudy') != release_binary_hash:
+                    raise RuntimeError('XCTest replaced the Release app with a different executable')
                 case_report['records'] = check_records(container, source, target, baseline)
                 case_report['status'] = 'PASS'
             except Exception as error:
@@ -184,7 +216,7 @@ def main():
                 print('SYNTHETIC_TOUCH_CASE', gesture, case_report['status'], flush=True)
         if not all(case.get('status') == 'PASS' for case in report['cases'].values()):
             raise RuntimeError('At least one real-coordinate case failed or was incomplete')
-        report['status'] = 'PASS_PRODUCTION_ROOT_REAL_COORDINATE_TAP_AND_DRAG'
+        report['status'] = 'PASS_RELEASE_PRODUCTION_ROOT_REAL_COORDINATE_TAP_AND_DRAG'
     except Exception as error:
         report['failure'] = type(error).__name__ + ': ' + str(error)
         raise

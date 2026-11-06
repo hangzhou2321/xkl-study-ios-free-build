@@ -114,10 +114,13 @@ def main():
     reference = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="XKLStudy.app" BlueprintName="XKLStudy" ReferencedContainer="container:XKLStudy.xcodeproj"/>'
     test_reference = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{test_target}" BuildableName="GuideDisclosureUITests.xctest" BlueprintName="GuideDisclosureUITests" ReferencedContainer="container:XKLStudy.xcodeproj"/>'
     fallback = escape(os.environ.get("GUIDE_TEST_DYLD_FALLBACK", ""), {'"': '&quot;'})
+    test_configuration = os.environ.get("GUIDE_TEST_CONFIGURATION", "Debug")
+    if test_configuration not in ("Debug", "Release"):
+        raise ValueError("Unexpected UI test build configuration")
     (scheme_dir / "XKLStudy.xcscheme").write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="1600" version="1.3">
  <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">{reference}</BuildActionEntry><BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">{test_reference}</BuildActionEntry></BuildActionEntries></BuildAction>
- <TestAction buildConfiguration="Debug" shouldUseLaunchSchemeArgsEnv="NO"><Testables><TestableReference skipped="NO">{test_reference}</TestableReference></Testables><EnvironmentVariables><EnvironmentVariable key="GUIDE_TEST_DYLD_FALLBACK" value="{fallback}" isEnabled="YES"/></EnvironmentVariables></TestAction>
+ <TestAction buildConfiguration="{test_configuration}" shouldUseLaunchSchemeArgsEnv="NO"><Testables><TestableReference skipped="NO">{test_reference}</TestableReference></Testables><EnvironmentVariables><EnvironmentVariable key="GUIDE_TEST_DYLD_FALLBACK" value="{fallback}" isEnabled="YES"/></EnvironmentVariables></TestAction>
  <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0">{reference}</BuildableProductRunnable></LaunchAction>
  <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0">{reference}</BuildableProductRunnable></ProfileAction>
  <AnalyzeAction buildConfiguration="Debug"/>

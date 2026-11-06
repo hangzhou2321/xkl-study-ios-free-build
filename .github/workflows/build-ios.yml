@@ -1,4 +1,4 @@
-name: Professional paused subject physical touch diagnostics
+name: Professional paused subject Release physical touch diagnostics
 on:
   workflow_dispatch:
 permissions:
@@ -6,7 +6,7 @@ permissions:
 jobs:
   professional-touch:
     runs-on: macos-15-intel
-    timeout-minutes: 55
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private resources
@@ -20,14 +20,14 @@ jobs:
           assert not any(Path(p).exists() for p in ('Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json'))
           assert not list(Path('.').rglob('guide.json'))
           PY
-      - name: Exercise production root with real coordinate gesture
+      - name: Exercise Release production root with real coordinate gesture
         env:
           TOUCH_TEST_SOURCE: power
         run: python3 tools/guide_ui_test/run.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: professional-touch-power-tap-and-drag
+          name: professional-touch-release-power-tap-and-drag
           path: |
             build/professional-touch-uitest/*.log
             build/professional-touch-uitest/summary.json
