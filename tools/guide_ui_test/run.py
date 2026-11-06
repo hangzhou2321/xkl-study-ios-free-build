@@ -30,7 +30,7 @@ def run_logged(cmd, path, env, timeout):
         raise RuntimeError('Command failed; inspect ' + path.name)
 
 
-def seed(device, source, target, env):
+def seed_fixture(device, source, target, env):
     container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
     capture = str(uuid.uuid4())
     command = ['xcrun', 'simctl', 'launch', '--terminate-running-process', device, BUNDLE,
@@ -66,12 +66,22 @@ def seed(device, source, target, env):
     if root is None: raise RuntimeError('Synthetic paused source/target fixture did not become ready')
     try: sim('terminate', device, BUNDLE)
     except subprocess.CalledProcessError: pass
+    return container, root
+
+
+def seed(device, source, target, env):
+    container, source_root = seed_fixture(device, source, target, env)
+    target_container, target_root = seed_fixture(device, target, source, env)
+    if target_container != container: raise RuntimeError('Simulator container changed while creating fixtures')
     support = container / 'Library' / 'Application Support'
     support.mkdir(parents=True, exist_ok=True)
-    for folder in ('HandbookWordRecall', 'StudyFlow'):
-        destination = support / folder
-        if destination.exists(): raise RuntimeError('Fresh simulator unexpectedly contains existing ' + folder)
-        shutil.copytree(root / folder, destination)
+    words = support / 'HandbookWordRecall'
+    if words.exists() or (support / 'StudyFlow').exists():
+        raise RuntimeError('Fresh simulator unexpectedly contains study state')
+    words.mkdir()
+    shutil.copytree(source_root / 'HandbookWordRecall' / source, words / source)
+    shutil.copytree(target_root / 'HandbookWordRecall' / target, words / target)
+    shutil.copytree(source_root / 'StudyFlow', support / 'StudyFlow')
     source_file = support / 'HandbookWordRecall' / source / 'current.json'
     target_file = support / 'HandbookWordRecall' / target / 'current.json'
     flow_file = support / 'StudyFlow' / 'current.json'
@@ -79,6 +89,10 @@ def seed(device, source, target, env):
                 'target': json.loads(target_file.read_text(encoding='utf8')),
                 'flow': json.loads(flow_file.read_text(encoding='utf8')),
                 'sourceSHA256': sha(source_file), 'targetSHA256': sha(target_file)}
+    target_state = baseline['target']['state']; dual = target_state.get('dualFSRS')
+    target_presentation = ((dual.get('shown') or {}).get('presentation') or {}) if dual else (target_state['word'].get('presentation') or {})
+    if target_presentation.get('revealed') is not True:
+        raise RuntimeError('Target synthetic card did not contain a frozen revealed presentation')
     return container, baseline
 
 
@@ -136,8 +150,8 @@ def main():
               'source': source, 'target': target, 'device': name, 'runtime': info.get('version'), 'cases': {},
               'simulatorWorkaround': workaround, 'productionRootUnmodified': True,
               'selectionMethod': 'XCUITest coordinate tap and drag on actual segmented control',
-              'limitations': ['Destination synthetic card package has no existing presentation.',
-                              'Simulator test does not demonstrate physical iPhone behavior.']}
+              'targetHadFrozenPresentationBeforeSwitch': True,
+              'limitations': ['Simulator test does not demonstrate physical iPhone behavior.']}
     try:
         sim('boot', device); sim('bootstatus', device, '-b')
         subprocess.run(['open', '-a', 'Simulator', '--args', '-CurrentDeviceUDID', device], check=True)
