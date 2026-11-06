@@ -11,6 +11,7 @@ struct ProfessionalQuestionView: View {
     private let startInPractice: Bool
     private let onStart: () -> Void
     private let onOverlayChanged: (Bool) -> Void
+    private let onEffectiveOverlayChanged: (Bool, Bool) -> Void
     @Binding private var practicing: Bool
     @Binding private var recalling: Bool
     @StateObject private var store: ProfessionalQuestionStore
@@ -19,6 +20,7 @@ struct ProfessionalQuestionView: View {
     @State private var exporting = false
     @State private var showingAnswer = false
     @State private var showingLegacy = false
+    @State private var legacyBlockingOverlay = false
     @State private var showingArchive = false
     @State private var assetOverlay = false
     @State private var availableAssets = Set<String>()
@@ -37,10 +39,12 @@ struct ProfessionalQuestionView: View {
          legacyStore: ConceptStore? = nil,
          practicing: Binding<Bool> = .constant(false), recalling: Binding<Bool> = .constant(false),
          startInPractice: Bool = false, onStart: @escaping () -> Void = {},
-         onOverlayChanged: @escaping (Bool) -> Void = { _ in }) {
+         onOverlayChanged: @escaping (Bool) -> Void = { _ in },
+         onEffectiveOverlayChanged: @escaping (Bool, Bool) -> Void = { _, _ in }) {
         self.subject = subject; self.baseDirectory = baseDirectory
         self.legacyStore = legacyStore; self.startInPractice = startInPractice
         self.onStart = onStart; self.onOverlayChanged = onOverlayChanged
+        self.onEffectiveOverlayChanged = onEffectiveOverlayChanged
         _practicing = practicing; _recalling = recalling
         _studying = State(initialValue: startInPractice || practicing.wrappedValue)
         _store = StateObject(wrappedValue: injectedStore ?? ProfessionalQuestionStore(subject: subject, baseDirectory: baseDirectory))
@@ -157,7 +161,8 @@ struct ProfessionalQuestionView: View {
                         Button("关闭") { showingLegacy = false }
                     }.padding()
                     ConceptView(store: legacyStore, practicing: $practicing, recalling: $recalling,
-                                onStart: onStart, onOverlayChanged: { _ in })
+                                onStart: onStart, onOverlayChanged: { _ in },
+                                onEffectiveOverlayChanged: { _, blocked in legacyBlockingOverlay = blocked })
                 }
             }
         }
@@ -199,12 +204,19 @@ struct ProfessionalQuestionView: View {
         .onChange(of: importing || exporting || showingAnswer || showingLegacy || showingArchive || assetOverlay || store.error != nil) { _, value in
             onOverlayChanged(value)
         }
+        .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
+            onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
+        }
         .onChange(of: scenePhase) { _, phase in
             displayDate = Date()
             if phase == .active, studying, store.engine?.presentation != nil { store.start() }
         }
         .onReceive(clock) { value in displayDate = value }
-        .onDisappear { onOverlayChanged(false) }
+        .onDisappear {
+            onOverlayChanged(false)
+            let mask = effectiveOverlayMask
+            onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
+        }
         #if DEBUG
         .background {
             GeometryReader { geometry in
@@ -225,6 +237,12 @@ struct ProfessionalQuestionView: View {
         .onChange(of: failedAssets) { _, _ in reportPreviewAfterLayout() }
         .onChange(of: store.blocked) { _, _ in reportPreviewAfterLayout() }
         #endif
+    }
+
+    private var effectiveOverlayMask: Int {
+        let study = showingAnswer || showingLegacy || showingArchive || assetOverlay
+        let blocking = importing || exporting || store.error != nil || (showingLegacy && legacyBlockingOverlay)
+        return (study ? 1 : 0) | (blocking ? 2 : 0)
     }
 
     private var assetRoot: URL {

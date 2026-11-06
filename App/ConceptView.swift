@@ -10,6 +10,7 @@ struct ProfessionalCoursesView: View {
     @Binding var recalling: Bool
     var onStart: () -> Void = {}
     var onOverlayChanged: (Bool) -> Void = { _ in }
+    var onEffectiveOverlayChanged: (Bool, Bool) -> Void = { _, _ in }
     var objectiveComputer: ProfessionalQuestionStore? = nil
     var objectivePower: ProfessionalQuestionStore? = nil
     var handbookComputer: HandbookWordStore? = nil
@@ -38,7 +39,8 @@ struct ProfessionalCoursesView: View {
                              originalQuestionStore: selectedQuestions,
                              legacyStore: selectedLegacy, studying: $recalling,
                              fullScreenEnabled: fullScreenEnabled,
-                             onStart: onStart, onOverlayChanged: onOverlayChanged)
+                             onStart: onStart, onOverlayChanged: onOverlayChanged,
+                             onEffectiveOverlayChanged: onEffectiveOverlayChanged)
                 .id(subject.rawValue)
         }
     }
@@ -61,6 +63,7 @@ struct ConceptView: View {
     @Binding var recalling: Bool
     var onStart: () -> Void = {}
     var onOverlayChanged: (Bool) -> Void = { _ in }
+    var onEffectiveOverlayChanged: (Bool, Bool) -> Void = { _, _ in }
     @State private var exporting = false
     @State private var document: ConceptExportDocument?
     @State private var actionLocked = false
@@ -154,7 +157,20 @@ struct ConceptView: View {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
         .onChange(of: importing || exporting || guidancePresented || store.error != nil) { _, shown in onOverlayChanged(shown) }
-        .onDisappear { onOverlayChanged(guidancePresented) }
+        .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
+            onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
+        }
+        .onDisappear {
+            onOverlayChanged(guidancePresented)
+            let mask = effectiveOverlayMask
+            onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
+        }
+    }
+
+    private var effectiveOverlayMask: Int {
+        let study = guidancePresented
+        let blocking = importing || exporting || store.error != nil
+        return (study ? 1 : 0) | (blocking ? 2 : 0)
     }
 
     @ViewBuilder private func legacyPracticeControls(_ engine:ConceptEngine)->some View {

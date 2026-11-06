@@ -9,12 +9,15 @@ var modelExcludes = ["StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift"
     "Info.plist", "Assets.xcassets", "ExamStore.swift", "ExamView.swift", "ConceptStore.swift", "ConceptView.swift",
     "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift", "MathExperienceStore.swift", "MathExperienceView.swift", "MathRichTextView.swift", "MathRenderer", "ProfessionalStudyPlanView.swift", "ProfessionalRecallStore.swift", "ProfessionalRecallView.swift", "KnowledgeLearningStore.swift", "KnowledgeLearningView.swift"]
 modelExcludes += ["HandbookWordStore.swift", "HandbookCardStore.swift", "HandbookHighlightStore.swift", "HandbookHighlightView.swift", "HandbookCardView.swift", "HandbookCardPreview.swift", "KnowledgeExposureLedger.swift", "ProfessionalQuestionStore.swift", "ProfessionalQuestionView.swift", "ProfessionalQuestionPreview.swift"]
+modelExcludes += ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift", "EffectiveStudyTimeView.swift", "EffectiveStudyTimePreview.swift", "StudyActivityObserver.swift"]
 #if os(macOS)
 // Exercise real import/persistence against temporary directories on the build host.
 modelSources += ["HandbookCardStore.swift", "HandbookWordStore.swift", "HandbookHighlightStore.swift"]
 modelExcludes.removeAll { ["HandbookCardStore.swift", "HandbookWordStore.swift", "HandbookHighlightStore.swift"].contains($0) }
 modelSources += ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift", "MathExperienceStore.swift", "ProfessionalRecallStore.swift", "KnowledgeLearningStore.swift", "KnowledgeExposureLedger.swift", "ProfessionalQuestionStore.swift"]
 modelExcludes.removeAll { ["ConceptStore.swift", "DurableFile.swift", "StudyFlow.swift", "RecallStore.swift", "MathStore.swift", "MathExperienceStore.swift", "ProfessionalRecallStore.swift", "KnowledgeLearningStore.swift", "KnowledgeExposureLedger.swift", "ProfessionalQuestionStore.swift"].contains($0) }
+modelSources += ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift"]
+modelExcludes.removeAll { ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift"].contains($0) }
 #endif
 
 let package = Package(

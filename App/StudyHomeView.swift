@@ -13,6 +13,7 @@ struct StudyHomeView: View {
     @ObservedObject var handbookPower: HandbookWordStore
     @ObservedObject var handbookCircuit: HandbookWordStore
     @ObservedObject var flow: StudyFlowStore
+    @ObservedObject var effectiveTime: EffectiveStudyTimeStore
     var launch: (StudyArea, StudySegmentMode) -> Void
     @State private var selectedArea: StudyArea = .vocabulary
 
@@ -39,7 +40,7 @@ struct StudyHomeView: View {
                                 .font(.subheadline).foregroundStyle(.secondary)
                         }
                         if flow.state.activeArea == selectedArea, flow.state.segmentID != nil {
-                            Text("上次这一段已学 \(max(0, Int(flow.state.elapsedSeconds)) / 60) 分 \(max(0, Int(flow.state.elapsedSeconds)) % 60) 秒")
+                            Text("上次前台学习段（旧口径）\(max(0, Int(flow.state.elapsedSeconds)) / 60) 分 \(max(0, Int(flow.state.elapsedSeconds)) % 60) 秒")
                                 .font(.subheadline).foregroundStyle(.secondary)
                         }
                         Button {
@@ -54,12 +55,17 @@ struct StudyHomeView: View {
                             Label("今天先学 5 分钟", systemImage: "timer")
                                 .frame(maxWidth: .infinity, minHeight: 42)
                         }.buttonStyle(.bordered).disabled(!available(selectedArea))
-                        Text("到点提醒休息，可以停，也可以再学 5 分钟。计时只计算前台练习时间。")
+                        Text("5 分钟提醒仍按原前台学习段计时；下方另列按操作统计的有效时间。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .padding(20)
                     .background(Color(uiColor: .secondarySystemGroupedBackground),
                                 in: RoundedRectangle(cornerRadius: 20))
+
+                    EffectiveStudyTimeSummary(store: effectiveTime)
+                        .padding(20)
+                        .background(Color(uiColor: .secondarySystemGroupedBackground),
+                                    in: RoundedRectangle(cornerRadius: 20))
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("保留原来的学习节奏").font(.headline)

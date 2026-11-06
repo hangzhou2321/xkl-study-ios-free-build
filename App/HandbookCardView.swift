@@ -11,6 +11,7 @@ struct HandbookCardView: View {
     private let legacyStore: ConceptStore?
     private let onStart: () -> Void
     private let onOverlayChanged: (Bool) -> Void
+    private let onEffectiveOverlayChanged: (Bool, Bool) -> Void
     private let startInStudy: Bool
     @Binding private var externalStudying: Bool
     @Binding private var fullScreenEnabled: Bool
@@ -26,6 +27,7 @@ struct HandbookCardView: View {
     @State private var showingAllSources = false
     @State private var showingTableIndex = false
     @State private var showingOldQuestions = false
+    @State private var oldQuestionBlockingOverlay = false
     @State private var highlightTarget: HandbookHighlightTarget?
     @State private var outlineHighlightTarget: HandbookHighlightTarget?
     @State private var relatedQuestionTarget: HandbookCard?
@@ -46,10 +48,12 @@ struct HandbookCardView: View {
          originalQuestionStore: ProfessionalQuestionStore? = nil, legacyStore: ConceptStore? = nil,
          studying: Binding<Bool> = .constant(false), startInStudy: Bool = false,
          fullScreenEnabled: Binding<Bool> = .constant(false),
-         onStart: @escaping () -> Void = {}, onOverlayChanged: @escaping (Bool) -> Void = { _ in }) {
+         onStart: @escaping () -> Void = {}, onOverlayChanged: @escaping (Bool) -> Void = { _ in },
+         onEffectiveOverlayChanged: @escaping (Bool, Bool) -> Void = { _, _ in }) {
         self.subject = subject; self.baseDirectory = baseDirectory
         self.originalQuestionStore = originalQuestionStore; self.legacyStore = legacyStore
         self.onStart = onStart; self.onOverlayChanged = onOverlayChanged
+        self.onEffectiveOverlayChanged = onEffectiveOverlayChanged
         self.startInStudy = startInStudy
         _externalStudying = studying
         _fullScreenEnabled = fullScreenEnabled
@@ -201,7 +205,8 @@ struct HandbookCardView: View {
                         Button("关闭") { showingOldQuestions = false }
                     }.padding()
                     ProfessionalQuestionView(subject: subject, injectedStore: originalQuestionStore,
-                                             legacyStore: legacyStore, onOverlayChanged: { _ in })
+                                             legacyStore: legacyStore, onOverlayChanged: { _ in },
+                                             onEffectiveOverlayChanged: { _, blocked in oldQuestionBlockingOverlay = blocked })
                 }
             }
         }
@@ -236,6 +241,7 @@ struct HandbookCardView: View {
                !engine.package.questions(for: card).isEmpty { relatedQuestionTarget = card }
             if preview.openLinkedTable, subject == .power, let engine = store.engine,
                let card = engine.currentCard, handbookHasTables(card, package: engine.package) { tableTarget = card }
+            if preview.openImportPicker { importing = true }
             reportPreview()
             #endif
         }
@@ -245,13 +251,23 @@ struct HandbookCardView: View {
         .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex || showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil || store.error != nil) { _, value in
             onOverlayChanged(value)
         }
+        .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
+            onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
+        }
         .onChange(of: scenePhase) { _, phase in
             displayDate = Date()
             if phase == .active { recommendedStagedFile = store.recommendedStagedFile() }
             if phase == .active, studying, store.engine?.presentation != nil { store.start() }
         }
         .onReceive(clock) { date in displayDate = date }
-        .onDisappear { onOverlayChanged(false) }
+        .onDisappear {
+            onOverlayChanged(false)
+            // A picker or full-screen learning cover may hide its host. Preserve
+            // that presentation's classification until it closes; the root
+            // clears it on a real departure from the professional tab/subject.
+            let mask = effectiveOverlayMask
+            onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
+        }
         #if DEBUG
         .background {
             GeometryReader { geometry in
@@ -278,6 +294,15 @@ struct HandbookCardView: View {
     private var sourceRoot: URL {
         (baseDirectory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
             .appendingPathComponent("HandbookSources", isDirectory: true)
+    }
+    /// Study sheets continue the professional activity. Pickers and errors pause it.
+    private var effectiveOverlayMask: Int {
+        let study = showingOutline || showingSources || showingAllSources || showingTableIndex || showingOldQuestions ||
+            highlightTarget != nil || outlineHighlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil
+        let blocking = importing || exporting || store.error != nil || (showingOldQuestions && oldQuestionBlockingOverlay) ||
+            ((highlightTarget != nil || outlineHighlightTarget != nil) && highlightStore.blocked) ||
+            (relatedQuestionTarget != nil && relatedQuestionStore.blocked)
+        return (study ? 1 : 0) | (blocking ? 2 : 0)
     }
     private var fullScreenActive: Bool { studying && fullScreenEnabled }
     private var fullScreenBar: some View {

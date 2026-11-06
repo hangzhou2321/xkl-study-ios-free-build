@@ -8,6 +8,7 @@ struct MathExperienceView: View {
     @ObservedObject var store: MathExperienceStore
     @ObservedObject var legacy: MathStore
     var isVisible: Bool = true
+    var onEffectiveVisibilityChanged: (Bool) -> Void = { _ in }
     var previewCase: String? = nil
     var previewFont: Double? = nil
     @AppStorage("math.experience.fontSize") private var storedFontSize = 26.0
@@ -74,11 +75,16 @@ struct MathExperienceView: View {
                 MathPreviewTrace.phase("experience.configure-return")
                 #endif
                 syncVisibility()
+                reportEffectiveVisibility()
                 #if DEBUG
                 MathPreviewTrace.phase("experience.outer-appear-return")
                 #endif
             }
-            .onChange(of: isVisible) { _, _ in syncVisibility() }
+            .onChange(of: isVisible) { _, _ in syncVisibility(); reportEffectiveVisibility() }
+            .onChange(of: inCourse) { _, _ in reportEffectiveVisibility() }
+            .onChange(of: card?.id) { _, _ in reportEffectiveVisibility() }
+            .onChange(of: store.engine?.current?.id) { _, _ in reportEffectiveVisibility() }
+            .onChange(of: store.error) { _, _ in reportEffectiveVisibility() }
             .onChange(of: fontSize) { _, value in if previewCase == nil { storedFontSize = value } }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { pauseCurrent() }
@@ -270,6 +276,13 @@ struct MathExperienceView: View {
     #endif
     private func pauseCurrent() { if let id = store.engine?.current?.id { store.pause(sessionID: id) } }
     private func resumeCurrent() { if let id = store.engine?.current?.id { store.resume(sessionID: id) } }
+    private func reportEffectiveVisibility() {
+        let cardVisible = card.flatMap { selected in store.guide?.cards.first { $0.id == selected.id } } != nil
+        onEffectiveVisibilityChanged(EffectiveStudyScreen.mathContentIsVisible(
+            tabVisible: isVisible, courseOverview: inCourse,
+            questionAvailable: store.engine?.currentQuestion != nil, guideAvailable: store.guide != nil,
+            knowledgeCardVisible: cardVisible, blocked: store.error != nil))
+    }
     private func syncVisibility() {
         guard store.engine?.current != nil else { return }
         if isVisible && !inCourse && scenePhase == .active { resumeCurrent() } else { pauseCurrent() }

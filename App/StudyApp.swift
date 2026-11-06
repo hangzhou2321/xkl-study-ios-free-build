@@ -8,7 +8,9 @@ import StudyCore
 struct StudyApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--handbook-card-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--effective-time-preview") {
+                EffectiveStudyTimePreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--handbook-card-preview") {
                 HandbookCardPreview()
             } else if ProcessInfo.processInfo.arguments.contains("--professional-question-preview") {
                 ProfessionalQuestionPreview()
@@ -72,6 +74,7 @@ struct RootView: View {
     @StateObject private var handbookCircuit = HandbookWordStore(subject: .circuit)
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
+    @StateObject private var effectiveTime = EffectiveStudyTimeStore()
     @State private var importing = false
     @State private var selectedTab = 5
     @State private var examPracticing = false
@@ -80,6 +83,10 @@ struct RootView: View {
     @AppStorage("handbookFullScreenEnabled") private var handbookFullScreenEnabled = true
     @State private var examOverlay = false
     @State private var professionalOverlay = false
+    @State private var professionalEffectiveContentOverlay = false
+    @State private var professionalEffectiveBlockedOverlay = false
+    @State private var mathEffectiveVisible = false
+    @State private var visibleEffectiveArea: EffectiveStudyArea?
     @State private var observedCalendarDay: Date?
     @State private var subject: ConceptSubject = .computer
     @Environment(\.scenePhase) private var scenePhase
@@ -90,7 +97,7 @@ struct RootView: View {
             StudyHomeView(store: store, exams: exams, computer: concepts, power: power,
                           professionalComputer: professionalComputer, professionalPower: professionalPower,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
-                          flow: flow, launch: launch)
+                          flow: flow, effectiveTime: effectiveTime, launch: launch)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
             StudyView(store: store, importing: $importing, onStart: { began(.vocabulary) })
@@ -106,6 +113,11 @@ struct RootView: View {
                                     practicing: $professionalPracticing, recalling: $professionalRecalling,
                                     onStart: { began(selectedProfessionalArea) },
                                     onOverlayChanged: { professionalOverlay = $0; trackStudyVisibility() },
+                                    onEffectiveOverlayChanged: { learning, blocked in
+                                        professionalEffectiveContentOverlay = learning
+                                        professionalEffectiveBlockedOverlay = blocked
+                                        syncEffectiveVisibility()
+                                    },
                                     objectiveComputer: professionalComputer, objectivePower: professionalPower,
                                     handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
                                     fullScreenEnabled: handbookFullScreenBinding)
@@ -114,13 +126,20 @@ struct RootView: View {
                           && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
-            MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6)
+            MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
+                               onEffectiveVisibilityChanged: { visible in
+                                   mathEffectiveVisible = visible
+                                   syncEffectiveVisibility()
+                               })
                 .tabItem { Label("数学", systemImage: "function") }
                 .tag(6)
-            RecordsView(store: store, importing: $importing)
+            RecordsView(store: store, importing: $importing, effectiveTime: effectiveTime)
                 .tabItem { Label("记录", systemImage: "chart.bar.doc.horizontal") }
                 .tag(2)
         }
+        .background(StudyActivityObserver {
+            if acceptsEffectiveTouch { effectiveTime.noteActivity() }
+        })
         .safeAreaInset(edge: .top, spacing: 0) {
             if !handbookFullScreenActive { segmentBar }
         }
@@ -130,22 +149,40 @@ struct RootView: View {
             trackStudyVisibility()
             syncExamPolicy()
         }
-        .onChange(of: selectedTab) { _, _ in trackStudyVisibility() }
+        .onChange(of: selectedTab) { _, _ in
+            professionalEffectiveContentOverlay = false
+            professionalEffectiveBlockedOverlay = false
+            trackStudyVisibility()
+        }
         .onChange(of: importing) { _, _ in trackStudyVisibility() }
         .onChange(of: examPracticing) { _, _ in trackStudyVisibility() }
         .onChange(of: professionalPracticing) { _, _ in trackStudyVisibility() }
         .onChange(of: professionalRecalling) { _, _ in trackStudyVisibility() }
-        .onChange(of: subject) { _, _ in trackStudyVisibility() }
+        .onChange(of: subject) { _, _ in
+            professionalEffectiveContentOverlay = false
+            professionalEffectiveBlockedOverlay = false
+            trackStudyVisibility()
+        }
         .onChange(of: currentPracticeArea) { _, _ in trackStudyVisibility() }
+        .onChange(of: flow.state.isPaused) { _, _ in syncEffectiveVisibility() }
+        .onChange(of: flow.state.needsBreak) { _, _ in syncEffectiveVisibility() }
+        .onChange(of: store.error) { _, _ in syncEffectiveVisibility() }
+        .onChange(of: mathExperience.error) { _, _ in syncEffectiveVisibility() }
         .onReceive(clock) { _ in
             if scenePhase == .active { refreshCalendars() }
             trackStudyVisibility()
+            effectiveTime.tick()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
             refreshCalendars(force: true)
         }
         .onChange(of: store.analysis?.conservativeEnabled) { _, _ in syncExamPolicy() }
         .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                // Clear a recent touch even when the previous visible area was nil.
+                visibleEffectiveArea = nil
+                effectiveTime.setVisibleArea(nil)
+            }
             trackStudyVisibility()
             if phase == .active {
                 refreshCalendars(force: true)
@@ -201,6 +238,58 @@ struct RootView: View {
         flow.setVisible(visible)
         store.setStudyScreenVisible(scenePhase == .active && selectedTab == 0 && !importing
             && !flow.state.isPaused && !flow.state.needsBreak)
+        syncEffectiveVisibility()
+    }
+
+    /// Track actual learning content independently from the existing optional
+    /// five-minute segment and the English scheduling/timing journal.
+    private var effectiveScreen: EffectiveStudyScreen {
+        var screen = EffectiveStudyScreen()
+        screen.foreground = scenePhase == .active
+        screen.globalBlocked = importing || flow.state.needsBreak
+        switch selectedTab {
+        case 0: screen.tab = .vocabulary
+        case 2: screen.tab = .records
+        case 3: screen.tab = .publicQuestions
+        case 4: screen.tab = .professional
+        case 5: screen.tab = .home
+        case 6: screen.tab = .math
+        default: screen.tab = .other
+        }
+        screen.vocabularyVisible = store.sessionStarted && store.currentWord != nil
+        screen.vocabularyPaused = flow.state.activeArea == .vocabulary && flow.state.isPaused
+        screen.vocabularyBlocked = store.error != nil
+        screen.publicVisible = examPracticing && (exams.currentQuestion != nil || exams.isShowingResult)
+        screen.publicPaused = flow.state.activeArea == .publicQuestions && flow.state.isPaused
+        screen.publicBlocked = examOverlay
+        screen.professionalArea = effectiveProfessionalArea
+        screen.professionalLearningOverlay = professionalEffectiveContentOverlay
+        screen.professionalBlocked = professionalEffectiveBlockedOverlay
+        screen.professionalPaused = flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused
+        if professionalRecalling {
+            let handbook: HandbookWordStore
+            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit }
+            screen.professionalVisible = handbook.engine?.presentation != nil
+        } else if professionalPracticing, subject != .circuit {
+            let selected = subject == .computer ? professionalComputer : professionalPower
+            screen.professionalVisible = selected.engine?.presentation != nil
+        }
+        screen.mathVisible = mathEffectiveVisible
+        screen.mathBlocked = mathExperience.error != nil
+        return screen
+    }
+
+    private var effectiveProfessionalArea: EffectiveStudyArea {
+        switch subject { case .computer: return .computer; case .power: return .power; case .circuit: return .circuit }
+    }
+
+    private var acceptsEffectiveTouch: Bool { effectiveScreen.acceptsInteraction }
+
+    private func syncEffectiveVisibility() {
+        let next = effectiveScreen.area
+        guard next != visibleEffectiveArea else { return }
+        visibleEffectiveArea = next
+        effectiveTime.setVisibleArea(next)
     }
     private func syncExamPolicy() {
         exams.setPolicy(conservative: store.analysis?.conservativeEnabled ?? true)
@@ -680,17 +769,34 @@ struct RecordsDocument: FileDocument {
 struct RecordsView: View {
     @ObservedObject var store: StudyStore
     @Binding var importing: Bool
+    @ObservedObject var effectiveTime: EffectiveStudyTimeStore
     @State private var exporting = false
     @State private var exportDocument: RecordsDocument?
     @State private var exportName = "背词记录"
     @State private var exportType: UTType = .json
     @State private var temporaryExport: URL?
     @State private var showingSync = false
+    @State private var effectiveExportActive = false
+    @State private var effectiveExportError: String?
     @AppStorage("studyHapticsEnabled") private var hapticsEnabled = true
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    EffectiveStudyTimeSummary(store: effectiveTime, allowDateSelection: true)
+                    Button("导出有效学习时间", systemImage: "square.and.arrow.up") {
+                        do {
+                            exportDocument = RecordsDocument(data: try effectiveTime.exportData())
+                            exportName = "有效学习时间"
+                            exportType = .json
+                            effectiveExportActive = true
+                            exporting = true
+                        } catch { effectiveExportError = error.localizedDescription }
+                    }.disabled(effectiveTime.blocked)
+                    Text("单独导出各科有效时间，不修改单词档案或已有学习记录。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("偏好") {
                     Toggle("轻微震动反馈", isOn: $hapticsEnabled)
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
@@ -712,11 +818,11 @@ struct RecordsView: View {
                     }
                     Text("一个只按每日首答更新，另一个读取全部真实评分；两者用同一批延迟首答比较。只隔午夜、撤销重答或提前看过答案的记录不计入评分。Brier 越小表示这些样本上预测误差越小，不代表已证明更省时。")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("真实经过时间与前台学习时间分别记录。退后台、其他标签页不计学习用时；长时间思考照常保留。时间记录从本次升级开始，旧记录不补造时间。")
+                    Text("单词原有的真实经过时间和前台时间采用旧口径，与新的 1 分钟无操作暂停规则不同；原记录继续保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("学习记录") {
-                    LabeledContent("本版累计前台学习",value:String(format:"%.1f 分钟",(store.timing?.latestPoint?.foregroundMs ?? 0)/60_000))
+                    LabeledContent("单词前台时间（旧口径）",value:String(format:"%.1f 分钟",(store.timing?.latestPoint?.foregroundMs ?? 0)/60_000))
                     LabeledContent("词库", value: "25,644 词")
                     LabeledContent("累计事件", value: "\(store.info.log_records) 条")
                     LabeledContent("归档日志",value:"\(store.history?.volumes.count ?? 0) 卷")
@@ -759,9 +865,19 @@ struct RecordsView: View {
             }
             .fileExporter(isPresented: $exporting, document: exportDocument, contentType: exportType,
                           defaultFilename: "\(exportName)-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))") { result in
-                if case .failure(let error) = result { store.error = error.localizedDescription }
+                if case .failure(let error) = result {
+                    if effectiveExportActive { effectiveExportError = error.localizedDescription }
+                    else { store.error = error.localizedDescription }
+                }
+                effectiveExportActive = false
                 if let temporaryExport { try? FileManager.default.removeItem(at:temporaryExport);self.temporaryExport=nil }
             }
+            .alert("有效学习时间", isPresented: Binding(
+                get: { effectiveExportError != nil },
+                set: { if !$0 { effectiveExportError = nil } }
+            )) {
+                Button("知道了", role: .cancel) { effectiveExportError = nil }
+            } message: { Text(effectiveExportError ?? "") }
         }
     }
 }

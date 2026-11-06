@@ -20,13 +20,13 @@ BUNDLE = "local.xkl.study"
 SUBJECTS = ("computer", "power", "circuit")
 DEFAULT_CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
          "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
-CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page")
+CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "effective-import")
 
 
 def capture_pairs(cases):
     # Shared lecture tables belong only to the power package.
     return tuple((subject, case) for subject in SUBJECTS for case in cases
-                 if not case.startswith("linked-table-") or subject == "power")
+                 if (not case.startswith("linked-table-") and case != "effective-import") or subject == "power")
 
 
 CAPTURES = capture_pairs(CASES)
@@ -46,7 +46,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
     expected = container / "tmp" / f"handbook-card-preview-ready-{capture_id}.json"
     if (str(uuid.UUID(capture_id)) != capture_id or receipt != expected
             or subject not in SUBJECTS or case not in CASES
-            or (case.startswith("linked-table-") and subject != "power")):
+            or ((case.startswith("linked-table-") or case == "effective-import") and subject != "power")):
         raise RuntimeError("Invalid readiness receipt identity")
     temporary = container / "tmp"
     if temporary.resolve().parent != container or receipt.resolve().parent != temporary.resolve():
@@ -61,7 +61,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
-    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page") else "back")
+    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page", "effective-import") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     supplemented = case.startswith(("multi-source", "lecture-only"))
     lecture_only = case.startswith("lecture-only")
@@ -81,6 +81,9 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "linkedTablePreservedRecord": case in ("linked-table-entry", "linked-table-page"),
         "linkedTableColumnCount": 5 if case in ("linked-table-entry", "linked-table-page") else 0,
         "linkedTableBlankCell": case in ("linked-table-entry", "linked-table-page"),
+        "effectiveContentOverlay": case in ("related-question", "related-review", "linked-table-page", "highlight-editor", "multi-source-pages", "lecture-only-pages"),
+        "effectiveBlockedOverlay": case == "effective-import",
+        "systemPickerObserved": case == "effective-import",
         "memoryGuideHelpPreservedRecord": case == "front",
         "focusTogglePreservedRecord": case == "focus-toggle", "semicolonFormatting": True,
         "diagramExpanded": case in ("diagram-branch", "diagram-flow"),

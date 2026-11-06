@@ -2,6 +2,7 @@
 import Foundation
 import SwiftUI
 import StudyCore
+import UIKit
 
 private func handbookPreviewTrace(_ stage: String, _ extra: [String: Any] = [:]) {
     guard let raw = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--capture-id=") }),
@@ -48,6 +49,7 @@ struct HandbookCardPreviewState {
     var openLinkedTable = false
     var didRenderLinkedTableEntry: (String) -> Void = { _ in }
     var didRenderLinkedTablePage: (String) -> Void = { _ in }
+    var openImportPicker = false
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -73,7 +75,7 @@ extension EnvironmentValues {
     let expectedToken: UUID?
     let expectedRatings: Int
     let expectedState: HandbookWordState
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "effective-import"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -87,8 +89,8 @@ extension EnvironmentValues {
         guard let selectedSubject = ConceptSubject(rawValue: rawSubject) else {
             preconditionFailure("Unknown synthetic handbook subject")
         }
-        precondition(!selected.hasPrefix("linked-table-") || selectedSubject == .power,
-                     "Linked table previews are power-only")
+        precondition((!selected.hasPrefix("linked-table-") && selected != "effective-import") || selectedSubject == .power,
+                     "Linked table and import previews are power-only")
         subject = selectedSubject
         selectedCase = selected
         root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-handbook-" + rawSubject + "-" + UUID().uuidString, isDirectory: true)
@@ -353,6 +355,9 @@ struct HandbookCardPreview: View {
     @State private var relatedQuestionObserved = false
     @State private var linkedTableEntryCardID: String?
     @State private var linkedTablePageID: String?
+    @State private var effectiveContentOverlay = false
+    @State private var effectiveBlockedOverlay = false
+    @State private var systemPickerObserved = false
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -364,6 +369,9 @@ struct HandbookCardPreview: View {
             Text("合成首页，不含学习资料").tabItem { Label("今天", systemImage: "house") }.tag(5)
             ProfessionalCoursesView(computer: fixture.legacyComputer, power: fixture.legacyPower,
                                 subject: $selectedSubject, practicing: $practicing, recalling: $recalling,
+                                onEffectiveOverlayChanged: { content, blocked in
+                                    effectiveContentOverlay = content; effectiveBlockedOverlay = blocked
+                                },
                                 handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower, handbookCircuit: fixture.handbookCircuit,
                                 fullScreenEnabled: $fullScreenEnabled)
                 .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
@@ -394,7 +402,7 @@ struct HandbookCardPreview: View {
                 linkedTableEntryCardID = cardID
             }, didRenderLinkedTablePage: { tableID in
                 linkedTablePageID = tableID
-            }))
+            }, openImportPicker: fixture.selectedCase == "effective-import"))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
             .onChange(of: sourceObservation) { _, _ in reportIfReady() }
@@ -404,11 +412,32 @@ struct HandbookCardPreview: View {
             .onChange(of: relatedQuestionObserved) { _, _ in reportIfReady() }
             .onChange(of: linkedTableEntryCardID) { _, _ in reportIfReady() }
             .onChange(of: linkedTablePageID) { _, _ in reportIfReady() }
+            .onChange(of: effectiveContentOverlay) { _, _ in reportIfReady() }
+            .onChange(of: effectiveBlockedOverlay) { _, _ in reportIfReady() }
+            .onChange(of: systemPickerObserved) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
             .task { await runDiagramSwitch() }
             .task { await runGuideHelpToggle() }
+            .task { await observeSystemPicker() }
+    }
+    @MainActor private func observeSystemPicker() async {
+        guard fixture.selectedCase == "effective-import" else { return }
+        func containsPicker(_ controller: UIViewController?) -> Bool {
+            guard let controller else { return false }
+            if controller is UIDocumentPickerViewController || String(reflecting: type(of: controller)).contains("DocumentPicker") { return true }
+            if containsPicker(controller.presentedViewController) { return true }
+            return controller.children.contains { containsPicker($0) }
+        }
+        for _ in 0..<800 {
+            let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+            if windows.contains(where: { containsPicker($0.rootViewController) }) {
+                systemPickerObserved = true; reportIfReady(); return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        handbookPreviewTrace("system-picker-not-observed")
     }
     @MainActor private func waitForFocus(_ value: Bool) async {
         for _ in 0..<200 {
@@ -542,6 +571,9 @@ struct HandbookCardPreview: View {
               engine.presentation?.id == (fixture.selectedCase == "diagram-switch" ? diagramSwitchToken : fixture.expectedToken),
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
+        let expectsContent = ["related-question", "related-review", "linked-table-page", "highlight-editor", "multi-source-pages", "lecture-only-pages"].contains(fixture.selectedCase)
+        guard effectiveContentOverlay == expectsContent,
+              effectiveBlockedOverlay == (fixture.selectedCase == "effective-import") else { return false }
         switch fixture.selectedCase {
         case "related-question", "related-review": return relatedQuestionObserved && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0
         case "linked-table-entry", "linked-table-page":
@@ -549,6 +581,9 @@ struct HandbookCardPreview: View {
                 observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0 &&
                 guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed &&
                 (fixture.selectedCase == "linked-table-entry" ? linkedTableEntryCardID == "synthetic-handbook-first" : linkedTablePageID == "synthetic-shared-table")
+        case "effective-import": return fixture.subject == .power && systemPickerObserved &&
+            engine.state == fixture.expectedState && observed.mode == "front" && !observed.revealed &&
+            !observed.ratingEnabled && observed.ratingCount == 0
         case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
         case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
@@ -601,6 +636,9 @@ struct HandbookCardPreview: View {
                 "linkedTablePreservedRecord": fixture.selectedCase.hasPrefix("linked-table-") && fixture.store.engine?.state == fixture.expectedState,
                 "linkedTableColumnCount": fixture.selectedCase.hasPrefix("linked-table-") ? (fixture.store.package?.sharedTables?.first?.columns.count ?? 0) : 0,
                 "linkedTableBlankCell": fixture.selectedCase.hasPrefix("linked-table-") && fixture.store.package?.sharedTables?.first?.rows.contains(where: { $0.contains("") }) == true,
+                "effectiveContentOverlay": effectiveContentOverlay,
+                "effectiveBlockedOverlay": effectiveBlockedOverlay,
+                "systemPickerObserved": systemPickerObserved,
                 "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.state == guideRecord,
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,

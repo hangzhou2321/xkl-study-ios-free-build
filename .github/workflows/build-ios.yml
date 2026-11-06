@@ -94,3 +94,25 @@ jobs:
           path: build/handbook-card-previews/
           if-no-files-found: error
           retention-days: 3
+  effective-time-preview:
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private content from build context
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = {'.pdf', '.xklflashcards', '.xklqbank', '.xklquestions', '.xklcontent', '.xklcourse', '.xklmath', '.xklmathguide', '.xklguide', '.xklconcepts'}
+          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in forbidden]
+          assert not any(Path(p).exists() for p in ('Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json'))
+          PY
+      - name: Capture synthetic effective-time previews
+        run: python3 tools/capture_effective_time_preview.py
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: effective-time-native-simulator-previews
+          path: build/effective-time-previews/
+          if-no-files-found: error
+          retention-days: 3
