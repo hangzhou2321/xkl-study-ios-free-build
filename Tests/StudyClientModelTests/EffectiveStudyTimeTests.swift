@@ -1,4 +1,5 @@
 #if canImport(Combine)
+import Combine
 import Foundation
 import XCTest
 @testable import StudyClientModel
@@ -15,6 +16,24 @@ final class EffectiveStudyTimeTests: XCTestCase {
         var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!; return c
     }
     private func current(_ root: URL) -> URL { root.appendingPathComponent("EffectiveStudyTime/current.json") }
+
+    @MainActor func testTouchesOutsideLearningDoNotRepublishAnUnchangedPausedTimer() async throws {
+        let dir = try root(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = EffectiveStudyTimeStore(baseDirectory: dir, calendar: utcCalendar())
+        var changes = 0
+        let observer = store.objectWillChange.sink { changes += 1 }
+        store.noteActivity(now: start, uptime: 100)
+        store.noteActivity(now: start.addingTimeInterval(0.1), uptime: 100.1)
+        store.tick(now: start.addingTimeInterval(1), uptime: 101)
+        XCTAssertEqual(changes, 0, "Navigation touches must not republish an unchanged inactive timer")
+        XCTAssertFalse(store.isCounting)
+        store.setVisibleArea(.computer, now: start.addingTimeInterval(2), uptime: 102)
+        store.noteActivity(now: start.addingTimeInterval(2), uptime: 102)
+        store.tick(now: start.addingTimeInterval(12), uptime: 112)
+        XCTAssertTrue(store.isCounting)
+        XCTAssertEqual(store.seconds(for: .computer, on: start), 10, accuracy: 0.0001)
+        withExtendedLifetime(observer) {}
+    }
 
     @MainActor func testIdleIsCappedAtSixtySecondsAndInteractionResumes() async throws {
         let dir = try root(); defer { try? FileManager.default.removeItem(at: dir) }

@@ -228,7 +228,7 @@ final class EffectiveStudyTimeStore: ObservableObject {
     @discardableResult private func advance(now: Date, uptime: TimeInterval) -> Bool {
         guard let area = visibleArea, let anchor = anchorUptime,
               let startDate = anchorDate, let lastTouch = lastTouchUptime else {
-            isCounting = false
+            if isCounting { isCounting = false }
             return true
         }
         let deadline = lastTouch + Self.idleLimit

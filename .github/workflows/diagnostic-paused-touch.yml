@@ -1,0 +1,78 @@
+name: Diagnostic targeted tests and unsigned iOS Release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic-release:
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private content from build context
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = {'.pdf', '.xklcontent', '.xklquestions', '.xklflashcards', '.xklqbank',
+                       '.xklconcepts', '.xklcourse', '.xklmath', '.xklmathguide', '.xklguide',
+                       '.p12', '.pfx', '.p8', '.pem', '.key', '.mobileprovision'}
+          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in forbidden]
+          assert not any(Path(p).exists() for p in ('Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json'))
+          assert not list(Path('.').rglob('guide.json'))
+          assert not list(Path('.').rglob('*math-guide*.json'))
+          PY
+      - name: Run targeted real model tests
+        run: |
+          set -euo pipefail
+          echo 'DIAGNOSTIC ONLY: selected model tests; the full suite and device acceptance remain separate.'
+          mkdir -p build/targeted-tests
+          for suite in StudyFlowTests EffectiveStudyTimeTests EffectiveStudyScreenTests; do
+            swift test --jobs 2 --filter "$suite" 2>&1 | tee "build/targeted-tests/$suite.log"
+            SUITE="$suite" python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          suite = os.environ['SUITE']
+          log = Path(f'build/targeted-tests/{suite}.log').read_text(encoding='utf-8', errors='replace')
+          assert f"Test Suite '{suite}' passed" in log, f'{suite} did not run successfully'
+          pattern = r"Test Suite 'Selected tests' passed[^\n]*\n[^\n]*Executed\s+(\d+)\s+tests?,\s+with\s+(?:(\d+)\s+tests?\s+skipped\s+and\s+)?(\d+)\s+failures"
+          matches = re.findall(pattern, log)
+          assert len(matches) == 1, f'{suite} selected test summary missing or ambiguous'
+          total, skipped, failed = matches[0]
+          total, skipped, failed = int(total), int(skipped or 0), int(failed)
+          assert total > skipped and failed == 0, f'{suite} did not complete successful tests'
+          print(f'TARGETED_SUITE name={suite} total={total} skipped={skipped} failures={failed}')
+          PY
+          done
+      - name: Compile Release and create diagnostic IPA
+        run: |
+          set -euo pipefail
+          echo 'DIAGNOSTIC ONLY: Release compilation; the full test suite and device acceptance are not implied.'
+          python3 tools/generate_xcode_project.py --without-personal-resources
+          xcodebuild -project XKLStudy.xcodeproj -scheme XKLStudy -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          app = Path('build/DerivedData/Build/Products/Release-iphoneos/XKLStudy.app')
+          assert app.is_dir()
+          output = Path('build/XKLStudy-diagnostic-unsigned.ipa')
+          with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+              for item in sorted(app.rglob('*')):
+                  if item.is_file():
+                      archive.write(item, str(Path('Payload/XKLStudy.app') / item.relative_to(app)))
+          assert output.stat().st_size <= 8 * 1024 * 1024
+          print('Diagnostic unsigned IPA built; full tests remain separate.')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: XKLStudy-targeted-test-logs
+          path: build/targeted-tests/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: XKLStudy-diagnostic-unsigned-iOS
+          path: build/XKLStudy-diagnostic-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 1
