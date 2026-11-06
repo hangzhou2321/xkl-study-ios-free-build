@@ -17,7 +17,7 @@ class TimeoutReceiptTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="handbook-timeout-synthetic-")
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         (self.root / "tmp").mkdir()
         self.capture = str(uuid.uuid4())
         self.path = self.root / "tmp" / f"handbook-card-preview-ready-{self.capture}.json"
