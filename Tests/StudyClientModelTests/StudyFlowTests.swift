@@ -404,6 +404,45 @@ final class StudyFlowTests: XCTestCase {
     }
 
     @MainActor
+    func testProfessionalStartFromVocabularyOrPublicKeepsPriorStandardStartRule() async throws {
+        for source in [StudyArea.vocabulary, .publicQuestions] {
+            let root = try makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = StudyFlowStore(baseDirectory: root)
+            store.setVisible(true, now: start, uptime: 0)
+            store.begin(area: source, mode: .fiveMinutes, now: start, uptime: 0)
+            store.pause(now: start.addingTimeInterval(50), uptime: 50)
+            let previousID = store.state.segmentID
+            store.enterProfessionalPractice(area: .power, now: start.addingTimeInterval(80), uptime: 80)
+            XCTAssertEqual(store.state.activeArea, .power)
+            XCTAssertEqual(store.state.mode, .standard)
+            XCTAssertNil(store.state.budgetSeconds)
+            XCTAssertEqual(store.state.elapsedSeconds, 0)
+            XCTAssertFalse(store.state.isPaused)
+            XCTAssertNotEqual(store.state.segmentID, previousID)
+            XCTAssertEqual(try read(root), store.state)
+        }
+    }
+
+    @MainActor
+    func testProfessionalStartFromVocabularyOrPublicCannotBypassBreak() async throws {
+        for source in [StudyArea.vocabulary, .publicQuestions] {
+            let root = try makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = StudyFlowStore(baseDirectory: root)
+            store.setVisible(true, now: start, uptime: 0)
+            store.begin(area: source, mode: .fiveMinutes, now: start, uptime: 0)
+            store.tick(now: start.addingTimeInterval(300), uptime: 300)
+            let locked = store.state
+            let bytes = try Data(contentsOf: current(root))
+            XCTAssertTrue(locked.needsBreak)
+            store.enterProfessionalPractice(area: .mechanics, now: start.addingTimeInterval(400), uptime: 400)
+            XCTAssertEqual(store.state, locked)
+            XCTAssertEqual(try Data(contentsOf: current(root)), bytes)
+        }
+    }
+
+    @MainActor
     func testNavigationWriteFailureKeepsPreviousAreaAndDurableMetadata() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

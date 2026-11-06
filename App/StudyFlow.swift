@@ -163,20 +163,21 @@ final class StudyFlowStore: ObservableObject {
         }
     }
 
-    /// Explicitly starting a professional card view resumes the existing
-    /// segment. Switching subject preserves its budget and elapsed time.
+    /// Explicitly starting another professional subject preserves the current
+    /// professional segment. Other source areas keep their existing start rule.
     func enterProfessionalPractice(area: StudyArea, now: Date = Date(),
                                    uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard (area == .computer || area == .power || area == .circuit || area == .mechanics),
               !state.needsBreak else { return }
-        if state.activeArea == nil {
-            begin(area: area, mode: .standard, now: now, uptime: uptime)
-        } else {
+        switch state.activeArea {
+        case .some(.computer), .some(.power), .some(.circuit), .some(.mechanics):
             if state.activeArea != area {
                 followNavigation(to: area, now: now, uptime: uptime)
                 guard state.activeArea == area, !state.needsBreak else { return }
             }
             resume(now: now, uptime: uptime)
+        default:
+            begin(area: area, mode: .standard, now: now, uptime: uptime)
         }
     }
 
