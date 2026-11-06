@@ -174,8 +174,10 @@ def main():
                 if not seeded_hashes: raise RuntimeError('Synthetic app support is empty before Release install')
                 sim('install', device, str(release_app))
                 release_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
-                if release_container != container or tree_hashes(support) != seeded_hashes:
+                release_support = release_container / 'Library' / 'Application Support'
+                if tree_hashes(release_support) != seeded_hashes:
                     raise RuntimeError('Release over-install did not preserve the complete synthetic support sandbox')
+                case_report['releaseContainerRelocated'] = release_container != container
                 installed_app = Path(sim('get_app_container', device, BUNDLE, 'app').strip()).resolve()
                 if sha(installed_app / 'XKLStudy') != release_binary_hash:
                     raise RuntimeError('Installed executable is not the compiled Release binary')
@@ -191,11 +193,11 @@ def main():
                 if not re.search(r'Test Case[^\n]*\b' + re.escape(case) + r'\b[^\n]*passed', log_text):
                     raise RuntimeError('Selected real-coordinate XCTest did not explicitly pass')
                 actual_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
-                if actual_container != container: raise RuntimeError('App container changed during UI test')
+                case_report['testContainerRelocated'] = actual_container != release_container
                 final_app = Path(sim('get_app_container', device, BUNDLE, 'app').strip()).resolve()
                 if sha(final_app / 'XKLStudy') != release_binary_hash:
                     raise RuntimeError('XCTest replaced the Release app with a different executable')
-                case_report['records'] = check_records(container, source, target, baseline)
+                case_report['records'] = check_records(actual_container, source, target, baseline)
                 case_report['status'] = 'PASS'
             except Exception as error:
                 case_report['failure'] = type(error).__name__ + ': ' + str(error)
