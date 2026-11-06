@@ -50,51 +50,57 @@ struct ProfessionalQuestionView: View {
         _store = StateObject(wrappedValue: injectedStore ?? ProfessionalQuestionStore(subject: subject, baseDirectory: baseDirectory))
     }
 
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { scroll in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        Color.clear.frame(height: 0).id("question-top")
-                        if let engine = store.engine {
-                            if studying, let question = engine.currentQuestion,
-                               let presentation = engine.presentation {
-                                questionContent(engine, question, presentation)
-                            } else if studying {
-                                completion(engine)
-                            } else {
-                                home(engine)
-                            }
+    var body: some View { previewMonitoredContent }
+
+    private var scrollContent: some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Color.clear.frame(height: 0).id("question-top")
+                    if let engine = store.engine {
+                        if studying, let question = engine.currentQuestion,
+                           let presentation = engine.presentation {
+                            questionContent(engine, question, presentation)
+                        } else if studying {
+                            completion(engine)
                         } else {
-                            emptyState
+                            home(engine)
                         }
-                        if let error = store.error {
-                            Text(error).foregroundStyle(.red).textSelection(.enabled)
-                        }
-                        if store.blocked {
-                            Text("记录保护已启用，当前作答与导入已暂停，原文件保留。")
-                                .font(.footnote).foregroundStyle(.orange)
-                        }
+                    } else {
+                        emptyState
                     }
-                    .padding(22).frame(maxWidth: 740, alignment: .leading).frame(maxWidth: .infinity)
-                }
-                .onChange(of: store.engine?.presentation?.id) { _, _ in
-                    availableAssets.removeAll(); failedAssets.removeAll()
-                    scroll.scrollTo("question-top", anchor: .top)
-                }
-                #if DEBUG
-                .task(id: previewState.scrollTarget) {
-                    if let target = previewState.scrollTarget {
-                        previewScrollReady = false
-                        await Task.yield()
-                        scroll.scrollTo(target, anchor: .top)
-                        await Task.yield()
-                        previewScrollReady = true
-                        reportPreviewAfterLayout()
+                    if let error = store.error {
+                        Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    }
+                    if store.blocked {
+                        Text("记录保护已启用，当前作答与导入已暂停，原文件保留。")
+                            .font(.footnote).foregroundStyle(.orange)
                     }
                 }
-                #endif
+                .padding(22).frame(maxWidth: 740, alignment: .leading).frame(maxWidth: .infinity)
             }
+            .onChange(of: store.engine?.presentation?.id) { _, _ in
+                availableAssets.removeAll(); failedAssets.removeAll()
+                scroll.scrollTo("question-top", anchor: .top)
+            }
+            #if DEBUG
+            .task(id: previewState.scrollTarget) {
+                if let target = previewState.scrollTarget {
+                    previewScrollReady = false
+                    await Task.yield()
+                    scroll.scrollTo(target, anchor: .top)
+                    await Task.yield()
+                    previewScrollReady = true
+                    reportPreviewAfterLayout()
+                }
+            }
+            #endif
+        }
+    }
+
+    private var navigationContent: some View {
+        NavigationStack {
+            scrollContent
             .navigationTitle(subject.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -122,6 +128,10 @@ struct ProfessionalQuestionView: View {
             }
             .safeAreaInset(edge: .bottom) { actions }
         }
+    }
+
+    private var fileContent: some View {
+        navigationContent
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url):
@@ -135,6 +145,10 @@ struct ProfessionalQuestionView: View {
                       defaultFilename: subject.shortTitle + "-原题作答完整记录") { result in
             if case .failure(let error) = result { store.error = error.localizedDescription }
         }
+    }
+
+    private var answerSheetContent: some View {
+        fileContent
         .sheet(isPresented: $showingAnswer) {
             NavigationStack {
                 if let question = store.engine?.currentQuestion,
@@ -152,6 +166,10 @@ struct ProfessionalQuestionView: View {
                 }
             }
         }
+    }
+
+    private var legacySheetContent: some View {
+        answerSheetContent
         .sheet(isPresented: $showingLegacy) {
             if let legacyStore {
                 VStack(spacing: 0) {
@@ -166,6 +184,10 @@ struct ProfessionalQuestionView: View {
                 }
             }
         }
+    }
+
+    private var archiveSheetContent: some View {
+        legacySheetContent
         .sheet(isPresented: $showingArchive) {
             if let package = store.package {
                 NavigationStack {
@@ -183,12 +205,24 @@ struct ProfessionalQuestionView: View {
                 }
             }
         }
+    }
+
+    private var alertContent: some View {
+        archiveSheetContent
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
+    }
+
+    private var startupContent: some View {
+        alertContent
         .task {
             if startInPractice { store.start() }
         }
+    }
+
+    private var studyBindingContent: some View {
+        startupContent
         .onChange(of: studying) { _, value in
             practicing = value; recalling = false
             #if DEBUG
@@ -201,12 +235,20 @@ struct ProfessionalQuestionView: View {
         .onChange(of: showingLegacy) { _, value in
             if !value { practicing = studying; recalling = false }
         }
-        .onChange(of: importing || exporting || showingAnswer || showingLegacy || showingArchive || assetOverlay || store.error != nil) { _, value in
+    }
+
+    private var overlayObservationContent: some View {
+        studyBindingContent
+        .onChange(of: hasAnyOverlay) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
             onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
         }
+    }
+
+    private var activityContent: some View {
+        overlayObservationContent
         .onChange(of: scenePhase) { _, phase in
             displayDate = Date()
             if phase == .active, studying, store.engine?.presentation != nil { store.start() }
@@ -217,7 +259,11 @@ struct ProfessionalQuestionView: View {
             let mask = effectiveOverlayMask
             onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
         }
-        #if DEBUG
+    }
+
+    #if DEBUG
+    private var previewLayoutContent: some View {
+        activityContent
         .background {
             GeometryReader { geometry in
                 Color.clear
@@ -231,12 +277,26 @@ struct ProfessionalQuestionView: View {
                     }
             }.allowsHitTesting(false)
         }
+    }
+
+    private var previewStateContent: some View {
+        previewLayoutContent
         .onChange(of: store.engine?.presentation) { _, _ in reportPreviewAfterLayout() }
         .onChange(of: store.engine?.result) { _, _ in reportPreviewAfterLayout() }
+    }
+
+    private var previewMonitoredContent: some View {
+        previewStateContent
         .onChange(of: availableAssets) { _, _ in reportPreviewAfterLayout() }
         .onChange(of: failedAssets) { _, _ in reportPreviewAfterLayout() }
         .onChange(of: store.blocked) { _, _ in reportPreviewAfterLayout() }
-        #endif
+    }
+    #else
+    private var previewMonitoredContent: some View { activityContent }
+    #endif
+
+    private var hasAnyOverlay: Bool {
+        importing || exporting || showingAnswer || showingLegacy || showingArchive || assetOverlay || store.error != nil
     }
 
     private var effectiveOverlayMask: Int {

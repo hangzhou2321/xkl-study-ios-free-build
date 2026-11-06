@@ -93,8 +93,20 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    var body: some View {
+    var body: some View { breakSheetContent }
+
+    private var tabs: some View {
         TabView(selection: $selectedTab) {
+            homeTab
+            vocabularyTab
+            examTab
+            professionalTab
+            mathTab
+            recordsTab
+        }
+    }
+
+    private var homeTab: some View {
             StudyHomeView(store: store, exams: exams, computer: concepts, power: power,
                           professionalComputer: professionalComputer, professionalPower: professionalPower,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
@@ -102,15 +114,24 @@ struct RootView: View {
                           flow: flow, effectiveTime: effectiveTime, launch: launch)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
+    }
+
+    private var vocabularyTab: some View {
             StudyView(store: store, importing: $importing, onStart: { began(.vocabulary) })
                 .disabled(flow.state.activeArea == .vocabulary && flow.state.isPaused && currentPracticeArea == .vocabulary)
                 .tabItem { Label("单词", systemImage: "text.book.closed") }
                 .tag(0)
+    }
+
+    private var examTab: some View {
             ExamView(store: exams, showingPractice: $examPracticing, onStart: { began(.publicQuestions) },
                      onOverlayChanged: { examOverlay = $0; trackStudyVisibility() })
                 .disabled(flow.state.activeArea == .publicQuestions && flow.state.isPaused && examPracticing)
                 .tabItem { Label("题库", systemImage: "list.bullet.clipboard") }
                 .tag(3)
+    }
+
+    private var professionalTab: some View {
             ProfessionalCoursesView(computer: concepts, power: power, subject: $subject,
                                     practicing: $professionalPracticing, recalling: $professionalRecalling,
                                     onStart: { began(selectedProfessionalArea) },
@@ -129,6 +150,9 @@ struct RootView: View {
                           && flow.state.isPaused && (professionalPracticing || professionalRecalling))
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
+    }
+
+    private var mathTab: some View {
             MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
                                onEffectiveVisibilityChanged: { visible in
                                    mathEffectiveVisible = visible
@@ -136,10 +160,16 @@ struct RootView: View {
                                })
                 .tabItem { Label("数学", systemImage: "function") }
                 .tag(6)
+    }
+
+    private var recordsTab: some View {
             RecordsView(store: store, importing: $importing, effectiveTime: effectiveTime)
                 .tabItem { Label("记录", systemImage: "chart.bar.doc.horizontal") }
                 .tag(2)
-        }
+    }
+
+    private var decoratedTabs: some View {
+        tabs
         .background(StudyActivityObserver {
             if acceptsEffectiveTouch { effectiveTime.noteActivity() }
         })
@@ -152,6 +182,10 @@ struct RootView: View {
             trackStudyVisibility()
             syncExamPolicy()
         }
+    }
+
+    private var tabVisibilityContent: some View {
+        decoratedTabs
         .onChange(of: selectedTab) { _, _ in
             professionalEffectiveContentOverlay = false
             professionalEffectiveBlockedOverlay = false
@@ -161,6 +195,10 @@ struct RootView: View {
         .onChange(of: examPracticing) { _, _ in trackStudyVisibility() }
         .onChange(of: professionalPracticing) { _, _ in trackStudyVisibility() }
         .onChange(of: professionalRecalling) { _, _ in trackStudyVisibility() }
+    }
+
+    private var subjectVisibilityContent: some View {
+        tabVisibilityContent
         .onChange(of: subject) { _, _ in
             professionalEffectiveContentOverlay = false
             professionalEffectiveBlockedOverlay = false
@@ -169,8 +207,16 @@ struct RootView: View {
         .onChange(of: currentPracticeArea) { _, _ in trackStudyVisibility() }
         .onChange(of: flow.state.isPaused) { _, _ in syncEffectiveVisibility() }
         .onChange(of: flow.state.needsBreak) { _, _ in syncEffectiveVisibility() }
+    }
+
+    private var errorVisibilityContent: some View {
+        subjectVisibilityContent
         .onChange(of: store.error) { _, _ in syncEffectiveVisibility() }
         .onChange(of: mathExperience.error) { _, _ in syncEffectiveVisibility() }
+    }
+
+    private var clockContent: some View {
+        errorVisibilityContent
         .onReceive(clock) { _ in
             if scenePhase == .active { refreshCalendars() }
             trackStudyVisibility()
@@ -191,6 +237,10 @@ struct RootView: View {
                 refreshCalendars(force: true)
             }
         }
+    }
+
+    private var importContent: some View {
+        clockContent
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url): store.importContent(from: url)
@@ -200,6 +250,10 @@ struct RootView: View {
         .alert("请检查", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
+    }
+
+    private var breakSheetContent: some View {
+        importContent
         .sheet(isPresented: Binding(
             get: { flow.state.needsBreak && selectedTab != 5 },
             set: { _ in }
@@ -220,6 +274,7 @@ struct RootView: View {
             }.padding(28).presentationDetents([.medium]).interactiveDismissDisabled()
         }
     }
+
     private var handbookFullScreenActive: Bool {
         selectedTab == 4 && professionalRecalling && handbookFullScreenBinding.wrappedValue
     }
