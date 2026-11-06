@@ -22,12 +22,12 @@ jobs:
           PY
       - name: Exercise production root with real coordinate gesture
         env:
-          TOUCH_TEST_SOURCE: power
+          TOUCH_TEST_SOURCE: mechanics
         run: python3 tools/guide_ui_test/run.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: professional-touch-power-tap-and-drag
+          name: professional-touch-mechanics-tap-and-drag-frozen-target
           path: |
             build/professional-touch-uitest/*.log
             build/professional-touch-uitest/summary.json
