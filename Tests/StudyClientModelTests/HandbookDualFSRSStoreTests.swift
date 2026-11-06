@@ -675,6 +675,59 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         try assertMarkers(f)
     }
 
+    @MainActor func testCircuitQuestionSubmissionsAreSeparateAndIdempotent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-circuit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let computer = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: time)
+        let power = HandbookWordStore(subject: .power, baseDirectory: root, documentsDirectory: root, now: time)
+        computer.importData(try encode(package(.computer))); power.importData(try encode(package(.power)))
+        computer.start(now: time); power.start(now: time)
+        XCTAssertNil(computer.error); XCTAssertNil(power.error)
+        let computerURL = root.appendingPathComponent("HandbookWordRecall/computer/current.json")
+        let powerURL = root.appendingPathComponent("HandbookWordRecall/power/current.json")
+        let computerBefore = try Data(contentsOf: computerURL), powerBefore = try Data(contentsOf: powerURL)
+
+        var circuitPackage = package(.circuit)
+        let card = circuitPackage.cards[0]
+        let question = HandbookRelatedQuestion(id: "synthetic-question", cardID: card.id, type: .multiple,
+            prompt: "Synthetic question", options: [.init(id: "A", text: "One"), .init(id: "B", text: "Two"), .init(id: "C", text: "Three")],
+            answer: ["A", "C"], explanation: "Synthetic explanation", sourcePage: 1, sourceLabel: "Synthetic source")
+        circuitPackage.relatedQuestions = [question]
+        let raw = try encode(circuitPackage)
+        let circuit = HandbookWordStore(subject: .circuit, baseDirectory: root, documentsDirectory: root, now: time)
+        circuit.importData(raw); circuit.start(now: time)
+        XCTAssertNil(circuit.error); XCTAssertTrue(try XCTUnwrap(circuit.engine?.usesDualFSRS))
+        XCTAssertEqual(circuit.package?.questions(for: card), [question])
+        let stateBefore = try XCTUnwrap(circuit.engine?.state)
+        let circuitURL = root.appendingPathComponent("HandbookWordRecall/circuit/current.json")
+        let circuitBefore = try Data(contentsOf: circuitURL)
+        let practice = HandbookRelatedQuestionStore(subject: .circuit, baseDirectory: root)
+        let id = UUID(), at = time.addingTimeInterval(4)
+        let attempt = try XCTUnwrap(practice.submit(question: question, selected: ["A", "C"], cardAnswerWasVisible: true, id: id, at: at))
+        XCTAssertTrue(attempt.correct); XCTAssertTrue(attempt.cardAnswerWasVisible)
+        XCTAssertEqual(practice.submit(question: question, selected: ["A", "C"], cardAnswerWasVisible: true, id: id, at: at), attempt)
+        let events = root.appendingPathComponent("HandbookWordRecall/circuit/related-question-events")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: events.path).count, 1)
+        var unresolved = question
+        unresolved.sourceIssueNote = "Synthetic conflicting source"
+        XCTAssertNil(practice.submit(question: unresolved, selected: ["A", "C"], cardAnswerWasVisible: false, id: UUID(), at: at))
+        XCTAssertFalse(practice.blocked)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: events.path).count, 1)
+        XCTAssertEqual(circuit.engine?.state, stateBefore)
+        XCTAssertEqual(try Data(contentsOf: circuitURL), circuitBefore)
+        XCTAssertEqual(try Data(contentsOf: computerURL), computerBefore)
+        XCTAssertEqual(try Data(contentsOf: powerURL), powerBefore)
+        circuit.importData(raw)
+        XCTAssertEqual(try Data(contentsOf: circuitURL), circuitBefore)
+        let reopened = HandbookWordStore(subject: .circuit, baseDirectory: root, documentsDirectory: root, now: time.addingTimeInterval(6))
+        XCTAssertEqual(reopened.engine?.state, stateBefore)
+        let reopenedPractice = HandbookRelatedQuestionStore(subject: .circuit, baseDirectory: root)
+        XCTAssertFalse(reopenedPractice.blocked, reopenedPractice.error ?? "")
+        let export = try JSONDecoder().decode(Export.self, from: reopened.exportRecords())
+        XCTAssertNotNil(export.files["related-question-events/\(id.uuidString).json"])
+    }
+
     @MainActor func testDeferredLegacyQueueCanResumeAndMigratesLatestHeadOnlyAfterDrain() async throws {
         let f = try fixtureWithRealDeferredCQueue()
         defer { try? FileManager.default.removeItem(at: f.root) }

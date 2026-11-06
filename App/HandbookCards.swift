@@ -93,6 +93,57 @@ struct HandbookCard: Codable, Equatable, Identifiable {
     }
 }
 
+/// A supplied question belongs to a knowledge card, but is graded and stored
+/// separately from that card's recall scheduler.
+struct HandbookRelatedQuestion: Codable, Equatable, Identifiable {
+    let id: String
+    let cardID: String
+    let type: ExamQuestionType
+    let prompt: String
+    let options: [ExamOption]
+    let answer: [String]
+    let explanation: String
+    let sourcePage: Int
+    let sourceLabel: String
+    var additionalSourceID: String? = nil
+    var sourceAssets: [ProfessionalSourceFileAsset]? = nil
+    var optionsShownInImage: Bool? = nil
+    /// The supplied source has a material ambiguity; it may be viewed but not graded.
+    var sourceIssueNote: String? = nil
+    var originalAnswerLabel: String? = nil
+
+    var definitionID: String { handbookHash(self) }
+    func accepts(_ selected: Set<String>) -> Bool {
+        !selected.isEmpty && selected.isSubset(of: Set(options.map(\.id))) &&
+            (type == .multiple || selected.count == 1)
+    }
+    var requiresReview: Bool { sourceIssueNote != nil }
+    func correct(_ selected: Set<String>) -> Bool { !requiresReview && accepts(selected) && selected == Set(answer) }
+    func validate(cardIDs: Set<String>, source: HandbookCardPackage.Source,
+                  additionalSources: [HandbookCardPackage.AdditionalSource]?) throws {
+        let sourcePages: [Int]
+        if let additionalSourceID {
+            guard let extra = (additionalSources ?? []).first(where: { $0.id == additionalSourceID }) else {
+                throw ExamError.invalid("对应原题的来源不存在。")
+            }
+            sourcePages = extra.source.includedPages
+        } else { sourcePages = source.includedPages }
+        let ids = Set(options.map(\.id))
+        guard handbookText(id, 200), cardIDs.contains(cardID), handbookText(prompt, 4_000),
+              (2...8).contains(options.count), ids.count == options.count,
+              options.allSatisfy({ handbookText($0.id, 40) && handbookText($0.text, 1_000) }),
+              !answer.isEmpty, Set(answer).count == answer.count, accepts(Set(answer)),
+              handbookText(explanation, 6_000), handbookText(sourceLabel, 300), sourcePages.contains(sourcePage),
+              sourceIssueNote.map({ handbookText($0, 4_000) }) ?? true,
+              originalAnswerLabel.map({ handbookText($0, 500) }) ?? true,
+              (sourceAssets ?? []).count <= 4,
+              optionsShownInImage != true || !(sourceAssets ?? []).isEmpty else {
+            throw ExamError.invalid("对应原题的身份、选项、答案或来源不完整：\(id)")
+        }
+        for asset in sourceAssets ?? [] { try asset.validateMetadata() }
+    }
+}
+
 struct HandbookCardPackage: Codable, Equatable {
     struct Source: Codable, Equatable {
         let title: String
@@ -110,6 +161,7 @@ struct HandbookCardPackage: Codable, Equatable {
         let stars: Int
         let sourcePage: Int
         let cardIDs: [String]
+        var additionalSourceID: String? = nil
     }
     /// Presentation-only guidance is kept outside the immutable card definition.
     /// Each guide is explicitly assigned to an existing knowledge-point card.
@@ -143,6 +195,8 @@ struct HandbookCardPackage: Codable, Equatable {
     /// Optional package-level presentation metadata; it does not alter card definitions or scheduling.
     var topicFrequencies: [TopicFrequency]? = nil
     var memoryGuides: [MemoryGuide]? = nil
+    /// Optional original questions; absent in earlier course packages.
+    var relatedQuestions: [HandbookRelatedQuestion]? = nil
 
     var hash: String { handbookHash(self) }
     static func load(_ data: Data) throws -> Self {
@@ -161,6 +215,12 @@ struct HandbookCardPackage: Codable, Equatable {
         try Self.validateAdditionalSources(additionalSources)
         try validateTopicFrequencies()
         try validateMemoryGuides()
+        let questions = relatedQuestions ?? []
+        guard questions.count <= 20_000, Set(questions.map(\.id)).count == questions.count else {
+            throw ExamError.invalid("对应原题的身份重复或数量异常。")
+        }
+        let cardIDs = Set(cards.map(\.id))
+        for question in questions { try question.validate(cardIDs: cardIDs, source: source, additionalSources: additionalSources) }
         for card in cards {
             try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
         }
@@ -178,6 +238,9 @@ struct HandbookCardPackage: Codable, Equatable {
     func memoryGuide(for card: HandbookCard) -> MemoryGuide? {
         memoryGuides?.first { $0.cardID == card.id }
     }
+    func questions(for card: HandbookCard) -> [HandbookRelatedQuestion] {
+        (relatedQuestions ?? []).filter { $0.cardID == card.id }
+    }
     private func validateTopicFrequencies() throws {
         guard let frequencies = topicFrequencies else { return }
         let byID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
@@ -187,7 +250,9 @@ struct HandbookCardPackage: Codable, Equatable {
               Set(assigned).count == assigned.count,
               frequencies.allSatisfy({ item in
                   (1...1_000).contains(item.topicNumber) && (1...5).contains(item.stars) &&
-                  source.includedPages.contains(item.sourcePage) && item.cardIDs.count <= cards.count &&
+                  (item.additionalSourceID == nil ? source.includedPages.contains(item.sourcePage) :
+                    (additionalSources ?? []).contains { $0.id == item.additionalSourceID && $0.source.includedPages.contains(item.sourcePage) }) &&
+                  item.cardIDs.count <= cards.count &&
                   item.cardIDs.allSatisfy { byID[$0]?.topicNumber == item.topicNumber }
               }) else {
             throw ExamError.invalid("宝典考点星级的来源、范围或卡片对应关系无效。")

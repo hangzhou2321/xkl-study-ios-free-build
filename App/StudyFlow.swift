@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 enum StudyArea: String, Codable, CaseIterable {
-    case vocabulary, publicQuestions, computer, power
+    case vocabulary, publicQuestions, computer, power, circuit
 
     var title: String {
         switch self {
@@ -10,6 +10,7 @@ enum StudyArea: String, Codable, CaseIterable {
         case .publicQuestions: return "公共题库"
         case .computer: return "计算机"
         case .power: return "电力系统"
+        case .circuit: return "电路"
         }
     }
 
@@ -17,7 +18,7 @@ enum StudyArea: String, Codable, CaseIterable {
         switch self {
         case .vocabulary: return 0
         case .publicQuestions: return 3
-        case .computer, .power: return 4
+        case .computer, .power, .circuit: return 4
         }
     }
 }

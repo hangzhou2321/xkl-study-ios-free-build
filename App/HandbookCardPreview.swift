@@ -43,6 +43,8 @@ struct HandbookCardPreviewState {
     var didRenderGuideHelp: (String, Bool) -> Void = { _, _ in }
     var openHighlightEditor = false
     var didRenderHighlightEditor: () -> Void = {}
+    var openRelatedQuestion = false
+    var didRenderRelatedQuestion: () -> Void = {}
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -61,12 +63,13 @@ extension EnvironmentValues {
     let store: HandbookWordStore
     let handbookComputer: HandbookWordStore
     let handbookPower: HandbookWordStore
+    let handbookCircuit: HandbookWordStore
     let legacyComputer: ConceptStore
     let legacyPower: ConceptStore
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -183,6 +186,14 @@ extension EnvironmentValues {
                 "title": "纯合成卡组 · 不含用户资料", "revision": "synthetic-1",
                 "source": ["title": "纯合成来源", "fileName": "synthetic.pdf", "sha256": String(repeating: "b", count: 64), "pdfPageCount": archivePage, "includedPages": [sourcePage, archivePage]],
                 "chapters": [["id": "synthetic-chapter", "title": "合成章节 · 仅用于页面检查"]], "cards": cards]
+            if ["related-question", "related-review"].contains(selected) {
+                var question: [String: Any] = ["id": "synthetic-question", "cardID": "synthetic-handbook-first",
+                    "type": "single", "prompt": "合成原题：哪个选项是示例？",
+                    "options": [["id": "A", "text": "合成选项甲"], ["id": "B", "text": "合成选项乙"]],
+                    "answer": ["A"], "explanation": "纯合成解析", "sourcePage": sourcePage, "sourceLabel": "合成来源"]
+                if selected == "related-review" { question["sourceIssueNote"] = "合成来源存在歧义，仅验证暂不判分。" }
+                package["relatedQuestions"] = [question]
+            }
             if ["front", "back", "normal-front", "highlight-front", "highlight-back", "highlight-editor"].contains(selected) {
                 package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
@@ -261,12 +272,12 @@ extension EnvironmentValues {
             }
             precondition(!prepared.blocked && prepared.error == nil, "Synthetic card changes must persist")
             store = prepared
-            let otherSubject: ConceptSubject = selectedSubject == .computer ? .power : .computer
-            let otherStore = HandbookWordStore(subject: otherSubject, baseDirectory: root, documentsDirectory: root)
-            precondition(otherStore.engine == nil && !otherStore.blocked && otherStore.error == nil,
-                         "Other subject must have its own empty synthetic store")
-            handbookComputer = selectedSubject == .computer ? prepared : otherStore
-            handbookPower = selectedSubject == .power ? prepared : otherStore
+            handbookComputer = selectedSubject == .computer ? prepared : HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root)
+            handbookPower = selectedSubject == .power ? prepared : HandbookWordStore(subject: .power, baseDirectory: root, documentsDirectory: root)
+            handbookCircuit = selectedSubject == .circuit ? prepared : HandbookWordStore(subject: .circuit, baseDirectory: root, documentsDirectory: root)
+            for other in [handbookComputer, handbookPower, handbookCircuit] where other.subject != selectedSubject {
+                precondition(other.engine == nil && !other.blocked && other.error == nil, "Other subject must have its own empty synthetic store")
+            }
             let computerArchive = ConceptStore(subject: .computer, baseDirectory: root)
             let powerArchive = ConceptStore(subject: .power, baseDirectory: root)
             precondition(computerArchive.engine == nil && powerArchive.engine == nil &&
@@ -314,6 +325,7 @@ struct HandbookCardPreview: View {
     @State private var guidePhase = 0
     @State private var guideRecord: HandbookWordState?
     @State private var highlightEditorObserved = false
+    @State private var relatedQuestionObserved = false
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -325,7 +337,7 @@ struct HandbookCardPreview: View {
             Text("合成首页，不含学习资料").tabItem { Label("今天", systemImage: "house") }.tag(5)
             ProfessionalCoursesView(computer: fixture.legacyComputer, power: fixture.legacyPower,
                                 subject: $selectedSubject, practicing: $practicing, recalling: $recalling,
-                                handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower,
+                                handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower, handbookCircuit: fixture.handbookCircuit,
                                 fullScreenEnabled: $fullScreenEnabled)
                 .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }.tag(4)
@@ -349,6 +361,8 @@ struct HandbookCardPreview: View {
                 guideHelpObservedCardID = cardID; guideHelpObserved = expanded
             }, openHighlightEditor: fixture.selectedCase == "highlight-editor", didRenderHighlightEditor: {
                 highlightEditorObserved = true
+            }, openRelatedQuestion: ["related-question", "related-review"].contains(fixture.selectedCase), didRenderRelatedQuestion: {
+                relatedQuestionObserved = true
             }))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
@@ -356,6 +370,7 @@ struct HandbookCardPreview: View {
             .onChange(of: guideObservedCardID) { _, _ in reportIfReady() }
             .onChange(of: guideObservedRevealed) { _, _ in reportIfReady() }
             .onChange(of: highlightEditorObserved) { _, _ in reportIfReady() }
+            .onChange(of: relatedQuestionObserved) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
@@ -495,6 +510,7 @@ struct HandbookCardPreview: View {
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
+        case "related-question", "related-review": return relatedQuestionObserved && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0
         case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
         case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
@@ -541,6 +557,7 @@ struct HandbookCardPreview: View {
                 "memoryGuideRendered": ["front", "back", "highlight-front", "highlight-back", "highlight-editor"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
                 "highlightSpanCount": observation!.highlightSpanCount,
                 "highlightEditorRendered": fixture.selectedCase == "highlight-editor" && highlightEditorObserved,
+                "relatedQuestionRendered": ["related-question", "related-review"].contains(fixture.selectedCase) && relatedQuestionObserved,
                 "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.state == guideRecord,
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,

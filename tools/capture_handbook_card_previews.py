@@ -17,10 +17,10 @@ from capture_professional_question_previews import (
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/handbook-card-previews"
 BUNDLE = "local.xkl.study"
-SUBJECTS = ("computer", "power")
+SUBJECTS = ("computer", "power", "circuit")
 DEFAULT_CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
          "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
-CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor")
+CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review")
 CAPTURES = tuple((subject, case) for subject in SUBJECTS for case in CASES)
 
 
@@ -52,7 +52,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
-    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front") else "back")
+    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front", "related-question", "related-review") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     supplemented = case.startswith(("multi-source", "lecture-only"))
     lecture_only = case.startswith("lecture-only")
@@ -66,6 +66,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "memoryGuideRendered": case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor"),
         "highlightSpanCount": 2 if case.startswith("highlight-") else 0,
         "highlightEditorRendered": case == "highlight-editor",
+        "relatedQuestionRendered": case in ("related-question", "related-review"),
         "memoryGuideHelpPreservedRecord": case == "front",
         "focusTogglePreservedRecord": case == "focus-toggle", "semicolonFormatting": True,
         "diagramExpanded": case in ("diagram-branch", "diagram-flow"),

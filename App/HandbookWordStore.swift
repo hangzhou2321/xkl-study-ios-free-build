@@ -15,6 +15,103 @@ private struct HandbookWordDisk: Codable {
     /// Explicit re-enablement is tied to the immutable legacy-mode marker.
     var reenabledFromLegacyMarkerSHA256: String? = nil
 }
+
+/// One immutable file per explicit original-question submission. These events
+/// never participate in card scheduling and are included in the existing export.
+struct HandbookRelatedAttempt: Codable, Equatable, Identifiable {
+    let id: UUID
+    let subject: ConceptSubject
+    let cardID: String
+    let questionID: String
+    let questionDefinitionID: String
+    let selected: [String]
+    let correct: Bool
+    let cardAnswerWasVisible: Bool
+    let at: Date
+}
+
+@MainActor final class HandbookRelatedQuestionStore: ObservableObject {
+    let subject: ConceptSubject
+    @Published private(set) var error: String?
+    @Published private(set) var blocked = false
+    private let base: URL
+    private let directory: URL
+    private let writer: (Data, URL) throws -> Void
+
+    init(subject: ConceptSubject, baseDirectory: URL? = nil,
+         writer: @escaping (Data, URL) throws -> Void = { data, url in try data.write(to: url, options: .withoutOverwriting) }) {
+        self.subject = subject; self.writer = writer
+        base = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
+            .standardizedFileURL.resolvingSymlinksInPath()
+        directory = base.appendingPathComponent("HandbookWordRecall/\(subject.rawValue)/related-question-events", isDirectory: true)
+        do { try validateExistingEvents() }
+        catch { blocked = true; self.error = "原题记录无法核对，原文件已保留。\n" + error.localizedDescription }
+    }
+
+    @discardableResult func submit(question: HandbookRelatedQuestion, selected: Set<String>,
+                                   cardAnswerWasVisible: Bool, id: UUID = UUID(), at: Date = Date()) -> HandbookRelatedAttempt? {
+        guard !blocked else { return nil }
+        guard !question.requiresReview else { error = "这道原题尚待校勘，暂不自动判分。"; return nil }
+        guard question.accepts(selected), at.timeIntervalSince1970.isFinite else {
+            error = "请选择符合题型的选项。"; return nil
+        }
+        do {
+            let attempt = HandbookRelatedAttempt(id: id, subject: subject, cardID: question.cardID,
+                questionID: question.id, questionDefinitionID: question.definitionID,
+                selected: selected.sorted(), correct: question.correct(selected),
+                cardAnswerWasVisible: cardAnswerWasVisible, at: at)
+            try ensureDirectory()
+            let url = directory.appendingPathComponent(id.uuidString + ".json")
+            if FileManager.default.fileExists(atPath: url.path) {
+                let old = try JSONDecoder().decode(HandbookRelatedAttempt.self, from: Data(contentsOf: url))
+                guard old == attempt else { throw ExamError.invalid("本次提交标识已用于其他记录，停止保存。") }
+                error = nil; return old
+            }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let bytes = try encoder.encode(attempt)
+            try writer(bytes, url)
+            guard try Data(contentsOf: url) == bytes else { throw ExamError.invalid("原题作答未完整保存。") }
+            error = nil; return attempt
+        } catch {
+            blocked = true
+            self.error = "原题结果未能确认保存，背卡记录不受影响；请重新打开后核对。\n" + error.localizedDescription
+            return nil
+        }
+    }
+
+    private func ensureDirectory() throws {
+        var current = base
+        for component in ["HandbookWordRecall", subject.rawValue, "related-question-events"] {
+            current.appendPathComponent(component, isDirectory: true)
+            if !FileManager.default.fileExists(atPath: current.path) {
+                try FileManager.default.createDirectory(at: current, withIntermediateDirectories: false)
+            }
+            let info = try current.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard info.isDirectory == true, info.isSymbolicLink != true else { throw ExamError.invalid("原题记录目录不可用。") }
+        }
+    }
+
+    private func validateExistingEvents() throws {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        let info = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard info.isDirectory == true, info.isSymbolicLink != true else { throw ExamError.invalid("原题记录目录不可用。") }
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard files.count <= 100_000 else { throw ExamError.invalid("原题记录数量异常。") }
+        for file in files {
+            let info = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard info.isRegularFile == true, info.isSymbolicLink != true, (info.fileSize ?? 0) <= 64 * 1_024,
+                  file.pathExtension == "json", let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else {
+                throw ExamError.invalid("原题记录文件异常。")
+            }
+            let event = try JSONDecoder().decode(HandbookRelatedAttempt.self, from: Data(contentsOf: file))
+            guard event.id == id, event.subject == subject, !event.cardID.isEmpty, !event.questionID.isEmpty,
+                  ExamContent.isHash(event.questionDefinitionID), !event.selected.isEmpty,
+                  Set(event.selected).count == event.selected.count, event.at.timeIntervalSince1970.isFinite else {
+                throw ExamError.invalid("原题记录内容异常。")
+            }
+        }
+    }
+}
 private struct HandbookWordBaseline: Codable {
     var format = "xkl-handbook-word-baseline-v1"
     let subject: ConceptSubject

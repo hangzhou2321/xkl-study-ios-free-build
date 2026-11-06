@@ -14,6 +14,7 @@ struct ProfessionalCoursesView: View {
     var objectivePower: ProfessionalQuestionStore? = nil
     var handbookComputer: HandbookWordStore? = nil
     var handbookPower: HandbookWordStore? = nil
+    var handbookCircuit: HandbookWordStore? = nil
     var fullScreenEnabled: Binding<Bool> = .constant(false)
 
     var body: some View {
@@ -26,19 +27,30 @@ struct ProfessionalCoursesView: View {
             })) {
                 Text(ConceptSubject.computer.shortTitle).tag(ConceptSubject.computer)
                 Text(ConceptSubject.power.shortTitle).tag(ConceptSubject.power)
+                Text(ConceptSubject.circuit.shortTitle).tag(ConceptSubject.circuit)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
                 .padding(.vertical, 8)
             }
             HandbookCardView(subject: subject,
-                             injectedStore: subject == .computer ? handbookComputer : handbookPower,
-                             originalQuestionStore: subject == .computer ? objectiveComputer : objectivePower,
-                             legacyStore: subject == .computer ? computer : power, studying: $recalling,
+                             injectedStore: selectedHandbook,
+                             originalQuestionStore: selectedQuestions,
+                             legacyStore: selectedLegacy, studying: $recalling,
                              fullScreenEnabled: fullScreenEnabled,
                              onStart: onStart, onOverlayChanged: onOverlayChanged)
                 .id(subject.rawValue)
         }
+    }
+
+    private var selectedHandbook: HandbookWordStore? {
+        switch subject { case .computer: return handbookComputer; case .power: return handbookPower; case .circuit: return handbookCircuit }
+    }
+    private var selectedQuestions: ProfessionalQuestionStore? {
+        switch subject { case .computer: return objectiveComputer; case .power: return objectivePower; case .circuit: return nil }
+    }
+    private var selectedLegacy: ConceptStore? {
+        switch subject { case .computer: return computer; case .power: return power; case .circuit: return nil }
     }
 }
 

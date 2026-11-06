@@ -16,6 +16,7 @@ struct HandbookCardView: View {
     @Binding private var fullScreenEnabled: Bool
     @StateObject private var store: HandbookWordStore
     @StateObject private var highlightStore: HandbookHighlightStore
+    @StateObject private var relatedQuestionStore: HandbookRelatedQuestionStore
     @State private var studying = false
     @State private var importing = false
     @State private var recommendedStagedFile: URL?
@@ -26,6 +27,7 @@ struct HandbookCardView: View {
     @State private var showingOldQuestions = false
     @State private var highlightTarget: HandbookHighlightTarget?
     @State private var outlineHighlightTarget: HandbookHighlightTarget?
+    @State private var relatedQuestionTarget: HandbookCard?
     @State private var document = HandbookCardRecordDocument(data: Data())
     @State private var displayDate = Date()
     @Environment(\.scenePhase) private var scenePhase
@@ -52,6 +54,8 @@ struct HandbookCardView: View {
         _studying = State(initialValue: startInStudy || studying.wrappedValue)
         _store = StateObject(wrappedValue: injectedStore ?? HandbookWordStore(subject: subject, baseDirectory: baseDirectory))
         _highlightStore = StateObject(wrappedValue: HandbookHighlightStore(subject: subject,
+            baseDirectory: injectedStore?.annotationBaseDirectory ?? baseDirectory))
+        _relatedQuestionStore = StateObject(wrappedValue: HandbookRelatedQuestionStore(subject: subject,
             baseDirectory: injectedStore?.annotationBaseDirectory ?? baseDirectory))
     }
 
@@ -194,6 +198,13 @@ struct HandbookCardView: View {
         .sheet(item: $highlightTarget) { target in
             HandbookHighlightEditor(target: target, store: highlightStore)
         }
+        .fullScreenCover(item: $relatedQuestionTarget) { card in
+            if let package = store.package {
+                HandbookRelatedQuestionPage(card: card, questions: package.questions(for: card),
+                    assetRoot: sourceRoot, store: relatedQuestionStore,
+                    cardAnswerWasVisible: store.engine?.presentation?.revealed ?? false)
+            }
+        }
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
@@ -206,13 +217,15 @@ struct HandbookCardView: View {
                presentation.revealed, let card = engine.currentCard {
                 highlightTarget = .init(card: card, guide: engine.currentMemoryGuide)
             }
+            if preview.openRelatedQuestion, let engine = store.engine, let card = engine.currentCard,
+               !engine.package.questions(for: card).isEmpty { relatedQuestionTarget = card }
             reportPreview()
             #endif
         }
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
         .onChange(of: fullScreenEnabled) { _, _ in reportPreviewIfEnabled() }
-        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingOldQuestions || highlightTarget != nil || store.error != nil) { _, value in
+        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || store.error != nil) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -385,12 +398,25 @@ struct HandbookCardView: View {
                     .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
             }
             }
-            HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
-                             focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
-                             frequencyLabel: engine.package.frequencyLabel(for: card),
-                             memoryGuide: engine.currentMemoryGuide)
-                .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
-                .id(p.id)
+            HStack(alignment: .center, spacing: 4) {
+                HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
+                                 focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
+                                 frequencyLabel: engine.package.frequencyLabel(for: card),
+                                 memoryGuide: engine.currentMemoryGuide)
+                    .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
+                    .id(p.id)
+                if !engine.package.questions(for: card).isEmpty {
+                    Button { relatedQuestionTarget = card } label: {
+                        VStack(spacing: 5) {
+                            Image(systemName: "doc.text")
+                            Text("原题").font(.caption.weight(.semibold))
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                        }.frame(width: 44, height: 76).foregroundStyle(.blue)
+                            .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                    }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
+                        .accessibilityIdentifier("handbook-related-questions")
+                }
+            }
             if p.revealed {
                 Button { showingSources = true } label: {
                     Label { Text(verbatim: sourceLabel(card)).multilineTextAlignment(.leading) }
@@ -560,7 +586,7 @@ struct HandbookCardView: View {
     private func sourceLabel(_ card: HandbookCard) -> String {
         guard let package = store.package else { return "查看原文出处" }
         return handbookSourceGroups(package, card: card).map { group in
-            group.title + " · PDF第" + group.pageNumbers.map(String.init).joined(separator: "、") + "页"
+            group.title + " · " + (group.isPhoto ? "照片" : "PDF第") + group.pageNumbers.map(String.init).joined(separator: "、") + (group.isPhoto ? "" : "页")
         }.joined(separator: "\n")
     }
     private func dueText(_ date: Date) -> String {
@@ -991,6 +1017,7 @@ struct HandbookSourceGroup: Identifiable {
     let title: String
     let pageNumbers: [Int]
     let pages: [HandbookCardPackage.Page]
+    var isPhoto = false
 
     func imageExists(page number: Int, root: URL) -> Bool {
         guard let asset = pages.first(where: { $0.number == number })?.asset else { return false }
@@ -1011,7 +1038,8 @@ func handbookSourceGroups(_ package: HandbookCardPackage, card: HandbookCard? = 
         } ?? extra.source.includedPages
         if !numbers.isEmpty {
             groups.append(.init(id: "additional:" + extra.id, title: extra.source.title,
-                                pageNumbers: numbers.sorted(), pages: extra.sourcePages ?? []))
+                                pageNumbers: numbers.sorted(), pages: extra.sourcePages ?? [],
+                                isPhoto: ["jpg", "jpeg", "png"].contains((extra.source.fileName as NSString).pathExtension.lowercased())))
         }
     }
     return groups
@@ -1031,7 +1059,7 @@ private struct HandbookSourcePagesView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    Text("按PDF物理页号核对原文。查阅原页不产生自评，也不改变复习日期。")
+                    Text("按来源页号核对原文。查阅原页不产生自评，也不改变复习日期。")
                         .font(.subheadline).foregroundStyle(.secondary)
                     if groups.count > 1 {
                         Menu {
@@ -1060,7 +1088,7 @@ private struct HandbookSourcePagesView: View {
                         .accessibilityIdentifier("handbook-source-title")
                     ForEach(selected.pageNumbers, id: \.self) { number in
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("PDF物理第\(number)页").font(.headline)
+                            Text(selected.isPhoto ? "照片 \(number)" : "PDF物理第\(number)页").font(.headline)
                             if let page = selected.pages.first(where: { $0.number == number }) {
                                 HandbookOriginalPageImage(asset: page.asset, root: assetRoot)
                             } else {
@@ -1117,6 +1145,167 @@ private struct HandbookOriginalPageImage: View {
             image = nil; error = nil
             do { image = try asset.decodedCGImage(assetRoot: root) }
             catch { self.error = "这页原图尚未附上或无法打开；可继续阅读卡片正文。" }
+        }
+    }
+}
+
+/// A related exercise never changes or advances the visible recall card.
+private struct HandbookRelatedQuestionPage: View {
+    let card: HandbookCard
+    let questions: [HandbookRelatedQuestion]
+    let assetRoot: URL
+    @ObservedObject var store: HandbookRelatedQuestionStore
+    let cardAnswerWasVisible: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var index = 0
+    @State private var selected: Set<String> = []
+    @State private var result: HandbookRelatedAttempt?
+    @State private var showingSourceAnswer = false
+    @State private var attemptID = UUID()
+    @State private var loadedImages: Set<Int> = []
+    @State private var failedImages: Set<Int> = []
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if questions.indices.contains(index) {
+                    let question = questions[index]
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            Text(card.title).font(.subheadline).foregroundStyle(.secondary)
+                            HStack {
+                                Text(question.type.title).font(.headline)
+                                Spacer()
+                                Text("\(index + 1) / \(questions.count)").foregroundStyle(.secondary)
+                            }
+                            Text(question.sourceLabel).font(.footnote).foregroundStyle(.secondary)
+                            Text(question.prompt).font(.system(size: 21)).textSelection(.enabled)
+                            ForEach(Array((question.sourceAssets ?? []).enumerated()), id: \.offset) { number, asset in
+                                HandbookRelatedQuestionImage(asset: asset, root: assetRoot) { available in
+                                    if available { loadedImages.insert(number); failedImages.remove(number) }
+                                    else { loadedImages.remove(number); failedImages.insert(number) }
+                                }.id(question.definitionID + ":" + String(number))
+                            }
+                            if !failedImages.isEmpty {
+                                Label("题图未能打开，请补齐原图后作答。", systemImage: "photo.badge.exclamationmark")
+                                    .font(.footnote).foregroundStyle(.orange)
+                            }
+                            if question.type == .multiple {
+                                Text("多选题：选齐后提交。 ").font(.footnote).foregroundStyle(.secondary)
+                            }
+                            if let note = question.sourceIssueNote {
+                                Label("原题待校：仅查看，不自动判分。", systemImage: "exclamationmark.triangle")
+                                    .font(.footnote.weight(.semibold)).foregroundStyle(.orange)
+                                Text(note).font(.footnote).foregroundStyle(.secondary)
+                            }
+                            ForEach(question.options) { option in
+                                Button { choose(option.id, type: question.type) } label: {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Image(systemName: selected.contains(option.id) ? "checkmark.circle.fill" : "circle")
+                                        Text(option.id).bold()
+                                        if question.optionsShownInImage != true { Text(option.text).frame(maxWidth: .infinity, alignment: .leading) }
+                                        else { Spacer() }
+                                    }.font(.body).padding(15).frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                                }.buttonStyle(.plain).disabled(result != nil || showingSourceAnswer || !imagesReady(question) || store.blocked)
+                            }
+                            if let result {
+                                Label(result.correct ? "本次答对" : "本次答错", systemImage: result.correct ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .font(.title3.bold()).foregroundStyle(result.correct ? Color.green : Color.orange)
+                                Text("原书答案：" + question.answer.joined(separator: "、")).font(.headline)
+                                Text(question.explanation).font(.body).textSelection(.enabled)
+                                Text("这是对应原题的练习记录，不会改变背卡自评或复习日期。")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            if showingSourceAnswer && question.requiresReview {
+                                Text("原书标记：" + (question.originalAnswerLabel ?? question.answer.joined(separator: "、"))).font(.headline)
+                                Text(question.explanation).font(.body).textSelection(.enabled)
+                                Text("这道题的选项或条件待核，本次不生成答对／答错记录。")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            if let error = store.error { Text(error).font(.footnote).foregroundStyle(.orange) }
+                        }.padding(20).frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
+                    }
+                    .safeAreaInset(edge: .bottom) {
+                        VStack(spacing: 10) {
+                            if question.requiresReview && !showingSourceAnswer {
+                                Button("查看原书标记与解析") { showingSourceAnswer = true }
+                                    .buttonStyle(.borderedProminent).disabled(!imagesReady(question))
+                            } else if question.requiresReview && showingSourceAnswer {
+                                if index + 1 < questions.count { Button("下一道原题") { advance() }.buttonStyle(.borderedProminent) }
+                                else { Button("返回卡片") { dismiss() }.buttonStyle(.borderedProminent) }
+                            } else if result == nil {
+                                Button("提交答案") {
+                                    guard result == nil else { return }
+                                    result = store.submit(question: question, selected: selected,
+                                        cardAnswerWasVisible: cardAnswerWasVisible, id: attemptID, at: Date())
+                                }.buttonStyle(.borderedProminent).disabled(selected.isEmpty || !imagesReady(question) || store.blocked)
+                            } else if index + 1 < questions.count {
+                                Button("下一道原题") { advance() }.buttonStyle(.borderedProminent)
+                            } else {
+                                Button("返回卡片") { dismiss() }.buttonStyle(.borderedProminent)
+                            }
+                        }.frame(maxWidth: .infinity).padding(12).background(.bar)
+                    }
+                } else {
+                    ContentUnavailableView("暂未附原题", systemImage: "doc.text")
+                }
+            }
+            .navigationTitle("对应原题").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("返回卡片") { dismiss() } } }
+            #if DEBUG
+            .onAppear { preview.didRenderRelatedQuestion() }
+            #endif
+        }
+    }
+    private func imagesReady(_ question: HandbookRelatedQuestion) -> Bool {
+        failedImages.isEmpty && loadedImages.count == (question.sourceAssets ?? []).count
+    }
+    private func choose(_ id: String, type: ExamQuestionType) {
+        guard result == nil else { return }
+        if type == .multiple {
+            if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        } else { selected = [id] }
+    }
+    private func advance() {
+        index += 1; selected = []; result = nil; showingSourceAnswer = false; attemptID = UUID(); loadedImages = []; failedImages = []
+    }
+}
+
+private struct HandbookRelatedQuestionImage: View {
+    let asset: ProfessionalSourceFileAsset
+    let root: URL
+    let onAvailability: (Bool) -> Void
+    @State private var image: CGImage?
+    @State private var failed = false
+    @State private var zoomed = false
+    var body: some View {
+        Group {
+            if let image {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit().accessibilityLabel(asset.altText)
+                    Button("放大题图") { zoomed = true }.font(.footnote).buttonStyle(.bordered)
+                }
+            } else if failed {
+                Text("本机尚未找到题图。").font(.footnote).foregroundStyle(.orange)
+            } else { ProgressView("正在打开题图…") }
+        }.task(id: asset.sha256) {
+            image = nil; failed = false
+            do { image = try asset.croppedCGImage(assetRoot: root); onAvailability(true) }
+            catch { failed = true; onAvailability(false) }
+        }
+        .sheet(isPresented: $zoomed) {
+            NavigationStack {
+                if let image {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(decorative: image, scale: 1).accessibilityLabel(asset.altText)
+                    }.navigationTitle("题图 · 可横竖滑动").navigationBarTitleDisplayMode(.inline)
+                        .toolbar { Button("关闭") { zoomed = false } }
+                }
+            }
         }
     }
 }

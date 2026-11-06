@@ -2,13 +2,21 @@ import Foundation
 import StudyCore
 
 enum ConceptSubject: String, Codable, CaseIterable, Identifiable {
-    case computer, power
+    case computer, power, circuit
     var id: String { rawValue }
-    var title: String { self == .computer ? "计算机基础" : "电力系统基础" }
-    var shortTitle: String { self == .computer ? "计算机" : "电力系统" }
-    var symbol: String { self == .computer ? "desktopcomputer" : "bolt.circle" }
-    var directoryName: String { self == .computer ? "ComputerFoundation" : "PowerSystems" }
-    var bankID: String { "other-engineering-\(self == .computer ? "computer" : "power")-2027-v1" }
+    var title: String {
+        switch self { case .computer: return "计算机基础"; case .power: return "电力系统基础"; case .circuit: return "电路与变压器" }
+    }
+    var shortTitle: String {
+        switch self { case .computer: return "计算机"; case .power: return "电力系统"; case .circuit: return "电路" }
+    }
+    var symbol: String {
+        switch self { case .computer: return "desktopcomputer"; case .power: return "bolt.circle"; case .circuit: return "bolt.horizontal.circle" }
+    }
+    var directoryName: String {
+        switch self { case .computer: return "ComputerFoundation"; case .power: return "PowerSystems"; case .circuit: return "CircuitFoundation" }
+    }
+    var bankID: String { "other-engineering-\(rawValue)-2027-v1" }
 }
 
 enum ConceptCalendar {
