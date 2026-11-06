@@ -17,16 +17,17 @@ from capture_professional_question_previews import (
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build/handbook-card-previews"
 BUNDLE = "local.xkl.study"
-SUBJECTS = ("computer", "power", "circuit")
+SUBJECTS = ("computer", "power", "circuit", "mechanics")
 DEFAULT_CASES = ("front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle",
          "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch")
-CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "effective-import")
+CASES = DEFAULT_CASES + ("highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import")
 
 
-def capture_pairs(cases):
-    # Shared lecture tables belong only to the power package.
-    return tuple((subject, case) for subject in SUBJECTS for case in cases
-                 if (not case.startswith("linked-table-") and case != "effective-import") or subject == "power")
+def capture_pairs(cases, subjects=SUBJECTS):
+    return tuple((subject, case) for subject in subjects for case in cases
+                 if (not case.startswith("linked-table-") or subject in ("power", "mechanics"))
+                 and (case != "effective-import" or subject == "power")
+                 and (case != "table-index" or subject == "mechanics"))
 
 
 CAPTURES = capture_pairs(CASES)
@@ -41,12 +42,23 @@ def selected_cases(raw):
     return cases
 
 
+def selected_subjects(raw):
+    if not raw.strip():
+        return SUBJECTS
+    subjects = tuple(x.strip() for x in raw.split(","))
+    if len(subjects) > len(SUBJECTS) or len(subjects) != len(set(subjects)) or any(x not in SUBJECTS for x in subjects):
+        raise ValueError("HANDBOOK_CARD_PREVIEW_SUBJECTS must contain distinct allowed subjects")
+    return subjects
+
+
 def read_receipt(container, receipt, capture_id, subject, case, launched_at):
     container, receipt = Path(container).resolve(), Path(receipt)
     expected = container / "tmp" / f"handbook-card-preview-ready-{capture_id}.json"
     if (str(uuid.UUID(capture_id)) != capture_id or receipt != expected
             or subject not in SUBJECTS or case not in CASES
-            or ((case.startswith("linked-table-") or case == "effective-import") and subject != "power")):
+            or (case.startswith("linked-table-") and subject not in ("power", "mechanics"))
+            or (case == "effective-import" and subject != "power")
+            or (case == "table-index" and subject != "mechanics")):
         raise RuntimeError("Invalid readiness receipt identity")
     temporary = container / "tmp"
     if temporary.resolve().parent != container or receipt.resolve().parent != temporary.resolve():
@@ -61,16 +73,16 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
             or value.get("subject") != subject or value.get("case") != case
             or value.get("ready") is not True or value.get("syntheticOnly") is not True):
         raise RuntimeError("Native receipt does not match this fixture launch")
-    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page", "effective-import") else "back")
+    mode = "completed" if case == "completed" else ("front" if case in ("front", "table-front", "postponed", "normal-front", "highlight-front", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import") else "back")
     page, archive = (102, 117) if subject == "power" else (2, 3)
     supplemented = case.startswith(("multi-source", "lecture-only"))
     lecture_only = case.startswith("lecture-only")
     source_sheet = case.endswith("-pages")
     expected_state = {
         "route": "ProfessionalCoursesView", "selectedSubject": subject,
-        "recallCueMode": mode == "front" and (subject == "power" or case in ("front", "highlight-front")),
+        "recallCueMode": mode == "front" and (subject == "power" or case in ("front", "highlight-front", "linked-table-entry", "linked-table-page")),
         "fullScreen": case not in ("normal-front", "normal-back"), "rootTabShellFixture": True,
-        "topicFrequencyLabel": ("宝典考点频率 ★★★★☆" if case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page") else
+        "topicFrequencyLabel": None if subject == "mechanics" else ("宝典考点频率 ★★★★☆" if case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page") else
                                 ("宝典未单独标注" if case == "normal-front" else None)),
         "memoryGuideRendered": case in ("front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"),
         "highlightSpanCount": 2 if case.startswith("highlight-") else 0,
@@ -79,9 +91,12 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
         "linkedTableEntryRendered": case == "linked-table-entry",
         "linkedTablePageRendered": case == "linked-table-page",
         "linkedTablePreservedRecord": case in ("linked-table-entry", "linked-table-page"),
-        "linkedTableColumnCount": 5 if case in ("linked-table-entry", "linked-table-page") else 0,
-        "linkedTableBlankCell": case in ("linked-table-entry", "linked-table-page"),
-        "effectiveContentOverlay": case in ("related-question", "related-review", "linked-table-page", "highlight-editor", "multi-source-pages", "lecture-only-pages"),
+        "linkedTableColumnCount": 5 if subject == "power" and case in ("linked-table-entry", "linked-table-page") else 0,
+        "linkedTableBlankCell": subject == "power" and case in ("linked-table-entry", "linked-table-page"),
+        "tableIndexRendered": case == "table-index",
+        "noteBeforeImage": subject == "mechanics" and case == "linked-table-page",
+        "optionalDirectoryExcludedFromCards": case == "table-index",
+        "effectiveContentOverlay": case in ("related-question", "related-review", "linked-table-page", "table-index", "highlight-editor", "multi-source-pages", "lecture-only-pages"),
         "effectiveBlockedOverlay": case == "effective-import",
         "systemPickerObserved": case == "effective-import",
         "memoryGuideHelpPreservedRecord": case == "front",
@@ -106,7 +121,7 @@ def read_receipt(container, receipt, capture_id, subject, case, launched_at):
                              (["纯合成讲义甲"] if lecture_only else
                               (["纯合成来源", "纯合成讲义甲"] if supplemented else ["纯合成来源"]))),
         "allSourceTitles": (["纯合成来源", "纯合成讲义甲"] if supplemented else
-                            (["纯合成来源", "纯合成表格来源"] if case.startswith("linked-table-") else ["纯合成来源"])),
+                            (["纯合成来源", "纯合成表格来源"] if case.startswith("linked-table-") or case == "table-index" else ["纯合成来源"])),
         "supplementalExampleUsesOrdinaryBlock": supplemented,
         "sourceBlankCellsPreserved": subject == "power" and case in ("table", "table-front"),
         "allSourcePageNumbers": [page, archive] if case == "missing-source" else [archive],
@@ -140,7 +155,10 @@ def main():
     if platform.system() != "Darwin":
         raise SystemExit("Real native iOS Simulator capture requires macOS/Xcode")
     cases = selected_cases(os.environ.get("HANDBOOK_CARD_PREVIEW_CASES", ""))
-    captures = capture_pairs(cases)
+    subjects = selected_subjects(os.environ.get("HANDBOOK_CARD_PREVIEW_SUBJECTS", ""))
+    captures = capture_pairs(cases, subjects)
+    if not captures:
+        raise ValueError("Selected subjects and cases have no compatible fixture")
     timeout = selected_timeout(os.environ.get("HANDBOOK_CARD_PREVIEW_TIMEOUT", "90"))
     os.chdir(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -161,7 +179,7 @@ def main():
                 "suite": "handbook-cards", "synthetic_only": True, "device": name,
                 "device_type": kind, "runtime": runtime_info, "simulator_workaround": workaround,
                 "readiness": "Production ProfessionalCoursesView subject Picker and card layout with exact persisted self-rating state; other subject uses an isolated empty store; optional images never gate a text-card rating",
-                "run_id": run_id, "requested_subjects": list(SUBJECTS),
+                "run_id": run_id, "requested_subjects": list(subjects),
                 "requested_cases": list(cases), "requested_capture_count": len(captures),
                 "status": "incomplete", "fixtures": []}
     try:

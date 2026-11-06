@@ -2,19 +2,19 @@ import Foundation
 import StudyCore
 
 enum ConceptSubject: String, Codable, CaseIterable, Identifiable {
-    case computer, power, circuit
+    case computer, power, circuit, mechanics
     var id: String { rawValue }
     var title: String {
-        switch self { case .computer: return "计算机基础"; case .power: return "电力系统基础"; case .circuit: return "电路与变压器" }
+        switch self { case .computer: return "计算机基础"; case .power: return "电力系统基础"; case .circuit: return "电路与变压器"; case .mechanics: return "工程力学" }
     }
     var shortTitle: String {
-        switch self { case .computer: return "计算机"; case .power: return "电力系统"; case .circuit: return "电路" }
+        switch self { case .computer: return "计算机"; case .power: return "电力系统"; case .circuit: return "电路"; case .mechanics: return "力学" }
     }
     var symbol: String {
-        switch self { case .computer: return "desktopcomputer"; case .power: return "bolt.circle"; case .circuit: return "bolt.horizontal.circle" }
+        switch self { case .computer: return "desktopcomputer"; case .power: return "bolt.circle"; case .circuit: return "bolt.horizontal.circle"; case .mechanics: return "scalemass" }
     }
     var directoryName: String {
-        switch self { case .computer: return "ComputerFoundation"; case .power: return "PowerSystems"; case .circuit: return "CircuitFoundation" }
+        switch self { case .computer: return "ComputerFoundation"; case .power: return "PowerSystems"; case .circuit: return "CircuitFoundation"; case .mechanics: return "EngineeringMechanics" }
     }
     var bankID: String { "other-engineering-\(rawValue)-2027-v1" }
 }

@@ -16,6 +16,8 @@ struct ProfessionalCoursesView: View {
     var handbookComputer: HandbookWordStore? = nil
     var handbookPower: HandbookWordStore? = nil
     var handbookCircuit: HandbookWordStore? = nil
+    var handbookMechanics: HandbookWordStore? = nil
+    var handbookBaseDirectory: URL? = nil
     var fullScreenEnabled: Binding<Bool> = .constant(false)
 
     var body: some View {
@@ -29,12 +31,13 @@ struct ProfessionalCoursesView: View {
                 Text(ConceptSubject.computer.shortTitle).tag(ConceptSubject.computer)
                 Text(ConceptSubject.power.shortTitle).tag(ConceptSubject.power)
                 Text(ConceptSubject.circuit.shortTitle).tag(ConceptSubject.circuit)
+                Text(ConceptSubject.mechanics.shortTitle).tag(ConceptSubject.mechanics)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
                 .padding(.vertical, 8)
             }
-            HandbookCardView(subject: subject,
+            HandbookCardView(subject: subject, baseDirectory: handbookBaseDirectory,
                              injectedStore: selectedHandbook,
                              originalQuestionStore: selectedQuestions,
                              legacyStore: selectedLegacy, studying: $recalling,
@@ -46,13 +49,13 @@ struct ProfessionalCoursesView: View {
     }
 
     private var selectedHandbook: HandbookWordStore? {
-        switch subject { case .computer: return handbookComputer; case .power: return handbookPower; case .circuit: return handbookCircuit }
+        switch subject { case .computer: return handbookComputer; case .power: return handbookPower; case .circuit: return handbookCircuit; case .mechanics: return handbookMechanics }
     }
     private var selectedQuestions: ProfessionalQuestionStore? {
-        switch subject { case .computer: return objectiveComputer; case .power: return objectivePower; case .circuit: return nil }
+        switch subject { case .computer: return objectiveComputer; case .power: return objectivePower; case .circuit, .mechanics: return nil }
     }
     private var selectedLegacy: ConceptStore? {
-        switch subject { case .computer: return computer; case .power: return power; case .circuit: return nil }
+        switch subject { case .computer: return computer; case .power: return power; case .circuit, .mechanics: return nil }
     }
 }
 

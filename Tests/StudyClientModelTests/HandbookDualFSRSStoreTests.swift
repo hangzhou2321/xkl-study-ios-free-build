@@ -707,7 +707,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             XCTAssertEqual(reopened.engine?.presentation?.revealed, f.legacyState.word.presentation?.revealed)
             try assertMarkers(f)
         }
-        for subject in [ConceptSubject.computer, .power, .circuit] {
+        for subject in [ConceptSubject.computer, .power, .circuit, .mechanics] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-subject-default-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
@@ -715,14 +715,101 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             store.importData(try encode(package(subject)))
             XCTAssertFalse(store.blocked, store.error ?? "")
             XCTAssertNil(store.error)
-            XCTAssertEqual(store.engine?.usesDualFSRS, subject == .circuit)
+            let expectedDual = subject == .circuit || subject == .mechanics
+            XCTAssertEqual(store.engine?.usesDualFSRS, expectedDual)
             let raw = try Data(contentsOf: root.appendingPathComponent("HandbookWordRecall/\(subject.rawValue)/current.json"))
             XCTAssertEqual(try object(raw)["format"] as? String,
-                           subject == .circuit ? "xkl-handbook-word-store-v2-dual-fsrs" : "xkl-handbook-word-store-v1")
+                           expectedDual ? "xkl-handbook-word-store-v2-dual-fsrs" : "xkl-handbook-word-store-v1")
             let reopened = HandbookWordStore(subject: subject, baseDirectory: root, documentsDirectory: root, now: time)
             XCTAssertFalse(reopened.blocked, reopened.error ?? "")
             XCTAssertEqual(reopened.engine?.state, store.engine?.state)
         }
+    }
+
+    @MainActor func testMechanicsDualTablesImportPreservesHistoryAndRejectsLossAndDowngrade() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-mechanics-v4-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let now = time
+        let markerURL = root.appendingPathComponent("public-study-protected.bin")
+        let marker = Data("synthetic protected other subject".utf8)
+        try marker.write(to: markerURL)
+        let store = HandbookWordStore(subject: .mechanics, baseDirectory: root, documentsDirectory: root, now: now)
+        store.importData(try encode(package(.mechanics)))
+        XCTAssertNil(store.error)
+        store.start(now: now.addingTimeInterval(1))
+        let first = try XCTUnwrap(store.engine?.presentation?.id)
+        store.reveal(token: first, now: now.addingTimeInterval(2))
+        store.rate(remembered: true, token: first, now: now.addingTimeInterval(3))
+        XCTAssertNil(store.error)
+        let before = try XCTUnwrap(store.engine?.state)
+        let currentURL = root.appendingPathComponent("HandbookWordRecall/mechanics/current.json")
+        let oldBytes = try Data(contentsOf: currentURL)
+        XCTAssertEqual(try object(oldBytes)["format"] as? String, "xkl-handbook-word-store-v2-dual-fsrs")
+
+        let asset = ProfessionalSourceFileAsset(sha256: String(repeating: "b", count: 64), mimeType: "image/jpeg",
+            byteCount: 128, pixelWidth: 100, pixelHeight: 100, crop: .init(x: 0, y: 0, width: 1, height: 1),
+            altText: "Synthetic original image")
+        var updated = package(.mechanics, revision: "1.1")
+        updated.additionalSources = [.init(id: "synthetic-source", source: updated.source,
+            sourcePages: [.init(number: 1, asset: asset)])]
+        updated.sharedTables = [
+            .init(id: "linked", title: "Synthetic linked image", cardIDs: [updated.cards[0].id],
+                  columns: [], rows: [], sourceID: "synthetic-source", sourcePages: [1], sourceImages: [asset]),
+            .init(id: "optional", title: "Synthetic optional image", cardIDs: [],
+                  columns: [], rows: [], sourceID: "synthetic-source", sourcePages: [1], sourceImages: [asset])]
+        let raw = try encode(updated)
+        store.importData(raw)
+        XCTAssertNil(store.error)
+        XCTAssertFalse(store.blocked)
+        let state = try XCTUnwrap(store.engine?.state)
+        XCTAssertEqual(state.word, before.word)
+        XCTAssertEqual(state.dualFSRS, before.dualFSRS)
+        XCTAssertEqual(state.originalCardIDs, before.originalCardIDs)
+        XCTAssertEqual(state.word.presentation?.id, before.word.presentation?.id)
+        let v4 = try Data(contentsOf: currentURL)
+        XCTAssertEqual(try object(v4)["format"] as? String, "xkl-handbook-word-store-v4-dual-tables")
+        XCTAssertEqual(try Data(contentsOf: currentURL.deletingLastPathComponent()
+            .appendingPathComponent("revisions/\(StudySHA256.hex(oldBytes)).json")), oldBytes)
+        store.importData(raw)
+        XCTAssertNil(store.error)
+        XCTAssertEqual(try Data(contentsOf: currentURL), v4, "Identical reimport is byte-for-byte idempotent")
+        let restored = HandbookWordStore(subject: .mechanics, baseDirectory: root, documentsDirectory: root)
+        XCTAssertFalse(restored.blocked, restored.error ?? "")
+        XCTAssertEqual(restored.engine?.state, state)
+        XCTAssertEqual(try Data(contentsOf: markerURL), marker)
+
+        var losesTables = package(.mechanics, revision: "1.2")
+        losesTables.additionalSources = updated.additionalSources
+        losesTables.sharedTables = []
+        restored.importData(try encode(losesTables))
+        XCTAssertNotNil(restored.error)
+        XCTAssertEqual(try Data(contentsOf: currentURL), v4)
+        XCTAssertEqual(restored.engine?.state, state)
+        XCTAssertEqual(try Data(contentsOf: markerURL), marker)
+
+        let correctedStore = HandbookWordStore(subject: .mechanics, baseDirectory: root, documentsDirectory: root)
+        var corrected = package(.mechanics, revision: "1.2")
+        corrected.additionalSources = updated.additionalSources
+        corrected.sharedTables = updated.sharedTables
+        corrected.sharedTables?[0].sourceNote = "Synthetic correction to source note"
+        correctedStore.importData(try encode(corrected))
+        XCTAssertNil(correctedStore.error)
+        XCTAssertEqual(correctedStore.engine?.state.word, state.word)
+        XCTAssertEqual(correctedStore.engine?.state.dualFSRS, state.dualFSRS)
+        XCTAssertEqual(correctedStore.engine?.state.originalCardIDs, state.originalCardIDs)
+        XCTAssertEqual(try Data(contentsOf: currentURL.deletingLastPathComponent()
+            .appendingPathComponent("revisions/\(StudySHA256.hex(v4)).json")), v4)
+        let correctedBytes = try Data(contentsOf: currentURL)
+
+        var mislabeled = try object(correctedBytes)
+        mislabeled["format"] = "xkl-handbook-word-store-v2-dual-fsrs"
+        let mislabeledBytes = try JSONSerialization.data(withJSONObject: mislabeled, options: [.sortedKeys])
+        try mislabeledBytes.write(to: currentURL)
+        let rejected = HandbookWordStore(subject: .mechanics, baseDirectory: root, documentsDirectory: root)
+        XCTAssertTrue(rejected.blocked)
+        XCTAssertEqual(try Data(contentsOf: currentURL), mislabeledBytes, "Invalid downgrade cannot overwrite the archive")
+        XCTAssertEqual(try Data(contentsOf: markerURL), marker)
     }
 
     @MainActor func testComputerAndPowerRollbackOnlyWhenDualHasNoNewActivity() async throws {

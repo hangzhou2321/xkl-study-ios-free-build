@@ -49,6 +49,10 @@ struct HandbookCardPreviewState {
     var openLinkedTable = false
     var didRenderLinkedTableEntry: (String) -> Void = { _ in }
     var didRenderLinkedTablePage: (String) -> Void = { _ in }
+    var openTableIndex = false
+    var didRenderTableIndex: (Int, Int) -> Void = { _, _ in }
+    var didRenderSourceNote: (String, CGFloat) -> Void = { _, _ in }
+    var didRenderTableImage: (String, CGFloat) -> Void = { _, _ in }
     var openImportPicker = false
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
@@ -69,13 +73,14 @@ extension EnvironmentValues {
     let handbookComputer: HandbookWordStore
     let handbookPower: HandbookWordStore
     let handbookCircuit: HandbookWordStore
+    let handbookMechanics: HandbookWordStore
     let legacyComputer: ConceptStore
     let legacyPower: ConceptStore
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
     let expectedState: HandbookWordState
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "effective-import"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -89,8 +94,10 @@ extension EnvironmentValues {
         guard let selectedSubject = ConceptSubject(rawValue: rawSubject) else {
             preconditionFailure("Unknown synthetic handbook subject")
         }
-        precondition((!selected.hasPrefix("linked-table-") && selected != "effective-import") || selectedSubject == .power,
-                     "Linked table and import previews are power-only")
+        precondition(!selected.hasPrefix("linked-table-") || selectedSubject == .power || selectedSubject == .mechanics,
+                     "Linked table preview requires a table-enabled subject")
+        precondition(selected != "effective-import" || selectedSubject == .power, "Import picker fixture is power-only")
+        precondition(selected != "table-index" || selectedSubject == .mechanics, "Optional directory fixture is mechanics-only")
         subject = selectedSubject
         selectedCase = selected
         root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-handbook-" + rawSubject + "-" + UUID().uuidString, isDirectory: true)
@@ -202,7 +209,7 @@ extension EnvironmentValues {
                 if selected == "related-review" { question["sourceIssueNote"] = "合成来源存在歧义，仅验证暂不判分。" }
                 package["relatedQuestions"] = [question]
             }
-            if ["front", "back", "normal-front", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"].contains(selected) {
+            if selectedSubject != .mechanics && ["front", "back", "normal-front", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"].contains(selected) {
                 package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
             }
@@ -236,7 +243,7 @@ extension EnvironmentValues {
                         "crop": ["x": 0, "y": 0, "width": 1, "height": 1],
                         "altText": "故意缺失的纯合成讲义页，用于验证来源隔离。"]]]]]
             }
-            if selected.hasPrefix("linked-table-") {
+            if selected.hasPrefix("linked-table-") || selected == "table-index" {
                 package["additionalSources"] = [["id": "synthetic-table-source", "source": [
                     "title": "纯合成表格来源", "fileName": "synthetic-table.pdf", "sha256": String(repeating: "e", count: 64),
                     "pdfPageCount": 3, "includedPages": [2]]]]
@@ -246,6 +253,37 @@ extension EnvironmentValues {
                              ["项目乙", "纯合成条件乙", "23", "示例值", "仅供排版测试"]],
                     "sourceID": "synthetic-table-source", "sourcePages": [2],
                     "sourceNote": "空白是纯合成测试，不代表真实资料。"]]
+                if selectedSubject == .mechanics {
+                    // Draw an entirely synthetic image and write it into the isolated preview root.
+                    let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+                    let image = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 300), format: format).image { context in
+                        UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 600, height: 300))
+                        UIColor.systemBlue.setStroke(); let path = UIBezierPath(rect: CGRect(x: 12, y: 12, width: 576, height: 276)); path.lineWidth = 3; path.stroke()
+                        for y in [90, 160, 230] { let line = UIBezierPath(); line.move(to: CGPoint(x: 12, y: CGFloat(y))); line.addLine(to: CGPoint(x: 588, y: CGFloat(y))); line.stroke() }
+                        let font = UIFont.systemFont(ofSize: 26)
+                        for (index, text) in ["纯合成表格 · 界面预览", "项目甲        合成内容甲", "项目乙        合成内容乙", "项目丙        合成内容丙"].enumerated() {
+                            (text as NSString).draw(at: CGPoint(x: 32, y: CGFloat(30 + index * 70)), withAttributes: [.font: font, .foregroundColor: UIColor.label])
+                        }
+                    }
+                    let png = image.pngData()!
+                    let hash = StudySHA256.hex(png)
+                    let sourceRoot = root.appendingPathComponent("HandbookSources", isDirectory: true)
+                    try FileManager.default.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+                    try png.write(to: sourceRoot.appendingPathComponent(hash + ".png"))
+                    let asset: [String: Any] = ["sha256": hash, "mimeType": "image/png", "byteCount": png.count,
+                        "pixelWidth": 600, "pixelHeight": 300, "crop": ["x": 0, "y": 0, "width": 1, "height": 1],
+                        "altText": "纯合成表格图片，不含真实讲义。"]
+                    package["additionalSources"] = [["id": "synthetic-table-source", "source": [
+                        "title": "纯合成表格来源", "fileName": "synthetic-table.pdf", "sha256": String(repeating: "e", count: 64),
+                        "pdfPageCount": 3, "includedPages": [2]], "sourcePages": [["number": 2, "asset": asset]]]]
+                    package["sharedTables"] = [
+                        ["id": "synthetic-shared-table", "title": "合成关联原图表", "cardIDs": ["synthetic-handbook-first"],
+                         "columns": [], "rows": [], "sourceID": "synthetic-table-source", "sourcePages": [2],
+                         "sourceImages": [asset], "sourceNote": "纯合成校注：本示例数值只用于检查显示顺序。"],
+                        ["id": "synthetic-optional-page", "title": "合成选看原页", "cardIDs": [],
+                         "columns": [], "rows": [], "sourceID": "synthetic-table-source", "sourcePages": [2],
+                         "sourceImages": [asset], "sourceNote": "纯合成选看内容，不进入学习队列。"]]
+                }
             }
             var prepared = HandbookWordStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
             prepared.importData(try JSONSerialization.data(withJSONObject: package, options: [.sortedKeys]))
@@ -301,7 +339,8 @@ extension EnvironmentValues {
             handbookComputer = selectedSubject == .computer ? prepared : HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root)
             handbookPower = selectedSubject == .power ? prepared : HandbookWordStore(subject: .power, baseDirectory: root, documentsDirectory: root)
             handbookCircuit = selectedSubject == .circuit ? prepared : HandbookWordStore(subject: .circuit, baseDirectory: root, documentsDirectory: root)
-            for other in [handbookComputer, handbookPower, handbookCircuit] where other.subject != selectedSubject {
+            handbookMechanics = selectedSubject == .mechanics ? prepared : HandbookWordStore(subject: .mechanics, baseDirectory: root, documentsDirectory: root)
+            for other in [handbookComputer, handbookPower, handbookCircuit, handbookMechanics] where other.subject != selectedSubject {
                 precondition(other.engine == nil && !other.blocked && other.error == nil, "Other subject must have its own empty synthetic store")
             }
             let computerArchive = ConceptStore(subject: .computer, baseDirectory: root)
@@ -355,6 +394,9 @@ struct HandbookCardPreview: View {
     @State private var relatedQuestionObserved = false
     @State private var linkedTableEntryCardID: String?
     @State private var linkedTablePageID: String?
+    @State private var tableIndexCounts: [Int] = []
+    @State private var noteBottom: CGFloat?
+    @State private var imageTop: CGFloat?
     @State private var effectiveContentOverlay = false
     @State private var effectiveBlockedOverlay = false
     @State private var systemPickerObserved = false
@@ -373,6 +415,7 @@ struct HandbookCardPreview: View {
                                     effectiveContentOverlay = content; effectiveBlockedOverlay = blocked
                                 },
                                 handbookComputer: fixture.handbookComputer, handbookPower: fixture.handbookPower, handbookCircuit: fixture.handbookCircuit,
+                                handbookMechanics: fixture.handbookMechanics, handbookBaseDirectory: fixture.root,
                                 fullScreenEnabled: $fullScreenEnabled)
                 .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }.tag(4)
@@ -402,6 +445,12 @@ struct HandbookCardPreview: View {
                 linkedTableEntryCardID = cardID
             }, didRenderLinkedTablePage: { tableID in
                 linkedTablePageID = tableID
+            }, openTableIndex: fixture.selectedCase == "table-index", didRenderTableIndex: { linked, optional in
+                tableIndexCounts = [linked, optional]
+            }, didRenderSourceNote: { tableID, bottom in
+                if tableID == "synthetic-shared-table" { noteBottom = bottom }
+            }, didRenderTableImage: { _, top in
+                imageTop = top
             }, openImportPicker: fixture.selectedCase == "effective-import"))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
@@ -412,6 +461,9 @@ struct HandbookCardPreview: View {
             .onChange(of: relatedQuestionObserved) { _, _ in reportIfReady() }
             .onChange(of: linkedTableEntryCardID) { _, _ in reportIfReady() }
             .onChange(of: linkedTablePageID) { _, _ in reportIfReady() }
+            .onChange(of: tableIndexCounts) { _, _ in reportIfReady() }
+            .onChange(of: noteBottom) { _, _ in reportIfReady() }
+            .onChange(of: imageTop) { _, _ in reportIfReady() }
             .onChange(of: effectiveContentOverlay) { _, _ in reportIfReady() }
             .onChange(of: effectiveBlockedOverlay) { _, _ in reportIfReady() }
             .onChange(of: systemPickerObserved) { _, _ in reportIfReady() }
@@ -571,16 +623,21 @@ struct HandbookCardPreview: View {
               engine.presentation?.id == (fixture.selectedCase == "diagram-switch" ? diagramSwitchToken : fixture.expectedToken),
               engine.package.cards.allSatisfy({ $0.id.hasPrefix("synthetic-handbook-") }),
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
-        let expectsContent = ["related-question", "related-review", "linked-table-page", "highlight-editor", "multi-source-pages", "lecture-only-pages"].contains(fixture.selectedCase)
+        let expectsContent = ["related-question", "related-review", "linked-table-page", "table-index", "highlight-editor", "multi-source-pages", "lecture-only-pages"].contains(fixture.selectedCase)
         guard effectiveContentOverlay == expectsContent,
               effectiveBlockedOverlay == (fixture.selectedCase == "effective-import") else { return false }
         switch fixture.selectedCase {
         case "related-question", "related-review": return relatedQuestionObserved && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0
         case "linked-table-entry", "linked-table-page":
-            return fixture.subject == .power && engine.state == fixture.expectedState &&
+            return (fixture.subject == .power || fixture.subject == .mechanics) && engine.state == fixture.expectedState &&
                 observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0 &&
                 guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed &&
-                (fixture.selectedCase == "linked-table-entry" ? linkedTableEntryCardID == "synthetic-handbook-first" : linkedTablePageID == "synthetic-shared-table")
+                (fixture.selectedCase == "linked-table-entry" ? linkedTableEntryCardID == "synthetic-handbook-first" :
+                    (linkedTablePageID == "synthetic-shared-table" &&
+                     (fixture.subject == .power || (noteBottom != nil && imageTop != nil && noteBottom! <= imageTop!))))
+        case "table-index": return fixture.subject == .mechanics && tableIndexCounts == [1, 1] &&
+            engine.state == fixture.expectedState && observed.mode == "front" && !observed.revealed && observed.ratingCount == 0 &&
+            engine.package.sharedTables?.last?.cardIDs.isEmpty == true
         case "effective-import": return fixture.subject == .power && systemPickerObserved &&
             engine.state == fixture.expectedState && observed.mode == "front" && !observed.revealed &&
             !observed.ratingEnabled && observed.ratingCount == 0
@@ -636,6 +693,9 @@ struct HandbookCardPreview: View {
                 "linkedTablePreservedRecord": fixture.selectedCase.hasPrefix("linked-table-") && fixture.store.engine?.state == fixture.expectedState,
                 "linkedTableColumnCount": fixture.selectedCase.hasPrefix("linked-table-") ? (fixture.store.package?.sharedTables?.first?.columns.count ?? 0) : 0,
                 "linkedTableBlankCell": fixture.selectedCase.hasPrefix("linked-table-") && fixture.store.package?.sharedTables?.first?.rows.contains(where: { $0.contains("") }) == true,
+                "tableIndexRendered": fixture.selectedCase == "table-index" && tableIndexCounts == [1, 1],
+                "noteBeforeImage": fixture.subject == .mechanics && fixture.selectedCase == "linked-table-page" && noteBottom != nil && imageTop != nil && noteBottom! <= imageTop!,
+                "optionalDirectoryExcludedFromCards": fixture.selectedCase == "table-index" && fixture.store.package?.sharedTables?.last?.cardIDs.isEmpty == true,
                 "effectiveContentOverlay": effectiveContentOverlay,
                 "effectiveBlockedOverlay": effectiveBlockedOverlay,
                 "systemPickerObserved": systemPickerObserved,

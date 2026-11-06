@@ -156,12 +156,13 @@ struct HandbookSharedTable: Codable, Equatable, Identifiable {
     var sourceNote: String? = nil
     var sourceImages: [ProfessionalSourceFileAsset]? = nil
 
-    func validate(cardIDs validIDs: Set<String>, sources: [HandbookCardPackage.AdditionalSource]?) throws {
+    func validate(cardIDs validIDs: Set<String>, sources: [HandbookCardPackage.AdditionalSource]?,
+                  allowDirectoryOnly: Bool = false) throws {
         let images = sourceImages ?? []
         let hasTextTable = (2...8).contains(columns.count) && (1...100).contains(rows.count)
         let hasOnlyImages = columns.isEmpty && rows.isEmpty && !images.isEmpty
         guard handbookText(id, 200), handbookText(title, 300),
-              !cardIDs.isEmpty, Set(cardIDs).count == cardIDs.count,
+              (!cardIDs.isEmpty || (allowDirectoryOnly && hasOnlyImages)), Set(cardIDs).count == cardIDs.count,
               Set(cardIDs).isSubset(of: validIDs),
               hasTextTable || hasOnlyImages, images.count <= 4,
               columns.allSatisfy({ $0.isEmpty || handbookText($0, 300) }),
@@ -265,10 +266,10 @@ struct HandbookCardPackage: Codable, Equatable {
         for question in questions { try question.validate(cardIDs: cardIDs, source: source, additionalSources: additionalSources) }
         let tables = sharedTables ?? []
         guard tables.count <= 500, Set(tables.map(\.id)).count == tables.count,
-              sharedTables == nil || subject == .power else {
+              sharedTables == nil || subject == .power || subject == .mechanics else {
             throw ExamError.invalid("讲义对照表的身份重复或数量异常。")
         }
-        for table in tables { try table.validate(cardIDs: cardIDs, sources: additionalSources) }
+        for table in tables { try table.validate(cardIDs: cardIDs, sources: additionalSources, allowDirectoryOnly: subject == .mechanics) }
         for card in cards {
             try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
         }

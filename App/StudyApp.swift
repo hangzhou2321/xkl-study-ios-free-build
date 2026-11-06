@@ -72,6 +72,7 @@ struct RootView: View {
     @StateObject private var handbookComputer = HandbookWordStore(subject: .computer)
     @StateObject private var handbookPower = HandbookWordStore(subject: .power)
     @StateObject private var handbookCircuit = HandbookWordStore(subject: .circuit)
+    @StateObject private var handbookMechanics = HandbookWordStore(subject: .mechanics)
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @StateObject private var effectiveTime = EffectiveStudyTimeStore()
@@ -97,6 +98,7 @@ struct RootView: View {
             StudyHomeView(store: store, exams: exams, computer: concepts, power: power,
                           professionalComputer: professionalComputer, professionalPower: professionalPower,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
+                          handbookMechanics: handbookMechanics,
                           flow: flow, effectiveTime: effectiveTime, launch: launch)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
@@ -120,6 +122,7 @@ struct RootView: View {
                                     },
                                     objectiveComputer: professionalComputer, objectivePower: professionalPower,
                                     handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
+                                    handbookMechanics: handbookMechanics,
                                     fullScreenEnabled: handbookFullScreenBinding)
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .disabled(flow.state.activeArea == selectedProfessionalArea
@@ -268,9 +271,9 @@ struct RootView: View {
         screen.professionalPaused = flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused
         if professionalRecalling {
             let handbook: HandbookWordStore
-            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit }
+            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit; case .mechanics: handbook = handbookMechanics }
             screen.professionalVisible = handbook.engine?.presentation != nil
-        } else if professionalPracticing, subject != .circuit {
+        } else if professionalPracticing, subject == .computer || subject == .power {
             let selected = subject == .computer ? professionalComputer : professionalPower
             screen.professionalVisible = selected.engine?.presentation != nil
         }
@@ -280,7 +283,7 @@ struct RootView: View {
     }
 
     private var effectiveProfessionalArea: EffectiveStudyArea {
-        switch subject { case .computer: return .computer; case .power: return .power; case .circuit: return .circuit }
+        switch subject { case .computer: return .computer; case .power: return .power; case .circuit: return .circuit; case .mechanics: return .mechanics }
     }
 
     private var acceptsEffectiveTouch: Bool { effectiveScreen.acceptsInteraction }
@@ -310,11 +313,11 @@ struct RootView: View {
         if selectedTab == 3, examPracticing, exams.currentQuestion != nil { return .publicQuestions }
         if selectedTab == 4, professionalRecalling {
             let handbook: HandbookWordStore
-            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit }
+            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit; case .mechanics: handbook = handbookMechanics }
             if handbook.engine?.presentation != nil { return selectedProfessionalArea }
         }
         if selectedTab == 4, professionalPracticing {
-            if subject == .circuit { return nil }
+            guard subject == .computer || subject == .power else { return nil }
             let selected = subject == .computer ? professionalComputer : professionalPower
             if selected.engine?.presentation != nil { return selectedProfessionalArea }
         }
@@ -322,7 +325,7 @@ struct RootView: View {
     }
 
     private var selectedProfessionalArea: StudyArea {
-        switch subject { case .computer: return .computer; case .power: return .power; case .circuit: return .circuit }
+        switch subject { case .computer: return .computer; case .power: return .power; case .circuit: return .circuit; case .mechanics: return .mechanics }
     }
 
     private func began(_ area: StudyArea) {
@@ -370,6 +373,15 @@ struct RootView: View {
             }
             handbookCircuit.start()
             guard handbookCircuit.error == nil, !handbookCircuit.blocked else { selectedTab = 4; return }
+            professionalRecalling = true
+        case .mechanics:
+            subject = .mechanics
+            professionalPracticing = false
+            guard handbookMechanics.engine != nil, !handbookMechanics.blocked else {
+                professionalRecalling = false; selectedTab = 4; return
+            }
+            handbookMechanics.start()
+            guard handbookMechanics.error == nil, !handbookMechanics.blocked else { selectedTab = 4; return }
             professionalRecalling = true
         }
         flow.begin(area: area, mode: mode)

@@ -17,6 +17,11 @@ on:
         type: string
         required: false
         default: ''
+      preview_subjects:
+        description: Optional comma-separated synthetic handbook preview subjects
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -86,6 +91,7 @@ jobs:
       - name: Capture native synthetic handbook-card previews
         env:
           HANDBOOK_CARD_PREVIEW_CASES: ${{ inputs.preview_cases }}
+          HANDBOOK_CARD_PREVIEW_SUBJECTS: ${{ inputs.preview_subjects }}
         run: python3 tools/capture_handbook_card_previews.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -167,6 +167,30 @@ final class HandbookCardTests: XCTestCase {
             tables[0]["sourceImages"] = []; object["sharedTables"] = tables
         })
     }
+    func testMechanicsOptionalOriginalPageRequiresImageAndNeverAssociatesWithCards() throws {
+        let asset = ProfessionalSourceFileAsset(sha256: String(repeating: "a", count: 64), mimeType: "image/jpeg",
+            byteCount: 128, pixelWidth: 100, pixelHeight: 100,
+            crop: .init(x: 0, y: 0, width: 1, height: 1), altText: "Synthetic page")
+        var mechanics = try changed(fixture()) { $0["subject"] = "mechanics" }
+        mechanics.additionalSources = [.init(id: "synthetic-source", source: mechanics.source,
+            sourcePages: [.init(number: 1, asset: asset)])]
+        mechanics.sharedTables = [.init(id: "optional-page", title: "Synthetic optional original",
+            cardIDs: [], columns: [], rows: [], sourceID: "synthetic-source", sourcePages: [1], sourceImages: [asset])]
+        try mechanics.validate()
+        XCTAssertEqual(try HandbookCardPackage.load(JSONEncoder().encode(mechanics)), mechanics)
+        XCTAssertTrue(mechanics.cards.allSatisfy { mechanics.tables(for: $0).isEmpty })
+        XCTAssertThrowsError(try changed(mechanics) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["columns"] = ["A", "B"]; tables[0]["rows"] = [["a", "b"]]
+            object["sharedTables"] = tables
+        }, "An unlinked text table is not a directory-only original page")
+        XCTAssertThrowsError(try changed(mechanics) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["sourceImages"] = []; object["sharedTables"] = tables
+        })
+        XCTAssertThrowsError(try changed(mechanics) { $0["subject"] = "power" },
+                             "Power retains its existing requirement for at least one linked card")
+    }
     func testRevealIsNotASelfRatingAndBackSideRestores() throws {
         var e = try HandbookRecallEngine.fresh(fixture()); try e.start(now: now)
         let p = try XCTUnwrap(e.presentation); try e.reveal(token: p.id, now: now)

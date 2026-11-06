@@ -65,56 +65,62 @@ struct HandbookCardView: View {
             baseDirectory: injectedStore?.annotationBaseDirectory ?? baseDirectory))
     }
 
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { scroll in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if let engine = store.engine {
-                            if studying, let card = engine.currentCard, let presentation = engine.presentation {
-                                studyCard(engine, card, presentation)
-                            } else if studying {
-                                completion(engine)
-                            } else {
-                                home(engine)
-                            }
+    var body: some View { previewMonitoredContent }
+
+    private var scrollContent: some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let engine = store.engine {
+                        if studying, let card = engine.currentCard, let presentation = engine.presentation {
+                            studyCard(engine, card, presentation)
+                        } else if studying {
+                            completion(engine)
                         } else {
-                            emptyState
+                            home(engine)
                         }
-                        if let error = store.error {
-                            Text(error).font(.subheadline).foregroundStyle(.red).textSelection(.enabled)
-                        }
-                        if store.blocked {
-                            Label("记录已保护，原文件保留。请先导出记录再处理。", systemImage: "lock.shield")
-                                .font(.footnote).foregroundStyle(.orange)
-                        }
+                    } else {
+                        emptyState
                     }
-                    .id("handbook-top")
-                    .padding(.horizontal, fullScreenActive ? 12 : 20)
-                    .padding(.top, fullScreenActive ? 0 : 10).padding(.bottom, 24)
-                    .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
-                }
-                .onChange(of: store.engine?.presentation?.id) { _, _ in
-                    scroll.scrollTo("handbook-top", anchor: .top)
-                }
-                .onChange(of: store.engine?.presentation?.revealed) { _, _ in
-                    scroll.scrollTo("handbook-top", anchor: .top)
-                }
-                #if DEBUG
-                .task(id: preview.scrollTarget) {
-                    if let target = preview.scrollTarget {
-                        scrollReady = false
-                        await Task.yield()
-                        scroll.scrollTo(target, anchor: .top)
-                        await Task.yield()
-                        scrollReady = true
-                        reportPreview()
+                    if let error = store.error {
+                        Text(error).font(.subheadline).foregroundStyle(.red).textSelection(.enabled)
+                    }
+                    if store.blocked {
+                        Label("记录已保护，原文件保留。请先导出记录再处理。", systemImage: "lock.shield")
+                            .font(.footnote).foregroundStyle(.orange)
                     }
                 }
-                #endif
+                .id("handbook-top")
+                .padding(.horizontal, fullScreenActive ? 12 : 20)
+                .padding(.top, fullScreenActive ? 0 : 10).padding(.bottom, 24)
+                .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
             }
+            .onChange(of: store.engine?.presentation?.id) { _, _ in
+                scroll.scrollTo("handbook-top", anchor: .top)
+            }
+            .onChange(of: store.engine?.presentation?.revealed) { _, _ in
+                scroll.scrollTo("handbook-top", anchor: .top)
+            }
+            #if DEBUG
+            .task(id: preview.scrollTarget) {
+                if let target = preview.scrollTarget {
+                    scrollReady = false
+                    await Task.yield()
+                    scroll.scrollTo(target, anchor: .top)
+                    await Task.yield()
+                    scrollReady = true
+                    reportPreview()
+                }
+            }
+            #endif
+        }
+    }
+
+    private var navigationContent: some View {
+        NavigationStack {
+            scrollContent
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("宝典一 · \(subject.shortTitle)")
+            .navigationTitle(subject == .mechanics ? "工程力学" : "宝典一 · \(subject.shortTitle)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(fullScreenActive ? .hidden : .visible, for: .navigationBar)
             .toolbar {
@@ -139,11 +145,11 @@ struct HandbookCardView: View {
                     Menu {
                         if store.package != nil { Button("章节目录", systemImage: "list.bullet") { showingOutline = true } }
                         if store.package != nil { Button("核对讲义原页", systemImage: "doc.text.magnifyingglass") { showingAllSources = true } }
-                        if subject == .power, let package = store.package, handbookHasTables(package) {
-                            Button("讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
+                        if (subject == .power || subject == .mechanics), let package = store.package, handbookHasTables(package) {
+                            Button(subject == .mechanics ? "讲义图表与选看" : "讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
                         }
                         if let staged = recommendedStagedFile {
-                            Button("导入已准备的宝典卡", systemImage: "tray.and.arrow.down") { importStaged(staged) }
+                            Button(subject == .mechanics ? "导入已准备的讲义卡" : "导入已准备的宝典卡", systemImage: "tray.and.arrow.down") { importStaged(staged) }
                                 .disabled(store.blocked)
                         }
                         Button("选择卡片文件", systemImage: "square.and.arrow.down") { importing = true }.disabled(store.blocked)
@@ -167,6 +173,10 @@ struct HandbookCardView: View {
             }
             .safeAreaInset(edge: .bottom) { actions }
         }
+    }
+
+    private var fileContent: some View {
+        navigationContent
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url): store.importContent(url); recommendedStagedFile = store.recommendedStagedFile()
@@ -175,9 +185,13 @@ struct HandbookCardView: View {
             }
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .json,
-                      defaultFilename: "宝典一-\(subject.shortTitle)-完整背卡记录") { result in
+                      defaultFilename: subject == .mechanics ? "工程力学-完整背卡记录" : "宝典一-\(subject.shortTitle)-完整背卡记录") { result in
             if case .failure(let error) = result { store.error = error.localizedDescription }
         }
+    }
+
+    private var firstSourceSheets: some View {
+        fileContent
         .sheet(isPresented: $showingOutline) {
             if let package = store.package { outline(package) }
         }
@@ -186,6 +200,10 @@ struct HandbookCardView: View {
                 HandbookSourcePagesView(groups: handbookSourceGroups(package, card: card), assetRoot: sourceRoot, title: "原文出处")
             }
         }
+    }
+
+    private var sourceSheetContent: some View {
+        firstSourceSheets
         .sheet(isPresented: $showingAllSources) {
             if let package = store.package {
                 HandbookSourcePagesView(groups: handbookSourceGroups(package), assetRoot: sourceRoot, title: "核对讲义原页")
@@ -196,6 +214,10 @@ struct HandbookCardView: View {
                 HandbookTableIndex(package: package, sourceRoot: sourceRoot, highlightState: highlightStore.state)
             }
         }
+    }
+
+    private var oldAndHighlightSheets: some View {
+        sourceSheetContent
         .sheet(isPresented: $showingOldQuestions) {
             if let originalQuestionStore {
                 VStack(spacing: 0) {
@@ -213,6 +235,10 @@ struct HandbookCardView: View {
         .sheet(item: $highlightTarget) { target in
             HandbookHighlightEditor(target: target, store: highlightStore)
         }
+    }
+
+    private var relatedAndTableSheets: some View {
+        oldAndHighlightSheets
         .fullScreenCover(item: $relatedQuestionTarget) { card in
             if let package = store.package {
                 HandbookRelatedQuestionPage(card: card, questions: package.questions(for: card),
@@ -225,9 +251,17 @@ struct HandbookCardView: View {
                 HandbookCardTablesPage(card: card, package: package, sourceRoot: sourceRoot, highlightState: highlightStore.state)
             }
         }
+    }
+
+    private var practiceSheetContent: some View {
+        relatedAndTableSheets
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
+    }
+
+    private var startupContent: some View {
+        practiceSheetContent
         .task {
             recommendedStagedFile = store.recommendedStagedFile()
             if startInStudy || studying { store.start() }
@@ -239,21 +273,35 @@ struct HandbookCardView: View {
             }
             if preview.openRelatedQuestion, let engine = store.engine, let card = engine.currentCard,
                !engine.package.questions(for: card).isEmpty { relatedQuestionTarget = card }
-            if preview.openLinkedTable, subject == .power, let engine = store.engine,
+            if preview.openLinkedTable, (subject == .power || subject == .mechanics), let engine = store.engine,
                let card = engine.currentCard, handbookHasTables(card, package: engine.package) { tableTarget = card }
+            if preview.openTableIndex, subject == .mechanics, let package = store.package,
+               handbookHasTables(package) { showingTableIndex = true }
             if preview.openImportPicker { importing = true }
             reportPreview()
             #endif
         }
+    }
+
+    private var studyBindingContent: some View {
+        startupContent
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
         .onChange(of: fullScreenEnabled) { _, _ in reportPreviewIfEnabled() }
-        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex || showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil || store.error != nil) { _, value in
+    }
+
+    private var overlayObservationContent: some View {
+        studyBindingContent
+        .onChange(of: hasAnyOverlay) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
             onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
         }
+    }
+
+    private var activityContent: some View {
+        overlayObservationContent
         .onChange(of: scenePhase) { _, phase in
             displayDate = Date()
             if phase == .active { recommendedStagedFile = store.recommendedStagedFile() }
@@ -268,7 +316,11 @@ struct HandbookCardView: View {
             let mask = effectiveOverlayMask
             onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
         }
-        #if DEBUG
+    }
+
+    #if DEBUG
+    private var previewLayoutContent: some View {
+        activityContent
         .background {
             GeometryReader { geometry in
                 Color.clear.onAppear {
@@ -280,15 +332,34 @@ struct HandbookCardView: View {
                 }
             }.allowsHitTesting(false)
         }
+    }
+
+    private var previewStateContent: some View {
+        previewLayoutContent
         .onChange(of: store.engine?.presentation) { _, _ in reportPreview() }
-        .onChange(of: store.engine.map { $0.stats(on: displayDate).remembered + $0.stats(on: displayDate).forgotten }) { _, _ in reportPreview() }
+        .onChange(of: previewRatingCount) { _, _ in reportPreview() }
         .onChange(of: store.blocked) { _, _ in reportPreview() }
+    }
+
+    private var previewMonitoredContent: some View {
+        previewStateContent
         .onChange(of: preview.sourceSheet) { _, route in
             showingSources = route == "card"
             showingAllSources = route == "all"
         }
         .onChange(of: showingSources || showingAllSources) { _, _ in reportPreview() }
-        #endif
+    }
+
+    private var previewRatingCount: Int? {
+        store.engine.map { $0.stats(on: displayDate).remembered + $0.stats(on: displayDate).forgotten }
+    }
+    #else
+    private var previewMonitoredContent: some View { activityContent }
+    #endif
+
+    private var hasAnyOverlay: Bool {
+        importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex ||
+            showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil || store.error != nil
     }
 
     private var sourceRoot: URL {
@@ -322,8 +393,8 @@ struct HandbookCardView: View {
                 Button("返回卡片首页", systemImage: "rectangle.on.rectangle") { studying = false }
                 Button("章节目录", systemImage: "list.bullet") { showingOutline = true }
                 Button("核对本卡原页", systemImage: "doc.text.magnifyingglass") { showingSources = true }
-                if subject == .power, let package = store.package, handbookHasTables(package) {
-                    Button("讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
+                if (subject == .power || subject == .mechanics), let package = store.package, handbookHasTables(package) {
+                    Button(subject == .mechanics ? "讲义图表与选看" : "讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
                 }
                 Button("导出背卡记录", systemImage: "square.and.arrow.up") { exportRecords() }
             } label: {
@@ -352,16 +423,16 @@ struct HandbookCardView: View {
         VStack(alignment: .leading, spacing: 20) {
             Image(systemName: "rectangle.on.rectangle.angled").font(.system(size: 42)).foregroundStyle(.blue)
             Text("一张卡，一个知识点").font(.system(.largeTitle, design: .rounded).weight(.bold))
-            Text("先回忆，再翻答案。按原书顺序背，随时停下，下次接着来。")
+            Text(subject == .mechanics ? "先回忆，再翻答案。按讲义知识点背，随时停下，下次接着来。" : "先回忆，再翻答案。按原书顺序背，随时停下，下次接着来。")
                 .font(.title3).foregroundStyle(.secondary).lineSpacing(6)
             if let staged = recommendedStagedFile {
                 Button { importStaged(staged) } label: {
-                    Label("导入已准备的宝典卡", systemImage: "tray.and.arrow.down")
+                    Label(subject == .mechanics ? "导入已准备的讲义卡" : "导入已准备的宝典卡", systemImage: "tray.and.arrow.down")
                         .frame(maxWidth: .infinity, minHeight: 42)
                 }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.blocked)
                     .accessibilityIdentifier("handbook-import-staged")
             } else {
-                Button("选择宝典卡片文件") { importing = true }
+                Button(subject == .mechanics ? "选择讲义卡片文件" : "选择宝典卡片文件") { importing = true }
                     .buttonStyle(.borderedProminent).controlSize(.large).disabled(store.blocked)
                     .accessibilityIdentifier("handbook-import")
             }
@@ -451,7 +522,7 @@ struct HandbookCardView: View {
                     .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
                     .id(p.id)
                 if !engine.package.questions(for: card).isEmpty ||
-                    (subject == .power && handbookHasTables(card, package: engine.package)) {
+                    ((subject == .power || subject == .mechanics) && handbookHasTables(card, package: engine.package)) {
                     VStack(spacing: 10) {
                         if !engine.package.questions(for: card).isEmpty {
                             Button { relatedQuestionTarget = card } label: {
@@ -459,7 +530,7 @@ struct HandbookCardView: View {
                             }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
                                 .accessibilityIdentifier("handbook-related-questions")
                         }
-                        if subject == .power && handbookHasTables(card, package: engine.package) {
+                        if (subject == .power || subject == .mechanics) && handbookHasTables(card, package: engine.package) {
                             Button { tableTarget = card } label: {
                                 HandbookSideLink(symbol: "tablecells", title: "表格")
                             }.buttonStyle(.plain).accessibilityLabel("查看本卡相关讲义表格")
@@ -770,6 +841,20 @@ private struct HandbookSharedTableView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(verbatim: handbookDisplayText(table.title)).font(.headline)
             Text(verbatim: source).font(.footnote).foregroundStyle(.secondary)
+            if package.subject == .mechanics, let note = table.sourceNote, !note.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("讲义校注").font(.footnote.weight(.semibold))
+                    Text(verbatim: handbookDisplayText(note)).font(.footnote)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("handbook-mechanics-source-note")
+                    #if DEBUG
+                    .background(GeometryReader { proxy in
+                        Color.clear.onAppear { preview.didRenderSourceNote(table.id, proxy.frame(in: .global).maxY) }
+                    })
+                    #endif
+            }
             if !table.columns.isEmpty || !table.rows.isEmpty {
                 if table.columns.count > 2 {
                     Text("左右滑动查看全部列").font(.footnote).foregroundStyle(.secondary)
@@ -790,7 +875,7 @@ private struct HandbookSharedTableView: View {
                 HandbookSharedTableSourceImage(asset: asset, root: sourceRoot)
                     .id(asset.sha256 + "-" + String(index))
             }
-            if let note = table.sourceNote, !note.isEmpty {
+            if package.subject != .mechanics, let note = table.sourceNote, !note.isEmpty {
                 Text(verbatim: handbookDisplayText(note)).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -821,12 +906,20 @@ private struct HandbookSharedTableSourceImage: View {
     @State private var image: CGImage?
     @State private var failed = false
     @State private var zoomed = false
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
     var body: some View {
         Group {
             if let image {
                 VStack(alignment: .leading, spacing: 8) {
                     Image(decorative: image, scale: 1).resizable().scaledToFit()
                         .accessibilityLabel(asset.altText)
+                        #if DEBUG
+                        .background(GeometryReader { proxy in
+                            Color.clear.onAppear { preview.didRenderTableImage(asset.sha256, proxy.frame(in: .global).minY) }
+                        })
+                        #endif
                     Button("放大原表") { zoomed = true }.font(.footnote).buttonStyle(.bordered)
                         .accessibilityIdentifier("handbook-table-image-zoom")
                 }
@@ -860,20 +953,23 @@ private struct HandbookTableIndex: View {
     let sourceRoot: URL
     let highlightState: HandbookHighlightState
     @Environment(\.dismiss) private var dismiss
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
     private var cards: [HandbookCard] { package.cards.filter { $0.blocks.contains { $0.kind == "table" } } }
+    private var linkedTables: [HandbookSharedTable] { (package.sharedTables ?? []).filter { !$0.cardIDs.isEmpty } }
+    private var optionalPages: [HandbookSharedTable] { (package.sharedTables ?? []).filter { $0.cardIDs.isEmpty } }
     var body: some View {
         NavigationStack {
             List {
-                if !(package.sharedTables ?? []).isEmpty {
+                if !linkedTables.isEmpty {
                     Section("讲义对照表") {
-                        ForEach(package.sharedTables ?? [], id: \.id) { table in
-                            NavigationLink {
-                                ScrollView {
-                                    HandbookSharedTableView(table: table, package: package, sourceRoot: sourceRoot)
-                                        .padding(20).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
-                                }.navigationTitle("讲义对照表").navigationBarTitleDisplayMode(.inline)
-                            } label: { Text(verbatim: handbookDisplayText(table.title)) }
-                        }
+                        ForEach(linkedTables, id: \.id) { table in tableLink(table) }
+                    }
+                }
+                if package.subject == .mechanics && !optionalPages.isEmpty {
+                    Section("老师标注不需掌握 · 选看") {
+                        ForEach(optionalPages, id: \.id) { table in tableLink(table) }
                     }
                 }
                 if !cards.isEmpty {
@@ -887,9 +983,20 @@ private struct HandbookTableIndex: View {
                         }
                     }
                 }
-            }.navigationTitle("讲义表格").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(package.subject == .mechanics ? "讲义图表与选看" : "讲义表格").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarLeading) { Button("关闭") { dismiss() } } }
         }
+        #if DEBUG
+        .onAppear { preview.didRenderTableIndex(linkedTables.count, optionalPages.count) }
+        #endif
+    }
+    private func tableLink(_ table: HandbookSharedTable) -> some View {
+        NavigationLink {
+            ScrollView {
+                HandbookSharedTableView(table: table, package: package, sourceRoot: sourceRoot)
+                    .padding(20).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
+            }.navigationTitle("讲义对照表").navigationBarTitleDisplayMode(.inline)
+        } label: { Text(verbatim: handbookDisplayText(table.title)) }
     }
 }
 

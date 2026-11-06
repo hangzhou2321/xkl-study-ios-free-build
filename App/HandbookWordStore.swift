@@ -180,12 +180,12 @@ enum HandbookSchedulerPreference {
         #if DEBUG
         if case .testDualFSRS = self { return true }
         #endif
-        return subject == .circuit
+        return subject == .circuit || subject == .mechanics
     }
 }
 
 /// Independent professional-card namespace. Computer and power keep Pocket;
-/// circuit uses dual FSRS. No other subject's record is shared or rewritten.
+/// circuit and mechanics use dual FSRS. No subject's record is shared or rewritten.
 @MainActor final class HandbookWordStore: ObservableObject {
     let subject: ConceptSubject
     @Published private(set) var engine: HandbookWordEngine?
@@ -377,7 +377,9 @@ enum HandbookSchedulerPreference {
         let hash = StudySHA256.hex(raw); try immutable(raw, directory.appendingPathComponent("imports/\(hash).xklflashcards"))
         var next = HandbookWordDisk(subject: subject, baselineSHA256: StudySHA256.hex(baseline), initialSHA256: StudySHA256.hex(initial),
             state: candidate.state, rawImports: [hash], revisions: [])
-        if prefersDualFSRS { next.format = "xkl-handbook-word-store-v2-dual-fsrs" }
+        if prefersDualFSRS {
+            next.format = package.sharedTables == nil ? "xkl-handbook-word-store-v2-dual-fsrs" : "xkl-handbook-word-store-v4-dual-tables"
+        }
         else if package.sharedTables != nil { next.format = "xkl-handbook-word-store-v3-pocket-tables" }
         let bytes = try encode(next); try writer(bytes, currentURL)
         guard try read(currentURL) == bytes else { throw ExamError.invalid("宝典新调度档案未完整保存。") }
@@ -408,12 +410,16 @@ enum HandbookSchedulerPreference {
     }
     private func validate(_ saved: HandbookWordDisk) throws {
         let old = saved.format == "xkl-handbook-word-store-v1"
-        let dual = saved.format == "xkl-handbook-word-store-v2-dual-fsrs"
+        let dualWithoutTables = saved.format == "xkl-handbook-word-store-v2-dual-fsrs"
+        let dualWithTables = saved.format == "xkl-handbook-word-store-v4-dual-tables"
+        let dual = dualWithoutTables || dualWithTables
         let tables = saved.format == "xkl-handbook-word-store-v3-pocket-tables"
         guard ((old || tables) && saved.state.dualFSRS == nil && saved.cutoverV1SHA256 == nil && saved.reenabledFromLegacyMarkerSHA256 == nil &&
                (!old || saved.state.package.sharedTables == nil) &&
                (!tables || (saved.subject == .power && saved.state.package.sharedTables != nil))) ||
-              (dual && saved.state.dualFSRS != nil) else {
+              (dual && saved.state.dualFSRS != nil &&
+               (!dualWithoutTables || saved.state.package.sharedTables == nil) &&
+               (!dualWithTables || (saved.subject == .mechanics && saved.state.package.sharedTables != nil))) else {
             throw ExamError.invalid("宝典调度版本和状态不一致，原记录保留。")
         }
         if let hash = saved.cutoverV1SHA256 {
@@ -670,6 +676,12 @@ enum HandbookSchedulerPreference {
                 if current.package.sharedTables != nil && incoming.sharedTables == nil {
                     throw ExamError.invalid("新卡包缺少已导入的讲义表格；原课程与记录保留。")
                 }
+                if subject == .mechanics, let existing = current.package.sharedTables {
+                    let incomingIDs = Set((incoming.sharedTables ?? []).map(\.id))
+                    guard existing.allSatisfy({ incomingIDs.contains($0.id) }) else {
+                        throw ExamError.invalid("新讲义包缺少已保存的图表；原课程与记录保留。")
+                    }
+                }
                 try guardCurrent(); let candidate = try current.fork(); try candidate.updatePackage(incoming)
                 let hash = StudySHA256.hex(raw)
                 if candidate.state == next.state && next.rawImports.contains(hash) { error = nil; return }
@@ -680,8 +692,13 @@ enum HandbookSchedulerPreference {
                 try immutable(raw, directory.appendingPathComponent("imports/\(hash).xklflashcards"))
                 if !next.rawImports.contains(hash) { next.rawImports.append(hash) };next.state = candidate.state
                 if candidate.package.sharedTables != nil {
-                    guard subject == .power, !candidate.usesDualFSRS else { throw ExamError.invalid("讲义表格与当前调度不兼容，原记录保留。") }
-                    next.format = "xkl-handbook-word-store-v3-pocket-tables"
+                    if subject == .power && !candidate.usesDualFSRS {
+                        next.format = "xkl-handbook-word-store-v3-pocket-tables"
+                    } else if subject == .mechanics && candidate.usesDualFSRS {
+                        next.format = "xkl-handbook-word-store-v4-dual-tables"
+                    } else {
+                        throw ExamError.invalid("讲义表格与当前调度不兼容，原记录保留。")
+                    }
                 }
                 try guardCurrent();let bytes = try encode(next)
                 do { try writer(bytes, currentURL); guard try read(currentURL) == bytes else { throw ExamError.invalid("宝典导入指针未完整保存。") } }

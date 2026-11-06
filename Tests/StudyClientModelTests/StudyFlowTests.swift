@@ -442,7 +442,8 @@ final class StudyFlowTests: XCTestCase {
         XCTAssertEqual(StudyArea.computer.tab, 4)
         XCTAssertEqual(StudyArea.power.tab, 4)
         XCTAssertEqual(StudyArea.circuit.tab, 4)
-        XCTAssertEqual(Set(StudyArea.allCases.map(\.title)).count, 5)
+        XCTAssertEqual(StudyArea.mechanics.tab, 4)
+        XCTAssertEqual(Set(StudyArea.allCases.map(\.title)).count, 6)
         let value = StudyFlowState()
         XCTAssertEqual(try JSONDecoder().decode(StudyFlowState.self,
             from: JSONEncoder().encode(value)), value)
