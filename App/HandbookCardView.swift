@@ -24,10 +24,12 @@ struct HandbookCardView: View {
     @State private var showingOutline = false
     @State private var showingSources = false
     @State private var showingAllSources = false
+    @State private var showingTableIndex = false
     @State private var showingOldQuestions = false
     @State private var highlightTarget: HandbookHighlightTarget?
     @State private var outlineHighlightTarget: HandbookHighlightTarget?
     @State private var relatedQuestionTarget: HandbookCard?
+    @State private var tableTarget: HandbookCard?
     @State private var document = HandbookCardRecordDocument(data: Data())
     @State private var displayDate = Date()
     @Environment(\.scenePhase) private var scenePhase
@@ -133,6 +135,9 @@ struct HandbookCardView: View {
                     Menu {
                         if store.package != nil { Button("章节目录", systemImage: "list.bullet") { showingOutline = true } }
                         if store.package != nil { Button("核对讲义原页", systemImage: "doc.text.magnifyingglass") { showingAllSources = true } }
+                        if subject == .power, let package = store.package, handbookHasTables(package) {
+                            Button("讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
+                        }
                         if let staged = recommendedStagedFile {
                             Button("导入已准备的宝典卡", systemImage: "tray.and.arrow.down") { importStaged(staged) }
                                 .disabled(store.blocked)
@@ -182,6 +187,11 @@ struct HandbookCardView: View {
                 HandbookSourcePagesView(groups: handbookSourceGroups(package), assetRoot: sourceRoot, title: "核对讲义原页")
             }
         }
+        .sheet(isPresented: $showingTableIndex) {
+            if let package = store.package {
+                HandbookTableIndex(package: package, sourceRoot: sourceRoot, highlightState: highlightStore.state)
+            }
+        }
         .sheet(isPresented: $showingOldQuestions) {
             if let originalQuestionStore {
                 VStack(spacing: 0) {
@@ -205,6 +215,11 @@ struct HandbookCardView: View {
                     cardAnswerWasVisible: store.engine?.presentation?.revealed ?? false)
             }
         }
+        .fullScreenCover(item: $tableTarget) { card in
+            if let package = store.package {
+                HandbookCardTablesPage(card: card, package: package, sourceRoot: sourceRoot, highlightState: highlightStore.state)
+            }
+        }
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
@@ -219,13 +234,15 @@ struct HandbookCardView: View {
             }
             if preview.openRelatedQuestion, let engine = store.engine, let card = engine.currentCard,
                !engine.package.questions(for: card).isEmpty { relatedQuestionTarget = card }
+            if preview.openLinkedTable, subject == .power, let engine = store.engine,
+               let card = engine.currentCard, handbookHasTables(card, package: engine.package) { tableTarget = card }
             reportPreview()
             #endif
         }
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
         .onChange(of: fullScreenEnabled) { _, _ in reportPreviewIfEnabled() }
-        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || store.error != nil) { _, value in
+        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex || showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil || store.error != nil) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -280,6 +297,9 @@ struct HandbookCardView: View {
                 Button("返回卡片首页", systemImage: "rectangle.on.rectangle") { studying = false }
                 Button("章节目录", systemImage: "list.bullet") { showingOutline = true }
                 Button("核对本卡原页", systemImage: "doc.text.magnifyingglass") { showingSources = true }
+                if subject == .power, let package = store.package, handbookHasTables(package) {
+                    Button("讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
+                }
                 Button("导出背卡记录", systemImage: "square.and.arrow.up") { exportRecords() }
             } label: {
                 Image(systemName: "ellipsis").font(.body).frame(width: 44, height: 44)
@@ -398,23 +418,32 @@ struct HandbookCardView: View {
                     .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
             }
             }
-            HStack(alignment: .center, spacing: 4) {
+            HStack(alignment: .top, spacing: 4) {
                 HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide)
                     .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
                     .id(p.id)
-                if !engine.package.questions(for: card).isEmpty {
-                    Button { relatedQuestionTarget = card } label: {
-                        VStack(spacing: 5) {
-                            Image(systemName: "doc.text")
-                            Text("原题").font(.caption.weight(.semibold))
-                            Image(systemName: "chevron.right").font(.caption.weight(.bold))
-                        }.frame(width: 44, height: 76).foregroundStyle(.blue)
-                            .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                    }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
-                        .accessibilityIdentifier("handbook-related-questions")
+                if !engine.package.questions(for: card).isEmpty ||
+                    (subject == .power && handbookHasTables(card, package: engine.package)) {
+                    VStack(spacing: 10) {
+                        if !engine.package.questions(for: card).isEmpty {
+                            Button { relatedQuestionTarget = card } label: {
+                                HandbookSideLink(symbol: "doc.text", title: "原题")
+                            }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
+                                .accessibilityIdentifier("handbook-related-questions")
+                        }
+                        if subject == .power && handbookHasTables(card, package: engine.package) {
+                            Button { tableTarget = card } label: {
+                                HandbookSideLink(symbol: "tablecells", title: "表格")
+                            }.buttonStyle(.plain).accessibilityLabel("查看本卡相关讲义表格")
+                                .accessibilityIdentifier("handbook-related-tables")
+                            #if DEBUG
+                                .onAppear { preview.didRenderLinkedTableEntry(card.id) }
+                            #endif
+                        }
+                    }.padding(.top, 20)
                 }
             }
             if p.revealed {
@@ -625,6 +654,218 @@ struct HandbookCardView: View {
         }
     }
     #endif
+}
+
+/// Looking at a table is presentation only: it does not reveal or rate the card.
+private func handbookHasTables(_ card: HandbookCard, package: HandbookCardPackage) -> Bool {
+    card.blocks.contains { $0.kind == "table" } || !package.tables(for: card).isEmpty
+}
+
+private func handbookHasTables(_ package: HandbookCardPackage) -> Bool {
+    !(package.sharedTables ?? []).isEmpty || package.cards.contains { card in
+        card.blocks.contains { $0.kind == "table" }
+    }
+}
+
+private struct HandbookSideLink: View {
+    let symbol: String
+    let title: String
+    var body: some View {
+        VStack(spacing: 5) {
+            Image(systemName: symbol)
+            Text(title).font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
+            Image(systemName: "chevron.right").font(.caption.weight(.bold))
+        }.frame(width: 44, height: 76).foregroundStyle(.blue)
+            .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+/// Table navigation intentionally uses no scheduling or rating store.
+private struct HandbookCardTablesPage: View {
+    let card: HandbookCard
+    let package: HandbookCardPackage
+    let sourceRoot: URL
+    let highlightState: HandbookHighlightState
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            HandbookCardTablesContent(card: card, package: package, sourceRoot: sourceRoot)
+                .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightState))
+                .navigationTitle("相关表格").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarLeading) { Button("返回卡片") { dismiss() } } }
+        }
+    }
+}
+
+private struct HandbookCardTablesContent: View {
+    let card: HandbookCard
+    let package: HandbookCardPackage
+    let sourceRoot: URL
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text(verbatim: handbookDisplayText(card.title)).font(.title3.bold())
+                Text("查看表格不改变背卡自评或复习日期。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                ForEach(Array(card.blocks.enumerated()), id: \.offset) { index, block in
+                    if block.kind == "table" {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if block.collapsed {
+                                Text(verbatim: block.title.isEmpty ? "卡片原表" : handbookDisplayText(block.title))
+                                    .font(.headline)
+                            }
+                            // Keep original block indices: existing personal highlighting still matches.
+                            HandbookCardBlockView(block: block, blockID: "blocks.\(index)")
+                        }
+                    }
+                }
+                ForEach(package.tables(for: card), id: \.id) { table in
+                    HandbookSharedTableView(table: table, package: package, sourceRoot: sourceRoot)
+                }
+            }.padding(20).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// One source table can be reached from several cards without copying or changing them.
+private struct HandbookSharedTableView: View {
+    let table: HandbookSharedTable
+    let package: HandbookCardPackage
+    let sourceRoot: URL
+    @ScaledMetric(relativeTo: .body) private var width: CGFloat = 150
+    #if DEBUG
+    @Environment(\.handbookCardPreview) private var preview
+    #endif
+    private var source: String {
+        let name = package.additionalSources?.first(where: { $0.id == table.sourceID })?.source.title ?? table.sourceID
+        let pages = table.sourcePages.map { String($0) }.joined(separator: "、")
+        return name + " · PDF物理第" + pages + "页"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(verbatim: handbookDisplayText(table.title)).font(.headline)
+            Text(verbatim: source).font(.footnote).foregroundStyle(.secondary)
+            if !table.columns.isEmpty || !table.rows.isEmpty {
+                if table.columns.count > 2 {
+                    Text("左右滑动查看全部列").font(.footnote).foregroundStyle(.secondary)
+                }
+                ScrollView(.horizontal) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        cells(table.columns, heading: true).background(Color.blue.opacity(0.08))
+                        ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                            Divider()
+                            cells(row, heading: false)
+                                .background(index.isMultiple(of: 2) ? Color(uiColor: .secondarySystemGroupedBackground) : Color.clear)
+                        }
+                    }.fixedSize(horizontal: true, vertical: false)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }.accessibilityLabel("讲义对照表，可左右滑动")
+            }
+            ForEach(Array((table.sourceImages ?? []).enumerated()), id: \.offset) { index, asset in
+                HandbookSharedTableSourceImage(asset: asset, root: sourceRoot)
+                    .id(asset.sha256 + "-" + String(index))
+            }
+            if let note = table.sourceNote, !note.isEmpty {
+                Text(verbatim: handbookDisplayText(note)).font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        #if DEBUG
+        .onAppear { preview.didRenderLinkedTablePage(table.id) }
+        #endif
+    }
+    private func cells(_ values: [String], heading: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(values.enumerated()), id: \.offset) { index, value in
+                Text(verbatim: handbookDisplayText(value))
+                    .font(heading ? .subheadline.weight(.semibold) : .body)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: max(100, width - 20), alignment: .leading)
+                    .padding(10).frame(minHeight: 48, alignment: .topLeading)
+                    .accessibilityLabel(value.isEmpty ? "空白" : value)
+            }
+        }
+    }
+}
+
+/// The validated crop retains merged cells and teacher annotations from the source.
+private struct HandbookSharedTableSourceImage: View {
+    let asset: ProfessionalSourceFileAsset
+    let root: URL
+    @State private var image: CGImage?
+    @State private var failed = false
+    @State private var zoomed = false
+    var body: some View {
+        Group {
+            if let image {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                        .accessibilityLabel(asset.altText)
+                    Button("放大原表") { zoomed = true }.font(.footnote).buttonStyle(.bordered)
+                        .accessibilityIdentifier("handbook-table-image-zoom")
+                }
+            } else if failed {
+                Label("原表图片暂不可用，可从讲义原页核对。", systemImage: "photo.badge.exclamationmark")
+                    .font(.footnote).foregroundStyle(.orange)
+                    .accessibilityIdentifier("handbook-table-image-missing")
+            } else {
+                ProgressView("正在打开原表…")
+            }
+        }.task(id: asset) {
+            image = nil; failed = false
+            do { image = try asset.croppedCGImage(assetRoot: root) }
+            catch { failed = true }
+        }
+        .sheet(isPresented: $zoomed) {
+            NavigationStack {
+                if let image {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(decorative: image, scale: 1).accessibilityLabel(asset.altText)
+                    }.navigationTitle("原表 · 可横竖滑动").navigationBarTitleDisplayMode(.inline)
+                        .toolbar { Button("关闭") { zoomed = false } }
+                }
+            }
+        }
+    }
+}
+
+private struct HandbookTableIndex: View {
+    let package: HandbookCardPackage
+    let sourceRoot: URL
+    let highlightState: HandbookHighlightState
+    @Environment(\.dismiss) private var dismiss
+    private var cards: [HandbookCard] { package.cards.filter { $0.blocks.contains { $0.kind == "table" } } }
+    var body: some View {
+        NavigationStack {
+            List {
+                if !(package.sharedTables ?? []).isEmpty {
+                    Section("讲义对照表") {
+                        ForEach(package.sharedTables ?? [], id: \.id) { table in
+                            NavigationLink {
+                                ScrollView {
+                                    HandbookSharedTableView(table: table, package: package, sourceRoot: sourceRoot)
+                                        .padding(20).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
+                                }.navigationTitle("讲义对照表").navigationBarTitleDisplayMode(.inline)
+                            } label: { Text(verbatim: handbookDisplayText(table.title)) }
+                        }
+                    }
+                }
+                if !cards.isEmpty {
+                    Section("卡片中的表格") {
+                        ForEach(cards) { card in
+                            NavigationLink {
+                                HandbookCardTablesContent(card: card, package: package, sourceRoot: sourceRoot)
+                                    .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightState))
+                                    .navigationTitle("相关表格").navigationBarTitleDisplayMode(.inline)
+                            } label: { Text(verbatim: handbookDisplayText(card.title)) }
+                        }
+                    }
+                }
+            }.navigationTitle("讲义表格").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarLeading) { Button("关闭") { dismiss() } } }
+        }
+    }
 }
 
 private struct HandbookCardFace: View {

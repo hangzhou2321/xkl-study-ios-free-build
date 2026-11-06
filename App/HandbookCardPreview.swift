@@ -45,6 +45,9 @@ struct HandbookCardPreviewState {
     var didRenderHighlightEditor: () -> Void = {}
     var openRelatedQuestion = false
     var didRenderRelatedQuestion: () -> Void = {}
+    var openLinkedTable = false
+    var didRenderLinkedTableEntry: (String) -> Void = { _ in }
+    var didRenderLinkedTablePage: (String) -> Void = { _ in }
 }
 private struct HandbookCardPreviewKey: EnvironmentKey {
     static let defaultValue = HandbookCardPreviewState()
@@ -69,7 +72,8 @@ extension EnvironmentValues {
     let expectedCardID: String?
     let expectedToken: UUID?
     let expectedRatings: Int
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review"]
+    let expectedState: HandbookWordState
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -83,6 +87,8 @@ extension EnvironmentValues {
         guard let selectedSubject = ConceptSubject(rawValue: rawSubject) else {
             preconditionFailure("Unknown synthetic handbook subject")
         }
+        precondition(!selected.hasPrefix("linked-table-") || selectedSubject == .power,
+                     "Linked table previews are power-only")
         subject = selectedSubject
         selectedCase = selected
         root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-handbook-" + rawSubject + "-" + UUID().uuidString, isDirectory: true)
@@ -194,15 +200,22 @@ extension EnvironmentValues {
                 if selected == "related-review" { question["sourceIssueNote"] = "合成来源存在歧义，仅验证暂不判分。" }
                 package["relatedQuestions"] = [question]
             }
-            if ["front", "back", "normal-front", "highlight-front", "highlight-back", "highlight-editor"].contains(selected) {
+            if ["front", "back", "normal-front", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"].contains(selected) {
                 package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
             }
-            if ["front", "back", "highlight-front", "highlight-back", "highlight-editor"].contains(selected) {
+            if ["front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"].contains(selected) {
+                let rows: [[String: String]] = selected.hasPrefix("linked-table-") ? [
+                    ["cue": "合成提示甲", "answer": "合成值甲，仅用于界面排版。"],
+                    ["cue": "合成提示乙", "answer": "合成值乙，仅用于界面排版。"],
+                    ["cue": "合成提示丙", "answer": "合成值丙，仅用于界面排版。"],
+                    ["cue": "合成提示丁", "answer": "合成值丁，仅用于界面排版。"],
+                    ["cue": "合成提示戊", "answer": "合成值戊，仅用于界面排版。"]
+                ] : [["cue": "合成提示甲", "answer": "合成答案甲"],
+                     ["cue": "合成提示乙", "answer": "合成答案乙"]]
                 package["memoryGuides"] = [["cardID": "synthetic-handbook-first",
                     "explanation": "仅用于验证简短骨架，不含真实课程。",
-                    "rows": [["cue": "合成提示甲", "answer": "合成答案甲"],
-                             ["cue": "合成提示乙", "answer": "合成答案乙"]],
+                    "rows": rows,
                     "mnemonic": "合成记忆提示"]]
             }
             var sourcePages: [[String: Any]] = [["number": archivePage, "asset": ["sha256": String(repeating: "c", count: 64), "mimeType": "image/png", "byteCount": 128,
@@ -220,6 +233,17 @@ extension EnvironmentValues {
                         "mimeType": "image/jpeg", "byteCount": 128, "pixelWidth": 120, "pixelHeight": 160,
                         "crop": ["x": 0, "y": 0, "width": 1, "height": 1],
                         "altText": "故意缺失的纯合成讲义页，用于验证来源隔离。"]]]]]
+            }
+            if selected.hasPrefix("linked-table-") {
+                package["additionalSources"] = [["id": "synthetic-table-source", "source": [
+                    "title": "纯合成表格来源", "fileName": "synthetic-table.pdf", "sha256": String(repeating: "e", count: 64),
+                    "pdfPageCount": 3, "includedPages": [2]]]]
+                package["sharedTables"] = [["id": "synthetic-shared-table", "title": "合成五列对照表",
+                    "cardIDs": ["synthetic-handbook-first"], "columns": ["项目", "条件", "指标甲", "指标乙", "补充"],
+                    "rows": [["项目甲", "较长的纯合成条件文字用于测试换行", "17", "", "示例甲"],
+                             ["项目乙", "纯合成条件乙", "23", "示例值", "仅供排版测试"]],
+                    "sourceID": "synthetic-table-source", "sourcePages": [2],
+                    "sourceNote": "空白是纯合成测试，不代表真实资料。"]]
             }
             var prepared = HandbookWordStore(subject: selectedSubject, baseDirectory: root, documentsDirectory: root)
             prepared.importData(try JSONSerialization.data(withJSONObject: package, options: [.sortedKeys]))
@@ -289,6 +313,7 @@ extension EnvironmentValues {
             expectedCardID = prepared.engine?.currentCard?.id
             expectedToken = prepared.engine?.presentation?.id
             expectedRatings = prepared.engine.map { $0.stats(on: now).remembered + $0.stats(on: now).forgotten } ?? 0
+            expectedState = prepared.engine!.state
             handbookPreviewTrace("fixture-ready", ["card": expectedCardID ?? "nil", "ratings": expectedRatings])
         } catch { fatalError("Synthetic handbook fixture failed: \(error)") }
     }
@@ -326,6 +351,8 @@ struct HandbookCardPreview: View {
     @State private var guideRecord: HandbookWordState?
     @State private var highlightEditorObserved = false
     @State private var relatedQuestionObserved = false
+    @State private var linkedTableEntryCardID: String?
+    @State private var linkedTablePageID: String?
     @MainActor init() {
         let prepared = HandbookCardPreviewFixture()
         _fixture = StateObject(wrappedValue: prepared)
@@ -363,6 +390,10 @@ struct HandbookCardPreview: View {
                 highlightEditorObserved = true
             }, openRelatedQuestion: ["related-question", "related-review"].contains(fixture.selectedCase), didRenderRelatedQuestion: {
                 relatedQuestionObserved = true
+            }, openLinkedTable: fixture.selectedCase == "linked-table-page", didRenderLinkedTableEntry: { cardID in
+                linkedTableEntryCardID = cardID
+            }, didRenderLinkedTablePage: { tableID in
+                linkedTablePageID = tableID
             }))
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
@@ -371,6 +402,8 @@ struct HandbookCardPreview: View {
             .onChange(of: guideObservedRevealed) { _, _ in reportIfReady() }
             .onChange(of: highlightEditorObserved) { _, _ in reportIfReady() }
             .onChange(of: relatedQuestionObserved) { _, _ in reportIfReady() }
+            .onChange(of: linkedTableEntryCardID) { _, _ in reportIfReady() }
+            .onChange(of: linkedTablePageID) { _, _ in reportIfReady() }
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
@@ -511,6 +544,11 @@ struct HandbookCardPreview: View {
               observed.fullScreen == !["normal-front", "normal-back"].contains(fixture.selectedCase) else { return false }
         switch fixture.selectedCase {
         case "related-question", "related-review": return relatedQuestionObserved && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0
+        case "linked-table-entry", "linked-table-page":
+            return fixture.subject == .power && engine.state == fixture.expectedState &&
+                observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && observed.ratingCount == 0 &&
+                guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed &&
+                (fixture.selectedCase == "linked-table-entry" ? linkedTableEntryCardID == "synthetic-handbook-first" : linkedTablePageID == "synthetic-shared-table")
         case "front": return guidePhase == 3 && guideObservedCardID == "synthetic-handbook-first" && !guideObservedRevealed && engine.state == guideRecord && observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode
         case "table-front", "postponed", "normal-front": return observed.mode == "front" && !observed.revealed && !observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0 && observed.recallCueMode == (fixture.subject == .power)
         case "back": return guideObservedCardID == "synthetic-handbook-first" && guideObservedRevealed && observed.mode == "back" && observed.revealed && observed.ratingEnabled && engine.stats(on: Date()).remembered + engine.stats(on: Date()).forgotten == 0
@@ -554,10 +592,15 @@ struct HandbookCardPreview: View {
                 "recallCueMode": observation!.recallCueMode,
                 "fullScreen": observation!.fullScreen,
                 "topicFrequencyLabel": observation!.frequencyLabel.map { $0 as Any } ?? NSNull(),
-                "memoryGuideRendered": ["front", "back", "highlight-front", "highlight-back", "highlight-editor"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
+                "memoryGuideRendered": ["front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"].contains(fixture.selectedCase) && guideObservedCardID == "synthetic-handbook-first",
                 "highlightSpanCount": observation!.highlightSpanCount,
                 "highlightEditorRendered": fixture.selectedCase == "highlight-editor" && highlightEditorObserved,
                 "relatedQuestionRendered": ["related-question", "related-review"].contains(fixture.selectedCase) && relatedQuestionObserved,
+                "linkedTableEntryRendered": fixture.selectedCase == "linked-table-entry" && linkedTableEntryCardID == "synthetic-handbook-first",
+                "linkedTablePageRendered": fixture.selectedCase == "linked-table-page" && linkedTablePageID == "synthetic-shared-table",
+                "linkedTablePreservedRecord": fixture.selectedCase.hasPrefix("linked-table-") && fixture.store.engine?.state == fixture.expectedState,
+                "linkedTableColumnCount": fixture.selectedCase.hasPrefix("linked-table-") ? (fixture.store.package?.sharedTables?.first?.columns.count ?? 0) : 0,
+                "linkedTableBlankCell": fixture.selectedCase.hasPrefix("linked-table-") && fixture.store.package?.sharedTables?.first?.rows.contains(where: { $0.contains("") }) == true,
                 "memoryGuideHelpPreservedRecord": fixture.selectedCase == "front" && guidePhase == 3 && fixture.store.engine?.state == guideRecord,
                 "rootTabShellFixture": true,
                 "diagramExpanded": ["diagram-branch", "diagram-flow"].contains(fixture.selectedCase) && diagramPhase == 3 && diagramObserved,

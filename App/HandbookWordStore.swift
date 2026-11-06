@@ -169,8 +169,23 @@ enum HandbookWordArchivePath {
     }
 }
 
-/// Independent professional-card namespace. The old Pocket record and its
-/// immutable cutover archive remain intact; only actual self-ratings seed FSRS.
+enum HandbookSchedulerPreference {
+    case subjectDefault
+    #if DEBUG
+    /// Synthetic compatibility tests exercise cutovers produced by older builds.
+    case testDualFSRS
+    #endif
+
+    func usesDualFSRS(for subject: ConceptSubject) -> Bool {
+        #if DEBUG
+        if case .testDualFSRS = self { return true }
+        #endif
+        return subject == .circuit
+    }
+}
+
+/// Independent professional-card namespace. Computer and power keep Pocket;
+/// circuit uses dual FSRS. No other subject's record is shared or rewritten.
 @MainActor final class HandbookWordStore: ObservableObject {
     let subject: ConceptSubject
     @Published private(set) var engine: HandbookWordEngine?
@@ -181,6 +196,7 @@ enum HandbookWordArchivePath {
     private let base: URL, directory: URL, documents: URL
     private let writer: (Data, URL) throws -> Void
     private let creationDate: Date?
+    private let prefersDualFSRS: Bool
     private var disk: HandbookWordDisk?
     private var durableSHA256 = ""
     private var durableMarkerSHA256: String?
@@ -194,9 +210,11 @@ enum HandbookWordArchivePath {
     var annotationBaseDirectory: URL { base }
     init(subject: ConceptSubject = .computer, baseDirectory: URL? = nil, documentsDirectory: URL? = nil,
          now: Date? = nil,
+         schedulerPreference: HandbookSchedulerPreference = .subjectDefault,
          writer: @escaping (Data, URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.writer = writer
         creationDate = now
+        prefersDualFSRS = schedulerPreference.usesDualFSRS(for: subject)
         base = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]).standardizedFileURL.resolvingSymlinksInPath()
         directory = base.appendingPathComponent("HandbookWordRecall/\(subject.rawValue)", isDirectory: true)
         documents = documentsDirectory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -207,7 +225,7 @@ enum HandbookWordArchivePath {
                 try validate(saved)
                 let restored = try HandbookWordEngine(state: saved.state)
                 if let (marker, old, oldRaw) = try checkedLegacyMarker() {
-                    if saved.format == "xkl-handbook-word-store-v1" {
+                    if saved.format == "xkl-handbook-word-store-v1" || saved.format == "xkl-handbook-word-store-v3-pocket-tables" {
                         try validateLegacyContinuation(saved, of: old)
                         disk = saved; durableSHA256 = StudySHA256.hex(raw); engine = restored
                     } else if saved.reenabledFromLegacyMarkerSHA256 == durableMarkerSHA256 {
@@ -236,8 +254,14 @@ enum HandbookWordArchivePath {
                         disk = old; durableSHA256 = StudySHA256.hex(oldRaw)
                         engine = try HandbookWordEngine(state: old.state)
                     }
-                } else if saved.format == "xkl-handbook-word-store-v1" {
-                    if !(saved.state.word.deferredCards ?? [:]).isEmpty {
+                } else if saved.format == "xkl-handbook-word-store-v1" || saved.format == "xkl-handbook-word-store-v3-pocket-tables" {
+                    if !prefersDualFSRS {
+                        // Preserve the whole original Pocket queue, snapshot and
+                        // current presentation without migrating or regrading.
+                        disk = saved; durableSHA256 = StudySHA256.hex(raw); engine = restored
+                    } else if saved.format == "xkl-handbook-word-store-v3-pocket-tables" {
+                        throw ExamError.invalid("讲义表格档案不能自动切换双FSRS，原记录保留。")
+                    } else if !(saved.state.word.deferredCards ?? [:]).isEmpty {
                         // These are genuine unfinished C-queue obligations; the
                         // FSRS migration cannot safely reconstruct them yet.
                         // Publish the validated v1 unchanged so study can resume.
@@ -252,6 +276,16 @@ enum HandbookWordArchivePath {
                     }
                     disk = saved; durableSHA256 = StudySHA256.hex(raw); engine = restored
                     rollbackEligible = (try? rollbackSource(for: saved)) != nil
+                }
+                if !prefersDualFSRS, engine?.usesDualFSRS == true {
+                    // A genuine no-activity cutover can be durably rolled back
+                    // via the existing immutable archive and recovery marker.
+                    // Any other v2 stays untouched; never strip its real events.
+                    if canRollbackToLegacy {
+                        rollbackToLegacy()
+                    } else {
+                        throw ExamError.invalid("该科已有双FSRS活动或没有可安全撤回的旧档，暂不能自动切回单词引擎。")
+                    }
                 }
             } else {
                 guard try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty else {
@@ -332,18 +366,19 @@ enum HandbookWordArchivePath {
             throw ExamError.invalid("已有宝典单词调度不能重新初始化。")
         }
         let legacy = try legacyFiles(), baseline = try encode(HandbookWordBaseline(subject: subject,
-            mappingPolicy: "professional-dual-fsrs;older-handbook-self-ratings-retained-not-fabricated", legacyFiles: legacy))
+            mappingPolicy: (prefersDualFSRS ? "professional-dual-fsrs" : "professional-pocket") + ";older-handbook-self-ratings-retained-not-fabricated", legacyFiles: legacy))
         try immutable(baseline, directory.appendingPathComponent("legacy-baseline.json"))
         guard try legacyFiles() == legacy else { throw ExamError.invalid("备份时旧记录出现新增，请重新打开；不会覆盖。") }
         let now = creationDate ?? Date()
         let candidate = try HandbookWordEngine(package: package, now: now)
-        try candidate.enableDualFSRS(now: now)
+        if prefersDualFSRS { try candidate.enableDualFSRS(now: now) }
         let initial = try encode(candidate.state)
         try immutable(initial, directory.appendingPathComponent("initial.json"))
         let hash = StudySHA256.hex(raw); try immutable(raw, directory.appendingPathComponent("imports/\(hash).xklflashcards"))
         var next = HandbookWordDisk(subject: subject, baselineSHA256: StudySHA256.hex(baseline), initialSHA256: StudySHA256.hex(initial),
             state: candidate.state, rawImports: [hash], revisions: [])
-        next.format = "xkl-handbook-word-store-v2-dual-fsrs"
+        if prefersDualFSRS { next.format = "xkl-handbook-word-store-v2-dual-fsrs" }
+        else if package.sharedTables != nil { next.format = "xkl-handbook-word-store-v3-pocket-tables" }
         let bytes = try encode(next); try writer(bytes, currentURL)
         guard try read(currentURL) == bytes else { throw ExamError.invalid("宝典新调度档案未完整保存。") }
         engine = candidate; disk = next; durableSHA256 = StudySHA256.hex(bytes)
@@ -374,7 +409,10 @@ enum HandbookWordArchivePath {
     private func validate(_ saved: HandbookWordDisk) throws {
         let old = saved.format == "xkl-handbook-word-store-v1"
         let dual = saved.format == "xkl-handbook-word-store-v2-dual-fsrs"
-        guard (old && saved.state.dualFSRS == nil && saved.cutoverV1SHA256 == nil && saved.reenabledFromLegacyMarkerSHA256 == nil) ||
+        let tables = saved.format == "xkl-handbook-word-store-v3-pocket-tables"
+        guard ((old || tables) && saved.state.dualFSRS == nil && saved.cutoverV1SHA256 == nil && saved.reenabledFromLegacyMarkerSHA256 == nil &&
+               (!old || saved.state.package.sharedTables == nil) &&
+               (!tables || (saved.subject == .power && saved.state.package.sharedTables != nil))) ||
               (dual && saved.state.dualFSRS != nil) else {
             throw ExamError.invalid("宝典调度版本和状态不一致，原记录保留。")
         }
@@ -452,7 +490,7 @@ enum HandbookWordArchivePath {
     /// Only an append-only, same-stream continuation of the archived v1 is
     /// eligible for legacy mode or subsequent explicit re-enablement.
     private func validateLegacyContinuation(_ current: HandbookWordDisk, of original: HandbookWordDisk) throws {
-        guard current.format == "xkl-handbook-word-store-v1", original.format == "xkl-handbook-word-store-v1",
+        guard (current.format == "xkl-handbook-word-store-v1" || current.format == "xkl-handbook-word-store-v3-pocket-tables"), original.format == "xkl-handbook-word-store-v1",
               current.subject == original.subject, current.baselineSHA256 == original.baselineSHA256,
               current.initialSHA256 == original.initialSHA256,
               Array(current.rawImports.prefix(original.rawImports.count)) == original.rawImports,
@@ -547,7 +585,7 @@ enum HandbookWordArchivePath {
     /// The marker intentionally remains. A v2 created here identifies it and
     /// takes precedence on reopen; another rollback is deliberately disabled.
     var canEnableDualFSRS: Bool {
-        !blocked && durableMarkerSHA256 != nil && disk?.format == "xkl-handbook-word-store-v1" && engine?.usesDualFSRS == false
+        prefersDualFSRS && !blocked && durableMarkerSHA256 != nil && disk?.format == "xkl-handbook-word-store-v1" && engine?.usesDualFSRS == false
     }
     func reenableDualFSRS(now: Date = Date()) {
         guard canEnableDualFSRS, let saved = disk, let markerHash = durableMarkerSHA256 else {
@@ -601,7 +639,7 @@ enum HandbookWordArchivePath {
         } catch { self.error = error.localizedDescription }
     }
     func start(now: Date = Date()) {
-        if isDualMigrationPending, !blocked, let saved = disk, let current = engine,
+        if prefersDualFSRS, isDualMigrationPending, !blocked, let saved = disk, let current = engine,
            (saved.state.word.deferredCards ?? [:]).isEmpty {
             do {
                 try guardCurrent()
@@ -629,6 +667,9 @@ enum HandbookWordArchivePath {
             let incoming = try HandbookCardPackage.load(raw)
             guard incoming.subject == subject else { throw ExamError.invalid("请在对应科目导入宝典卡。") }
             if let current = engine, var next = disk {
+                if current.package.sharedTables != nil && incoming.sharedTables == nil {
+                    throw ExamError.invalid("新卡包缺少已导入的讲义表格；原课程与记录保留。")
+                }
                 try guardCurrent(); let candidate = try current.fork(); try candidate.updatePackage(incoming)
                 let hash = StudySHA256.hex(raw)
                 if candidate.state == next.state && next.rawImports.contains(hash) { error = nil; return }
@@ -638,6 +679,10 @@ enum HandbookWordArchivePath {
                 }
                 try immutable(raw, directory.appendingPathComponent("imports/\(hash).xklflashcards"))
                 if !next.rawImports.contains(hash) { next.rawImports.append(hash) };next.state = candidate.state
+                if candidate.package.sharedTables != nil {
+                    guard subject == .power, !candidate.usesDualFSRS else { throw ExamError.invalid("讲义表格与当前调度不兼容，原记录保留。") }
+                    next.format = "xkl-handbook-word-store-v3-pocket-tables"
+                }
                 try guardCurrent();let bytes = try encode(next)
                 do { try writer(bytes, currentURL); guard try read(currentURL) == bytes else { throw ExamError.invalid("宝典导入指针未完整保存。") } }
                 catch { fail(error);return }

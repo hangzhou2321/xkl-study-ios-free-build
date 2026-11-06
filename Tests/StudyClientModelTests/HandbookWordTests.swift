@@ -6,8 +6,8 @@ import StudyCore
 
 final class HandbookWordTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_793_000_000)
-    private func package(_ n: Int = 3) -> HandbookCardPackage {
-        .init(id: "synthetic-handbook-word", subject: .computer, title: "Synthetic", revision: "1.0",
+    private func package(_ n: Int = 3, subject: ConceptSubject = .computer) -> HandbookCardPackage {
+        .init(id: "synthetic-handbook-word", subject: subject, title: "Synthetic", revision: "1.0",
               source: .init(title: "Synthetic", fileName: "synthetic.pdf", sha256: String(repeating: "a", count: 64), pdfPageCount: 2, includedPages: [1]),
               chapters: [.init(id: "chapter", title: "Synthetic")], cards: (0..<n).map {
                   .init(id: "original-id-\($0)", sourceGroupIDs: ["group-\($0)"], topicNumber: 1, title: "Synthetic \($0)", prompt: "Recall",
@@ -145,6 +145,38 @@ final class HandbookWordTests: XCTestCase {
         XCTAssertEqual(reopened.record, before)
         XCTAssertEqual(reopened.package.frequencyLabel(for: annotated.cards[0]), "宝典考点频率 ★★★★★")
         XCTAssertEqual(reopened.package.frequencyLabel(for: annotated.cards[2]), "宝典未单独标注")
+    }
+    @MainActor func testAddingSharedTableKeepsEnglishRecordsAndVisibleCard() async throws {
+        var original = package(subject: .power)
+        original.additionalSources = [.init(id: "synthetic-source", source: original.source)]
+        let book = try HandbookWordEngine(package: original, now: now)
+        try book.start(now: now)
+        let first = try XCTUnwrap(book.presentation?.id)
+        try book.reveal(token: first, now: now); try book.rate(remembered: false, token: first, now: now)
+        let token = try XCTUnwrap(book.presentation?.id)
+        try book.reveal(token: token, now: now)
+        let before = book.record, frozen = book.currentCard, ids = book.state.originalCardIDs
+        let updated = try HandbookCardPackage.load(try {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+            object["revision"] = "1.1"
+            object["sharedTables"] = [["id": "synthetic-table", "title": "Synthetic comparison",
+                "cardIDs": ["original-id-0", "original-id-1"], "columns": ["Kind", "A", "B", "C", "D"],
+                "rows": [["One", "", "B1", "C1", "D1"]], "sourceID": "synthetic-source", "sourcePages": [1]]]
+            return try JSONSerialization.data(withJSONObject: object)
+        }())
+        XCTAssertEqual(updated.cards.map(\.definitionID), original.cards.map(\.definitionID))
+        try book.updatePackage(updated, now: now)
+        XCTAssertEqual(book.record, before)
+        XCTAssertEqual(book.state.originalCardIDs, ids)
+        XCTAssertEqual(book.currentCard, frozen)
+        XCTAssertEqual(book.presentation?.id, token)
+        XCTAssertEqual(book.presentation?.revealed, true)
+        let after = book.state
+        try book.updatePackage(updated, now: now)
+        XCTAssertEqual(book.state, after)
+        let reopened = try HandbookWordEngine(state: JSONDecoder().decode(HandbookWordState.self, from: JSONEncoder().encode(after)))
+        XCTAssertEqual(reopened.record, before)
+        XCTAssertEqual(reopened.package.tables(for: updated.cards[0]).first?.rows[0][1], "")
     }
     @MainActor func testFirstGuideImportPreservesOldActiveFrontAndBackThenUsesGuideOnNextCard() async throws {
         for revealed in [false, true] {
@@ -529,7 +561,8 @@ final class HandbookWordTests: XCTestCase {
     @MainActor func testStoreContentUpdatesKeepActiveLearningAndImmutableArchivesAcrossReopen() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-word-content-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        let store = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now,
+                                      schedulerPreference: .testDualFSRS)
         let original = package(), raw = try JSONEncoder().encode(original)
         store.importData(raw); store.start(now: now)
         let first = try XCTUnwrap(store.engine?.presentation?.id)
@@ -576,7 +609,8 @@ final class HandbookWordTests: XCTestCase {
         }
         XCTAssertEqual(archive.files["revisions/\(StudySHA256.hex(currentBefore)).json"], currentBefore)
         XCTAssertEqual(archive.files["revisions/\(StudySHA256.hex(editedCurrent)).json"], editedCurrent)
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        let reopened = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now,
+                                         schedulerPreference: .testDualFSRS)
         XCTAssertFalse(reopened.blocked, reopened.error ?? ""); XCTAssertEqual(reopened.engine?.state, after)
         reopened.importData(appendedRaw); XCTAssertEqual(try Data(contentsOf: currentURL), appendedCurrent)
         reopened.rate(remembered: true, token: shown, now: now)

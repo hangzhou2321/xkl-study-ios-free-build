@@ -115,6 +115,58 @@ final class HandbookCardTests: XCTestCase {
             object["cards"] = cards
         })
     }
+    func testSharedSourceTablePreservesCardIdentityAndValidatesReferences() throws {
+        var wrongSubject = fixture(); wrongSubject.sharedTables = []
+        XCTAssertThrowsError(try wrongSubject.validate())
+        var original = try changed(fixture()) { $0["subject"] = "power" }
+        original.additionalSources = [.init(id: "synthetic-source", source: original.source)]
+        XCTAssertNil(original.sharedTables)
+        let table = HandbookSharedTable(id: "synthetic-table", title: "Synthetic comparison",
+            cardIDs: original.cards.map(\.id), columns: ["Kind", "A", "B", "C", "D"],
+            rows: [["One", "", "B1", "C1", "D1"], ["Two", "A2", "B2", "C2", "D2"]],
+            sourceID: "synthetic-source", sourcePages: [1, 2])
+        var updated = original; updated.sharedTables = [table]
+        try updated.validate()
+        XCTAssertEqual(updated.cards.map(\.definitionID), original.cards.map(\.definitionID))
+        XCTAssertEqual(updated.tables(for: updated.cards[1]).first?.rows[0][1], "")
+        XCTAssertEqual(try HandbookCardPackage.load(JSONEncoder().encode(updated)), updated)
+        var duplicate = updated; duplicate.sharedTables = [table, table]
+        XCTAssertThrowsError(try duplicate.validate())
+        XCTAssertThrowsError(try changed(updated) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["cardIDs"] = ["missing-card"]; object["sharedTables"] = tables
+        })
+        XCTAssertThrowsError(try changed(updated) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["sourcePages"] = [99]; object["sharedTables"] = tables
+        })
+        XCTAssertThrowsError(try changed(updated) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["rows"] = [["too", "short"]]; object["sharedTables"] = tables
+        })
+    }
+    func testSharedImageTableMustReferenceDeclaredSourcePage() throws {
+        let asset = ProfessionalSourceFileAsset(sha256: String(repeating: "a", count: 64), mimeType: "image/jpeg",
+            byteCount: 100, pixelWidth: 120, pixelHeight: 160,
+            crop: .init(x: 0.1, y: 0.1, width: 0.5, height: 0.5), altText: "Synthetic original table")
+        var original = try changed(fixture()) { $0["subject"] = "power" }
+        original.additionalSources = [.init(id: "synthetic-source", source: original.source,
+            sourcePages: [.init(number: 1, asset: asset)])]
+        var imageOnly = original
+        imageOnly.sharedTables = [.init(id: "synthetic-image-table", title: "Synthetic original table",
+            cardIDs: [original.cards[0].id], columns: [], rows: [], sourceID: "synthetic-source", sourcePages: [1],
+            sourceNote: "Synthetic image only", sourceImages: [asset])]
+        try imageOnly.validate()
+        XCTAssertEqual(try HandbookCardPackage.load(JSONEncoder().encode(imageOnly)), imageOnly)
+        XCTAssertThrowsError(try changed(imageOnly) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["sourcePages"] = [2]; object["sharedTables"] = tables
+        })
+        XCTAssertThrowsError(try changed(imageOnly) { object in
+            var tables = object["sharedTables"] as! [[String: Any]]
+            tables[0]["sourceImages"] = []; object["sharedTables"] = tables
+        })
+    }
     func testRevealIsNotASelfRatingAndBackSideRestores() throws {
         var e = try HandbookRecallEngine.fresh(fixture()); try e.start(now: now)
         let p = try XCTUnwrap(e.presentation); try e.reveal(token: p.id, now: now)

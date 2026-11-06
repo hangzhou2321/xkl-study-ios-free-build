@@ -144,6 +144,46 @@ struct HandbookRelatedQuestion: Codable, Equatable, Identifiable {
     }
 }
 
+/// A source table may be referenced by several cards without changing their definitions.
+struct HandbookSharedTable: Codable, Equatable, Identifiable {
+    let id: String
+    let title: String
+    let cardIDs: [String]
+    let columns: [String]
+    let rows: [[String]]
+    let sourceID: String
+    let sourcePages: [Int]
+    var sourceNote: String? = nil
+    var sourceImages: [ProfessionalSourceFileAsset]? = nil
+
+    func validate(cardIDs validIDs: Set<String>, sources: [HandbookCardPackage.AdditionalSource]?) throws {
+        let images = sourceImages ?? []
+        let hasTextTable = (2...8).contains(columns.count) && (1...100).contains(rows.count)
+        let hasOnlyImages = columns.isEmpty && rows.isEmpty && !images.isEmpty
+        guard handbookText(id, 200), handbookText(title, 300),
+              !cardIDs.isEmpty, Set(cardIDs).count == cardIDs.count,
+              Set(cardIDs).isSubset(of: validIDs),
+              hasTextTable || hasOnlyImages, images.count <= 4,
+              columns.allSatisfy({ $0.isEmpty || handbookText($0, 300) }),
+              rows.allSatisfy({ $0.count == columns.count && $0.allSatisfy { $0.isEmpty || handbookText($0, 1_600) } }),
+              hasOnlyImages || rows.joined().contains(where: { !$0.isEmpty }),
+              let source = (sources ?? []).first(where: { $0.id == sourceID }),
+              !sourcePages.isEmpty, Set(sourcePages).count == sourcePages.count,
+              Set(sourcePages).isSubset(of: Set(source.source.includedPages)),
+              sourceNote.map({ handbookText($0, 2_000) }) ?? true else {
+            throw ExamError.invalid("讲义对照表的身份、卡片对应、行列或出处不完整：\(id)")
+        }
+        for image in images {
+            try image.validateMetadata()
+            guard (source.sourcePages ?? []).contains(where: { page in
+                sourcePages.contains(page.number) && page.asset.sha256 == image.sha256 &&
+                page.asset.mimeType == image.mimeType && page.asset.byteCount == image.byteCount &&
+                page.asset.pixelWidth == image.pixelWidth && page.asset.pixelHeight == image.pixelHeight
+            }) else { throw ExamError.invalid("讲义表格图片与声明的原页不匹配：\(id)") }
+        }
+    }
+}
+
 struct HandbookCardPackage: Codable, Equatable {
     struct Source: Codable, Equatable {
         let title: String
@@ -197,6 +237,8 @@ struct HandbookCardPackage: Codable, Equatable {
     var memoryGuides: [MemoryGuide]? = nil
     /// Optional original questions; absent in earlier course packages.
     var relatedQuestions: [HandbookRelatedQuestion]? = nil
+    /// Supplemental, source-attributed comparisons; never alter a card's identity.
+    var sharedTables: [HandbookSharedTable]? = nil
 
     var hash: String { handbookHash(self) }
     static func load(_ data: Data) throws -> Self {
@@ -221,6 +263,12 @@ struct HandbookCardPackage: Codable, Equatable {
         }
         let cardIDs = Set(cards.map(\.id))
         for question in questions { try question.validate(cardIDs: cardIDs, source: source, additionalSources: additionalSources) }
+        let tables = sharedTables ?? []
+        guard tables.count <= 500, Set(tables.map(\.id)).count == tables.count,
+              sharedTables == nil || subject == .power else {
+            throw ExamError.invalid("讲义对照表的身份重复或数量异常。")
+        }
+        for table in tables { try table.validate(cardIDs: cardIDs, sources: additionalSources) }
         for card in cards {
             try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
         }
@@ -240,6 +288,9 @@ struct HandbookCardPackage: Codable, Equatable {
     }
     func questions(for card: HandbookCard) -> [HandbookRelatedQuestion] {
         (relatedQuestions ?? []).filter { $0.cardID == card.id }
+    }
+    func tables(for card: HandbookCard) -> [HandbookSharedTable] {
+        (sharedTables ?? []).filter { $0.cardIDs.contains(card.id) }
     }
     private func validateTopicFrequencies() throws {
         guard let frequencies = topicFrequencies else { return }

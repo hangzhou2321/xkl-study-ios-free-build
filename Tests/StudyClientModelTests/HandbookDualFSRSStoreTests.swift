@@ -12,6 +12,15 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     // fixture even when the tests run on a build machine in another timezone.
     private let time = Date(timeIntervalSince1970: 1_700_000_000)
 
+    /// Recreate the earlier dual-FSRS policy only for the historical migration,
+    /// rollback and failure tests below. Production defaults are tested separately.
+    @MainActor private func dualStore(subject: ConceptSubject, baseDirectory: URL? = nil,
+                                      documentsDirectory: URL? = nil, now: Date? = nil,
+                                      writer: @escaping (Data, URL) throws -> Void = DurableFile.write) -> HandbookWordStore {
+        HandbookWordStore(subject: subject, baseDirectory: baseDirectory, documentsDirectory: documentsDirectory,
+                          now: now, schedulerPreference: .testDualFSRS, writer: writer)
+    }
+
     private struct Fixture {
         let root: URL
         let directory: URL
@@ -180,7 +189,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         for subject in [ConceptSubject.computer, .power] {
             let f = try fixture(subject)
             defer { try? FileManager.default.removeItem(at: f.root) }
-            let store = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+            let store = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
                                           now: time.addingTimeInterval(10))
             XCTAssertFalse(store.blocked, store.error ?? "")
             let engine = try XCTUnwrap(store.engine)
@@ -217,7 +226,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
 
             // Reopening is a no-op; it neither replays old ratings again nor
             // creates another cutover archive.
-            let reopened = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+            let reopened = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
                                              now: time.addingTimeInterval(11))
             XCTAssertFalse(reopened.blocked, reopened.error ?? "")
             XCTAssertEqual(reopened.engine?.state, migrated)
@@ -230,7 +239,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testRepeatImportAndAppendedContentRetainHistoryAndFrozenPresentation() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(10))
         XCTAssertFalse(store.blocked, store.error ?? "")
         let before = try XCTUnwrap(store.engine?.state)
@@ -261,7 +270,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         XCTAssertEqual(store.engine?.state, updated)
         try assertMarkers(f)
 
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                          now: time.addingTimeInterval(12))
         XCTAssertFalse(reopened.blocked, reopened.error ?? "")
         XCTAssertEqual(reopened.engine?.state, updated)
@@ -270,7 +279,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testRealNewRatingPersistsInDualStateWithoutChangingLegacyAttempts() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(10))
         let before = try XCTUnwrap(store.engine?.state)
         let beforeDual = try encode(XCTUnwrap(before.dualFSRS))
@@ -299,7 +308,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         let afterBytes = try Data(contentsOf: f.currentURL)
         store.rate(remembered: true, token: token, now: time.addingTimeInterval(12))
         XCTAssertEqual(try Data(contentsOf: f.currentURL), afterBytes, "A stale presentation token must not grade twice.")
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                          now: time.addingTimeInterval(13))
         XCTAssertFalse(reopened.blocked, reopened.error ?? "")
         XCTAssertEqual(reopened.engine?.state, after)
@@ -309,7 +318,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testMigrationWriteFailureLeavesV1AndRetryKeepsExactArchive() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let failed = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let failed = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
             now: time.addingTimeInterval(10), writer: { data, url in
                 if url.lastPathComponent == "current.json" { throw CocoaError(.fileWriteUnknown) }
                 try data.write(to: url, options: .atomic)
@@ -319,7 +328,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes)
         let archive = f.directory.appendingPathComponent("revisions/\(StudySHA256.hex(f.currentBytes)).json")
         XCTAssertEqual(try Data(contentsOf: archive), f.currentBytes)
-        let retry = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let retry = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(11))
         XCTAssertFalse(retry.blocked, retry.error ?? "")
         XCTAssertNotNil(retry.engine?.state.dualFSRS)
@@ -331,7 +340,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testArchiveFailureNeverTouchesCurrentOrPublishesEngine() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let failed = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let failed = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
             now: time.addingTimeInterval(10), writer: { data, url in
                 if url.deletingLastPathComponent().lastPathComponent == "revisions" { throw CocoaError(.fileWriteUnknown) }
                 try data.write(to: url, options: .atomic)
@@ -349,7 +358,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         // pointer observed after archiving; it does not fabricate an answer.
         let concurrent = f.currentBytes + Data(" \n".utf8)
         var injected = false
-        let failed = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let failed = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
             now: time.addingTimeInterval(10), writer: { data, url in
                 try data.write(to: url, options: .atomic)
                 if !injected && url.deletingLastPathComponent().lastPathComponent == "revisions" {
@@ -362,7 +371,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         XCTAssertNil(failed.engine)
         XCTAssertEqual(try Data(contentsOf: f.currentURL), concurrent)
         XCTAssertEqual(try Data(contentsOf: f.directory.appendingPathComponent("revisions/\(StudySHA256.hex(f.currentBytes)).json")), f.currentBytes)
-        let retry = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let retry = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(11))
         XCTAssertFalse(retry.blocked, retry.error ?? "")
         XCTAssertEqual(retry.engine?.state.word, f.legacyState.word)
@@ -373,7 +382,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testCommittedWriteThenErrorBlocksAndReopensExactlyOnce() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let uncertain = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let uncertain = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
             now: time.addingTimeInterval(10), writer: { data, url in
                 try data.write(to: url, options: .atomic)
                 if url.lastPathComponent == "current.json" { throw CocoaError(.fileWriteUnknown) }
@@ -382,7 +391,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         XCTAssertNil(uncertain.engine)
         let saved = try Data(contentsOf: f.currentURL)
         XCTAssertEqual(try object(saved)["format"] as? String, "xkl-handbook-word-store-v2-dual-fsrs")
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                          now: time.addingTimeInterval(11))
         XCTAssertFalse(reopened.blocked, reopened.error ?? "")
         XCTAssertEqual(try Data(contentsOf: f.currentURL), saved)
@@ -395,7 +404,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         for mode in ["v1-with-dual", "v2-without-dual"] {
             let f = try fixture()
             defer { try? FileManager.default.removeItem(at: f.root) }
-            let migrated = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let migrated = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                              now: time.addingTimeInterval(10))
             XCTAssertFalse(migrated.blocked, migrated.error ?? "")
             var disk = try object(Data(contentsOf: f.currentURL))
@@ -405,7 +414,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             else { state.removeValue(forKey: "dualFSRS"); disk["state"] = state }
             let inconsistent = try JSONSerialization.data(withJSONObject: disk, options: [.sortedKeys])
             try inconsistent.write(to: f.currentURL, options: .atomic)
-            let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                              now: time.addingTimeInterval(11))
             XCTAssertTrue(reopened.blocked, "An inconsistent scheduler envelope must not silently lose either history.")
             XCTAssertNil(reopened.engine)
@@ -419,7 +428,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-dual-fresh-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let computer = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: time)
+        let computer = dualStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: time)
         XCTAssertFalse(computer.blocked, computer.error ?? "")
         XCTAssertNil(computer.engine)
         let raw = try encode(package(.computer))
@@ -434,7 +443,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         computer.importData(raw)
         XCTAssertNil(computer.error)
         XCTAssertEqual(try Data(contentsOf: url), current)
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: time)
+        let reopened = dualStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: time)
         XCTAssertFalse(reopened.blocked, reopened.error ?? "")
         XCTAssertEqual(reopened.engine?.state, computer.engine?.state)
     }
@@ -443,7 +452,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         for subject in [ConceptSubject.computer, .power] {
             let f = try fixture(subject)
             defer { try? FileManager.default.removeItem(at: f.root) }
-            let store = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+            let store = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
                                           now: time.addingTimeInterval(10))
             XCTAssertFalse(store.blocked, store.error ?? "")
             XCTAssertTrue(store.canRollbackToLegacy)
@@ -459,7 +468,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             XCTAssertFalse(String(decoding: marker, as: UTF8.self).contains("synthetic-card-"))
             XCTAssertTrue(store.canEnableDualFSRS)
             XCTAssertFalse(store.canRollbackToLegacy)
-            let legacy = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+            let legacy = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
                                            now: time.addingTimeInterval(11))
             XCTAssertFalse(legacy.blocked, legacy.error ?? "")
             XCTAssertTrue(legacy.canEnableDualFSRS)
@@ -478,7 +487,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             let latestV1 = try Data(contentsOf: f.currentURL)
             XCTAssertNotEqual(latestV1, f.currentBytes)
             XCTAssertEqual(try Data(contentsOf: markerURL), marker)
-            let legacyRestart = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+            let legacyRestart = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
                                                   now: time.addingTimeInterval(13))
             XCTAssertFalse(legacyRestart.blocked, legacyRestart.error ?? "")
             XCTAssertEqual(legacyRestart.engine?.state, latest)
@@ -497,7 +506,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             XCTAssertFalse(legacyRestart.canEnableDualFSRS)
             XCTAssertFalse(legacyRestart.canRollbackToLegacy, "The first version deliberately supports one safe rollback only.")
             let latestV2 = try Data(contentsOf: f.currentURL)
-            let final = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+            let final = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
                                           now: time.addingTimeInterval(15))
             XCTAssertFalse(final.blocked, final.error ?? "")
             XCTAssertEqual(try Data(contentsOf: f.currentURL), latestV2)
@@ -520,7 +529,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
                 disk["state"] = try JSONSerialization.jsonObject(with: initial)
                 try JSONSerialization.data(withJSONObject: disk, options: [.sortedKeys]).write(to: f.currentURL, options: .atomic)
             }
-            let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                           now: time.addingTimeInterval(10))
             XCTAssertFalse(store.blocked, store.error ?? "")
             XCTAssertTrue(store.canRollbackToLegacy, mode)
@@ -551,13 +560,13 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testDamagedMarkerFailsClosedAndLeavesLegacyCurrentUntouched() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(10))
         store.rollbackToLegacy()
         XCTAssertFalse(store.blocked, store.error ?? "")
         let marker = f.directory.appendingPathComponent("legacy-mode.json")
         try Data("damaged synthetic marker".utf8).write(to: marker, options: .atomic)
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                          now: time.addingTimeInterval(11))
         XCTAssertTrue(reopened.blocked)
         XCTAssertNil(reopened.engine)
@@ -571,7 +580,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: f.root) }
             var armed = false
             var divergent = Data()
-            let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                 now: time.addingTimeInterval(10), writer: { data, url in
                     if armed {
                         let isArchive = url.deletingLastPathComponent().lastPathComponent == "revisions"
@@ -598,7 +607,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             if mode == "concurrent" { XCTAssertEqual(try Data(contentsOf: f.currentURL), divergent) }
             else if mode == "current-after" { XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes) }
             else { XCTAssertEqual(try Data(contentsOf: f.currentURL), v2) }
-            let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                              now: time.addingTimeInterval(11))
             if mode == "concurrent" {
                 XCTAssertTrue(reopened.blocked)
@@ -624,7 +633,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         for mode in ["marker-missing", "witness-damaged"] {
             let f = try fixture()
             defer { try? FileManager.default.removeItem(at: f.root) }
-            let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                           now: time.addingTimeInterval(10))
             store.rollbackToLegacy()
             XCTAssertFalse(store.blocked, store.error ?? "")
@@ -634,7 +643,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: witness.path))
             if mode == "marker-missing" { try FileManager.default.removeItem(at: marker) }
             else { try Data("damaged synthetic witness".utf8).write(to: witness, options: .atomic) }
-            let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+            let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                              now: time.addingTimeInterval(11))
             XCTAssertTrue(reopened.blocked, mode)
             XCTAssertNil(reopened.engine)
@@ -646,13 +655,13 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testStaleLegacyInstanceCannotReenableOverNewerRating() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let initial = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let initial = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                         now: time.addingTimeInterval(10))
         initial.rollbackToLegacy()
         XCTAssertFalse(initial.blocked, initial.error ?? "")
-        let stale = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let stale = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(11))
-        let active = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let active = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                        now: time.addingTimeInterval(11))
         XCTAssertTrue(stale.canEnableDualFSRS)
         let token = try XCTUnwrap(active.engine?.presentation?.id)
@@ -664,7 +673,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         stale.reenableDualFSRS(now: time.addingTimeInterval(13))
         XCTAssertTrue(stale.blocked)
         XCTAssertEqual(try Data(contentsOf: f.currentURL), latest)
-        let retry = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let retry = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(14))
         XCTAssertFalse(retry.blocked, retry.error ?? "")
         XCTAssertEqual(retry.engine?.state, latestState)
@@ -672,6 +681,129 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         XCTAssertFalse(retry.blocked, retry.error ?? "")
         XCTAssertEqual(retry.engine?.state.word, latestState.word)
         XCTAssertEqual(retry.engine?.state.dualFSRS?.legacyRatings.count, latestState.word.attempts.count)
+        try assertMarkers(f)
+    }
+
+    @MainActor func testSubjectDefaultsKeepExistingEnglishStateAndCreateCircuitDualFSRS() async throws {
+        for subject in [ConceptSubject.computer, .power] {
+            let f = try fixture(subject)
+            defer { try? FileManager.default.removeItem(at: f.root) }
+            let store = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                          now: time.addingTimeInterval(10))
+            XCTAssertFalse(store.blocked, store.error ?? "")
+            XCTAssertFalse(try XCTUnwrap(store.engine?.usesDualFSRS))
+            XCTAssertFalse(store.isDualMigrationPending)
+            XCTAssertEqual(store.engine?.state, f.legacyState)
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes)
+            store.importData(f.rawPackage)
+            XCTAssertNil(store.error)
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes, "Reimport cannot reset or duplicate a rating")
+            let reopened = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                             now: time.addingTimeInterval(11))
+            XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+            XCTAssertEqual(reopened.engine?.state, f.legacyState)
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes)
+            XCTAssertEqual(reopened.engine?.presentation?.id, f.legacyState.frozenToken)
+            XCTAssertEqual(reopened.engine?.presentation?.revealed, f.legacyState.word.presentation?.revealed)
+            try assertMarkers(f)
+        }
+        for subject in [ConceptSubject.computer, .power, .circuit] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-subject-default-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = HandbookWordStore(subject: subject, baseDirectory: root, documentsDirectory: root, now: time)
+            store.importData(try encode(package(subject)))
+            XCTAssertFalse(store.blocked, store.error ?? "")
+            XCTAssertNil(store.error)
+            XCTAssertEqual(store.engine?.usesDualFSRS, subject == .circuit)
+            let raw = try Data(contentsOf: root.appendingPathComponent("HandbookWordRecall/\(subject.rawValue)/current.json"))
+            XCTAssertEqual(try object(raw)["format"] as? String,
+                           subject == .circuit ? "xkl-handbook-word-store-v2-dual-fsrs" : "xkl-handbook-word-store-v1")
+            let reopened = HandbookWordStore(subject: subject, baseDirectory: root, documentsDirectory: root, now: time)
+            XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+            XCTAssertEqual(reopened.engine?.state, store.engine?.state)
+        }
+    }
+
+    @MainActor func testComputerAndPowerRollbackOnlyWhenDualHasNoNewActivity() async throws {
+        for subject in [ConceptSubject.computer, .power] {
+            let f = try fixture(subject)
+            defer { try? FileManager.default.removeItem(at: f.root) }
+            let migrated = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                     now: time.addingTimeInterval(10))
+            XCTAssertFalse(migrated.blocked, migrated.error ?? "")
+            XCTAssertTrue(migrated.canRollbackToLegacy)
+            let v2 = try Data(contentsOf: f.currentURL), v2Hash = StudySHA256.hex(v2)
+            let restored = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                             now: time.addingTimeInterval(11))
+            XCTAssertFalse(restored.blocked, restored.error ?? "")
+            XCTAssertFalse(try XCTUnwrap(restored.engine?.usesDualFSRS))
+            XCTAssertFalse(restored.canEnableDualFSRS)
+            XCTAssertEqual(restored.engine?.state, f.legacyState)
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes)
+            XCTAssertEqual(try Data(contentsOf: f.directory.appendingPathComponent("revisions/\(v2Hash).json")), v2)
+            let reopened = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                             now: time.addingTimeInterval(12))
+            XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+            XCTAssertEqual(reopened.engine?.state, f.legacyState)
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes)
+            try assertMarkers(f)
+        }
+        for subject in [ConceptSubject.computer, .power] {
+            let f = try fixture(subject)
+            defer { try? FileManager.default.removeItem(at: f.root) }
+            let migrated = dualStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                     now: time.addingTimeInterval(10))
+            migrated.rate(remembered: true, token: try XCTUnwrap(migrated.engine?.presentation?.id),
+                          now: time.addingTimeInterval(11))
+            XCTAssertNil(migrated.error)
+            let v2 = try Data(contentsOf: f.currentURL)
+            XCTAssertFalse(try XCTUnwrap(migrated.engine?.state.dualFSRS?.events).isEmpty)
+            let protected = HandbookWordStore(subject: subject, baseDirectory: f.root, documentsDirectory: f.root,
+                                              now: time.addingTimeInterval(12))
+            XCTAssertTrue(protected.blocked)
+            XCTAssertNotNil(protected.error)
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), v2, "Real FSRS events must not be discarded")
+            protected.start(now: time.addingTimeInterval(13))
+            XCTAssertEqual(try Data(contentsOf: f.currentURL), v2)
+            let export = try JSONDecoder().decode(Export.self, from: protected.exportRecords())
+            XCTAssertEqual(export.files["current.json"], v2)
+            try assertMarkers(f)
+        }
+    }
+
+    @MainActor func testComputerDrainsDeferredWordQueueWithoutSwitchingSchedulers() async throws {
+        let f = try fixtureWithRealDeferredCQueue()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+                                      now: time.addingTimeInterval(10))
+        XCTAssertFalse(store.blocked, store.error ?? "")
+        XCTAssertFalse(store.isDualMigrationPending)
+        XCTAssertEqual(try Data(contentsOf: f.currentURL), f.currentBytes)
+        XCTAssertEqual(store.engine?.state, f.legacyState)
+        store.start(now: time.addingTimeInterval(11))
+        var step = 0
+        while !(store.engine?.state.word.deferredCards ?? [:]).isEmpty {
+            step += 1
+            XCTAssertLessThan(step, 20)
+            if step >= 20 { break }
+            let now = time.addingTimeInterval(Double(11 + step))
+            if let presentation = store.engine?.presentation {
+                if !presentation.revealed { store.reveal(token: presentation.id, now: now) }
+                store.rate(remembered: true, token: presentation.id, now: now)
+            } else { store.start(now: now) }
+            XCTAssertFalse(store.blocked, store.error ?? "")
+            XCTAssertNil(store.error)
+            XCTAssertFalse(try XCTUnwrap(store.engine?.usesDualFSRS))
+        }
+        store.start(now: time.addingTimeInterval(Double(12 + step)))
+        XCTAssertFalse(store.blocked, store.error ?? "")
+        XCTAssertFalse(store.isDualMigrationPending)
+        XCTAssertFalse(try XCTUnwrap(store.engine?.usesDualFSRS))
+        let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+                                         now: time.addingTimeInterval(Double(13 + step)))
+        XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+        XCTAssertEqual(reopened.engine?.state, store.engine?.state)
         try assertMarkers(f)
     }
 
@@ -731,7 +863,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
     @MainActor func testDeferredLegacyQueueCanResumeAndMigratesLatestHeadOnlyAfterDrain() async throws {
         let f = try fixtureWithRealDeferredCQueue()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        let store = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let store = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                       now: time.addingTimeInterval(10))
         XCTAssertFalse(store.blocked, store.error ?? "")
         XCTAssertTrue(store.isDualMigrationPending)
@@ -779,7 +911,7 @@ final class HandbookDualFSRSStoreTests: XCTestCase {
         let hash = StudySHA256.hex(latestOld)
         XCTAssertEqual(try Data(contentsOf: f.directory.appendingPathComponent("revisions/\(hash).json")), latestOld)
         let v2 = try Data(contentsOf: f.currentURL)
-        let reopened = HandbookWordStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
+        let reopened = dualStore(subject: .computer, baseDirectory: f.root, documentsDirectory: f.root,
                                          now: migrateAt.addingTimeInterval(1))
         XCTAssertFalse(reopened.blocked, reopened.error ?? "")
         XCTAssertFalse(reopened.isDualMigrationPending)
