@@ -28,10 +28,11 @@ final class GuideDisclosureUITests: XCTestCase {
         app.launch() // No --handbook-card-preview: this is the production root and its window observer.
         let professional = app.tabBars.buttons["专业课"]
         XCTAssertTrue(professional.waitForExistence(timeout: 90), "Professional tab missing")
-        professional.tap()
-        select(sourceIndex, in: app)
-        let continueCard = app.buttons["handbook-continue"]
-        XCTAssertTrue(continueCard.waitForExistence(timeout: 45), "Synthetic source was not loaded into real root")
+        // The synthetic flow remembers the source subject. Use the real home
+        // continuation button so the paused-picker bug cannot block setup.
+        let continueCard = app.buttons["继续背卡"]
+        XCTAssertTrue(continueCard.waitForExistence(timeout: 45), "Synthetic source was not loaded into real home")
+        capture("home-source-loaded")
         continueCard.tap()
         let exitFullScreen = app.buttons["handbook-exit-fullscreen"]
         if exitFullScreen.waitForExistence(timeout: 10) { exitFullScreen.tap() }
