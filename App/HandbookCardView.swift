@@ -65,54 +65,60 @@ struct HandbookCardView: View {
             baseDirectory: injectedStore?.annotationBaseDirectory ?? baseDirectory))
     }
 
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { scroll in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if let engine = store.engine {
-                            if studying, let card = engine.currentCard, let presentation = engine.presentation {
-                                studyCard(engine, card, presentation)
-                            } else if studying {
-                                completion(engine)
-                            } else {
-                                home(engine)
-                            }
+    var body: some View { previewMonitoredContent }
+
+    private var scrollContent: some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let engine = store.engine {
+                        if studying, let card = engine.currentCard, let presentation = engine.presentation {
+                            studyCard(engine, card, presentation)
+                        } else if studying {
+                            completion(engine)
                         } else {
-                            emptyState
+                            home(engine)
                         }
-                        if let error = store.error {
-                            Text(error).font(.subheadline).foregroundStyle(.red).textSelection(.enabled)
-                        }
-                        if store.blocked {
-                            Label("记录已保护，原文件保留。请先导出记录再处理。", systemImage: "lock.shield")
-                                .font(.footnote).foregroundStyle(.orange)
-                        }
+                    } else {
+                        emptyState
                     }
-                    .id("handbook-top")
-                    .padding(.horizontal, fullScreenActive ? 12 : 20)
-                    .padding(.top, fullScreenActive ? 0 : 10).padding(.bottom, 24)
-                    .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
-                }
-                .onChange(of: store.engine?.presentation?.id) { _, _ in
-                    scroll.scrollTo("handbook-top", anchor: .top)
-                }
-                .onChange(of: store.engine?.presentation?.revealed) { _, _ in
-                    scroll.scrollTo("handbook-top", anchor: .top)
-                }
-                #if DEBUG
-                .task(id: preview.scrollTarget) {
-                    if let target = preview.scrollTarget {
-                        scrollReady = false
-                        await Task.yield()
-                        scroll.scrollTo(target, anchor: .top)
-                        await Task.yield()
-                        scrollReady = true
-                        reportPreview()
+                    if let error = store.error {
+                        Text(error).font(.subheadline).foregroundStyle(.red).textSelection(.enabled)
+                    }
+                    if store.blocked {
+                        Label("记录已保护，原文件保留。请先导出记录再处理。", systemImage: "lock.shield")
+                            .font(.footnote).foregroundStyle(.orange)
                     }
                 }
-                #endif
+                .id("handbook-top")
+                .padding(.horizontal, fullScreenActive ? 12 : 20)
+                .padding(.top, fullScreenActive ? 0 : 10).padding(.bottom, 24)
+                .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
             }
+            .onChange(of: store.engine?.presentation?.id) { _, _ in
+                scroll.scrollTo("handbook-top", anchor: .top)
+            }
+            .onChange(of: store.engine?.presentation?.revealed) { _, _ in
+                scroll.scrollTo("handbook-top", anchor: .top)
+            }
+            #if DEBUG
+            .task(id: preview.scrollTarget) {
+                if let target = preview.scrollTarget {
+                    scrollReady = false
+                    await Task.yield()
+                    scroll.scrollTo(target, anchor: .top)
+                    await Task.yield()
+                    scrollReady = true
+                    reportPreview()
+                }
+            }
+            #endif
+        }
+    }
+
+    private var navigationContent: some View {
+        NavigationStack {
+            scrollContent
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("宝典一 · \(subject.shortTitle)")
             .navigationBarTitleDisplayMode(.inline)
@@ -167,6 +173,10 @@ struct HandbookCardView: View {
             }
             .safeAreaInset(edge: .bottom) { actions }
         }
+    }
+
+    private var fileContent: some View {
+        navigationContent
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url): store.importContent(url); recommendedStagedFile = store.recommendedStagedFile()
@@ -178,6 +188,10 @@ struct HandbookCardView: View {
                       defaultFilename: "宝典一-\(subject.shortTitle)-完整背卡记录") { result in
             if case .failure(let error) = result { store.error = error.localizedDescription }
         }
+    }
+
+    private var sourceSheetContent: some View {
+        fileContent
         .sheet(isPresented: $showingOutline) {
             if let package = store.package { outline(package) }
         }
@@ -196,6 +210,10 @@ struct HandbookCardView: View {
                 HandbookTableIndex(package: package, sourceRoot: sourceRoot, highlightState: highlightStore.state)
             }
         }
+    }
+
+    private var practiceSheetContent: some View {
+        sourceSheetContent
         .sheet(isPresented: $showingOldQuestions) {
             if let originalQuestionStore {
                 VStack(spacing: 0) {
@@ -228,6 +246,10 @@ struct HandbookCardView: View {
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
+    }
+
+    private var activityContent: some View {
+        practiceSheetContent
         .task {
             recommendedStagedFile = store.recommendedStagedFile()
             if startInStudy || studying { store.start() }
@@ -248,7 +270,7 @@ struct HandbookCardView: View {
         .onChange(of: externalStudying) { _, value in studying = value }
         .onChange(of: studying) { _, value in externalStudying = value; reportPreviewIfEnabled() }
         .onChange(of: fullScreenEnabled) { _, _ in reportPreviewIfEnabled() }
-        .onChange(of: importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex || showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil || store.error != nil) { _, value in
+        .onChange(of: hasAnyOverlay) { _, value in
             onOverlayChanged(value)
         }
         .onChange(of: effectiveOverlayMask, initial: true) { _, mask in
@@ -268,7 +290,11 @@ struct HandbookCardView: View {
             let mask = effectiveOverlayMask
             onEffectiveOverlayChanged(mask & 1 != 0, mask & 2 != 0)
         }
+    }
+
+    private var previewMonitoredContent: some View {
         #if DEBUG
+        activityContent
         .background {
             GeometryReader { geometry in
                 Color.clear.onAppear {
@@ -288,7 +314,14 @@ struct HandbookCardView: View {
             showingAllSources = route == "all"
         }
         .onChange(of: showingSources || showingAllSources) { _, _ in reportPreview() }
+        #else
+        activityContent
         #endif
+    }
+
+    private var hasAnyOverlay: Bool {
+        importing || exporting || showingOutline || showingSources || showingAllSources || showingTableIndex ||
+            showingOldQuestions || highlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil || store.error != nil
     }
 
     private var sourceRoot: URL {
