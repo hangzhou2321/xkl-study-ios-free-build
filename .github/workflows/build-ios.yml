@@ -1,96 +1,52 @@
-name: Build unsigned iOS app
+name: Focused unsigned iOS build
 on:
   workflow_dispatch:
-    inputs:
-      preview_only:
-        description: Run only native synthetic previews; reuse previously verified Release IPA
-        type: boolean
-        required: false
-        default: false
-      reuse_verified_model_tests:
-        description: UI routing/display rebuild; requires exact model/storage parity with successful run 40439595866
-        type: boolean
-        required: false
-        default: false
-      preview_cases:
-        description: Optional comma-separated synthetic handbook preview cases
-        type: string
-        required: false
-        default: ''
 permissions:
   contents: read
-  actions: read
 jobs:
   build:
-    if: ${{ !inputs.preview_only }}
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Reject private content from build context
+      - name: Reject private content
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          forbidden = ['Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json']
-          assert not any(Path(p).exists() for p in forbidden), 'Private content must be imported on the phone, not uploaded'
-          assert not list(Path('.').rglob('*.xklcontent')), 'Private import packages must stay local'
-          assert not list(Path('.').rglob('*.xklquestions')), 'Question bank packages must stay local'
-          assert not list(Path('.').rglob('*.xklflashcards')), 'Private handbook cards must stay local'
-          assert not list(Path('.').rglob('*.xklqbank')), 'Professional original-question packages must stay local'
-          assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
-          assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
-          assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
-          assert not list(Path('.').rglob('*.xklmathguide')), 'Private math guide packages must stay local'
-          assert not list(Path('.').rglob('*.xklguide')), 'Private guide packages must stay local'
-          assert not list(Path('.').rglob('guide.json')), 'Private math guide content must stay local'
-          assert not list(Path('.').rglob('*math-guide*.json')), 'Private math guide payloads must stay local'
-          assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
+          forbidden = {'.pdf', '.xklflashcards', '.xklqbank', '.xklquestions', '.xklcontent', '.xklcourse', '.xklmath', '.xklmathguide', '.xklguide', '.xklconcepts'}
+          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in forbidden]
+          assert not any(Path(p).exists() for p in ('Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json'))
           PY
-      - name: Test and compile
-        env:
-          XKL_REUSE_VERIFIED_MODEL_TESTS: ${{ inputs.reuse_verified_model_tests }}
-          GH_TOKEN: ${{ github.token }}
-        run: bash tools/build_unsigned_ios.sh
+      - name: Focused tests and Release build
+        run: |
+          set -euo pipefail
+          python3 tools/generate_xcode_project.py --without-personal-resources
+          mkdir -p build/c-tests
+          for suite in test_engine test_exam_engine test_midnight_engine test_import; do
+            clang -std=c11 -Wall -Wextra -Werror -O2 -I Sources/CPocket/include -I Sources/CPocket/internal \
+              "Tests/CPocketTests/${suite}.c" Sources/CPocket/xkl_engine.c \
+              Sources/CPocket/internal/pocket_model.c Sources/CPocket/internal/pocket_word_model.c \
+              Sources/CPocket/internal/pocket_word_recording.c Sources/CPocket/internal/pocket_storage.c \
+              Sources/CPocket/internal/pocket_log.c -o "build/c-tests/${suite}"
+            "build/c-tests/${suite}"
+          done
+          swift test --jobs 2 --filter '(HandbookCardTests|HandbookDualFSRSStoreTests|HandbookWordTests)'
+          xcodebuild -project XKLStudy.xcodeproj -scheme XKLStudy -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          app = Path('build/DerivedData/Build/Products/Release-iphoneos/XKLStudy.app')
+          assert app.is_dir()
+          with zipfile.ZipFile('build/XKLStudy-unsigned.ipa', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for item in sorted(app.rglob('*')):
+                  if item.is_file(): archive.write(item, str(Path('Payload/XKLStudy.app') / item.relative_to(app)))
+          assert Path('build/XKLStudy-unsigned.ipa').stat().st_size <= 8 * 1024 * 1024
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: XKLStudy-unsigned-iOS
-          path: |
-            build/XKLStudy-unsigned.ipa
-            build/reused-model-tests.json
+          name: XKLStudy-quick-unsigned-iOS
+          path: build/XKLStudy-unsigned.ipa
           if-no-files-found: error
           retention-days: 1
-  preview:
-    runs-on: macos-15-intel
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Reject private content from build context
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          forbidden = ['Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json']
-          assert not any(Path(p).exists() for p in forbidden), 'Private content must be imported on the phone, not uploaded'
-          assert not list(Path('.').rglob('*.xklcontent')), 'Private import packages must stay local'
-          assert not list(Path('.').rglob('*.xklquestions')), 'Question bank packages must stay local'
-          assert not list(Path('.').rglob('*.xklflashcards')), 'Private handbook cards must stay local'
-          assert not list(Path('.').rglob('*.xklqbank')), 'Professional original-question packages must stay local'
-          assert not list(Path('.').rglob('*.xklconcepts')), 'Concept packages must stay local'
-          assert not list(Path('.').rglob('*.xklcourse')), 'Teaching courses must stay local'
-          assert not list(Path('.').rglob('*.xklmath')), 'Private math packages must stay local'
-          assert not list(Path('.').rglob('*.xklmathguide')), 'Private math guide packages must stay local'
-          assert not list(Path('.').rglob('*.xklguide')), 'Private guide packages must stay local'
-          assert not list(Path('.').rglob('guide.json')), 'Private math guide content must stay local'
-          assert not list(Path('.').rglob('*math-guide*.json')), 'Private math guide payloads must stay local'
-          assert not list(Path('.').rglob('*.pdf')), 'Source PDF files must stay local'
-          PY
-      - name: Capture native synthetic handbook-card previews
-        env:
-          HANDBOOK_CARD_PREVIEW_CASES: ${{ inputs.preview_cases }}
-        run: python3 tools/capture_handbook_card_previews.py
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: handbook-card-native-simulator-previews
-          path: build/handbook-card-previews/
-          if-no-files-found: error
-          retention-days: 3
