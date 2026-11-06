@@ -176,8 +176,10 @@ def main():
                                    '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180',
                                    '-maximum-test-execution-time-allowance', '240'], case_dir / 'xcodebuild-test.log', env, 1200)
                 actual_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
-                if actual_container != container: raise RuntimeError('App container changed during UI test')
-                case_report['records'] = check_records(container, source, target, baseline)
+                # XCTest may reinstall the app into a different simulator path.
+                # Verify the actual live container's records against the seed.
+                case_report['simulatorContainerRelocated'] = actual_container != container
+                case_report['records'] = check_records(actual_container, source, target, baseline)
                 case_report['status'] = 'PASS'
             except Exception as error:
                 case_report['failure'] = type(error).__name__ + ': ' + str(error)
