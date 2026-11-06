@@ -409,7 +409,9 @@ struct HandbookCardPreview: View {
         _selectedSubject = State(initialValue: prepared.subject)
         _fullScreenEnabled = State(initialValue: !["normal-front", "normal-back", "focus-toggle"].contains(prepared.selectedCase))
     }
-    var body: some View {
+    var body: some View { finalPreviewTasks }
+
+    private var previewTabs: some View {
         TabView(selection: $selectedTab) {
             Text("合成首页，不含学习资料").tabItem { Label("今天", systemImage: "house") }.tag(5)
             ProfessionalCoursesView(computer: fixture.legacyComputer, power: fixture.legacyPower,
@@ -423,6 +425,10 @@ struct HandbookCardPreview: View {
                 .toolbar(fullScreenEnabled && recalling ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }.tag(4)
         }
+    }
+
+    private var previewBars: some View {
+        previewTabs
             .safeAreaInset(edge: .top, spacing: 0) {
                 if !(fullScreenEnabled && recalling) {
                     HStack(spacing: 12) {
@@ -439,60 +445,92 @@ struct HandbookCardPreview: View {
                 }
             }
             .statusBarHidden(fullScreenEnabled && recalling)
-            .environment(\.handbookCardPreview, .init(didRender: {
-                observation = $0
-                handbookPreviewTrace("observed", ["mode": $0.mode, "fullScreen": $0.fullScreen, "card": $0.cardID ?? "nil", "ratings": $0.ratingCount])
-                reportIfReady()
-            }, scrollTarget: diagramScrollTarget, sourceSheet: sourceSheet, sourceSelectionID: sourceSelectionID, didRenderSources: {
-                sourceObservation = $0
-            }, diagramExpanded: diagramRequested, didRenderDiagram: { cardID, expanded in
-                diagramObservedCardID = cardID; diagramObserved = expanded
-            }, guideHelpExpanded: guideRequested, didRenderGuide: { cardID, revealed in
-                guideObservedCardID = cardID; guideObservedRevealed = revealed
-            }, didRenderGuideHelp: { cardID, expanded in
-                guideHelpObservedCardID = cardID; guideHelpObserved = expanded
-            }, openHighlightEditor: fixture.selectedCase == "highlight-editor", didRenderHighlightEditor: {
-                highlightEditorObserved = true
-            }, openRelatedQuestion: ["related-question", "related-review"].contains(fixture.selectedCase), didRenderRelatedQuestion: {
-                relatedQuestionObserved = true
-            }, openLinkedTable: fixture.selectedCase == "linked-table-page", didRenderLinkedTableEntry: { cardID in
-                linkedTableEntryCardID = cardID
-            }, didRenderLinkedTablePage: { tableID in
-                linkedTablePageID = tableID
-            }, openTableIndex: fixture.selectedCase == "table-index", didRenderTableIndex: { linked, optional in
-                tableIndexCounts = [linked, optional]
-            }, didRenderSourceNote: { tableID, bottom in
-                if tableID == "synthetic-shared-table" { noteBottom = bottom }
-            }, didRenderTableImage: { _, top in
-                imageTop = top
-            }, didRenderSubjectPicker: { frame in
-                if subjectPickerFrame != frame { subjectPickerFrame = frame }
-            }, openImportPicker: fixture.selectedCase == "effective-import"))
+    }
+
+    private var cardPreviewEnvironment: HandbookCardPreviewState {
+        var state = HandbookCardPreviewState()
+        state.didRender = {
+            observation = $0
+            handbookPreviewTrace("observed", ["mode": $0.mode, "fullScreen": $0.fullScreen, "card": $0.cardID ?? "nil", "ratings": $0.ratingCount])
+            reportIfReady()
+        }
+        state.scrollTarget = diagramScrollTarget
+        state.sourceSheet = sourceSheet
+        state.sourceSelectionID = sourceSelectionID
+        state.didRenderSources = { sourceObservation = $0 }
+        state.diagramExpanded = diagramRequested
+        state.didRenderDiagram = { cardID, expanded in diagramObservedCardID = cardID; diagramObserved = expanded }
+        state.guideHelpExpanded = guideRequested
+        state.didRenderGuide = { cardID, revealed in guideObservedCardID = cardID; guideObservedRevealed = revealed }
+        state.didRenderGuideHelp = { cardID, expanded in guideHelpObservedCardID = cardID; guideHelpObserved = expanded }
+        state.openHighlightEditor = fixture.selectedCase == "highlight-editor"
+        state.didRenderHighlightEditor = { highlightEditorObserved = true }
+        state.openRelatedQuestion = ["related-question", "related-review"].contains(fixture.selectedCase)
+        state.didRenderRelatedQuestion = { relatedQuestionObserved = true }
+        state.openLinkedTable = fixture.selectedCase == "linked-table-page"
+        state.didRenderLinkedTableEntry = { cardID in linkedTableEntryCardID = cardID }
+        state.didRenderLinkedTablePage = { tableID in linkedTablePageID = tableID }
+        state.openTableIndex = fixture.selectedCase == "table-index"
+        state.didRenderTableIndex = { linked, optional in tableIndexCounts = [linked, optional] }
+        state.didRenderSourceNote = { tableID, bottom in if tableID == "synthetic-shared-table" { noteBottom = bottom } }
+        state.didRenderTableImage = { _, top in imageTop = top }
+        state.didRenderSubjectPicker = { frame in if subjectPickerFrame != frame { subjectPickerFrame = frame } }
+        state.openImportPicker = fixture.selectedCase == "effective-import"
+        return state
+    }
+
+    private var previewEnvironment: some View {
+        previewBars.environment(\.handbookCardPreview, cardPreviewEnvironment)
+    }
+
+    private var previewCoreObserved: some View {
+        previewEnvironment
             .onAppear { handbookPreviewTrace("root-appeared") }
             .onChange(of: observation) { _, _ in reportIfReady() }
             .onChange(of: sourceObservation) { _, _ in reportIfReady() }
             .onChange(of: guideObservedCardID) { _, _ in reportIfReady() }
             .onChange(of: guideObservedRevealed) { _, _ in reportIfReady() }
+    }
+
+    private var previewTableObserved: some View {
+        previewCoreObserved
             .onChange(of: highlightEditorObserved) { _, _ in reportIfReady() }
             .onChange(of: relatedQuestionObserved) { _, _ in reportIfReady() }
             .onChange(of: linkedTableEntryCardID) { _, _ in reportIfReady() }
             .onChange(of: linkedTablePageID) { _, _ in reportIfReady() }
             .onChange(of: tableIndexCounts) { _, _ in reportIfReady() }
+    }
+
+    private var previewGeometryObserved: some View {
+        previewTableObserved
             .onChange(of: noteBottom) { _, _ in reportIfReady() }
             .onChange(of: imageTop) { _, _ in reportIfReady() }
             .onChange(of: segmentBarFrame) { _, _ in reportIfReady() }
             .onChange(of: subjectPickerFrame) { _, _ in reportIfReady() }
+    }
+
+    private var previewOverlayObserved: some View {
+        previewGeometryObserved
             .onChange(of: effectiveContentOverlay) { _, _ in reportIfReady() }
             .onChange(of: effectiveBlockedOverlay) { _, _ in reportIfReady() }
             .onChange(of: systemPickerObserved) { _, _ in reportIfReady() }
+    }
+
+    private var firstPreviewTasks: some View {
+        previewOverlayObserved
             .task { await runFocusToggle() }
             .task { await runSourceNavigation() }
             .task { await runDiagramToggle() }
+    }
+
+    private var finalPreviewTasks: some View {
+        firstPreviewTasks
             .task { await runDiagramSwitch() }
             .task { await runGuideHelpToggle() }
             .task { await observeSystemPicker() }
             .task { await monitorLinkedTableReadiness() }
     }
+
     @MainActor private func monitorLinkedTableReadiness() async {
         guard fixture.subject == .mechanics && fixture.selectedCase == "linked-table-page" else { return }
         for _ in 0..<45 {
