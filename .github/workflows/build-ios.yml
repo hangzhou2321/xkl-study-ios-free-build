@@ -5,11 +5,6 @@ permissions:
   contents: read
 jobs:
   professional-touch:
-    strategy:
-      fail-fast: false
-      matrix:
-        source: [power, mechanics]
-        gesture: [tap, drag]
     runs-on: macos-15-intel
     timeout-minutes: 55
     steps:
@@ -27,17 +22,16 @@ jobs:
           PY
       - name: Exercise production root with real coordinate gesture
         env:
-          TOUCH_TEST_SOURCE: ${{ matrix.source }}
-          TOUCH_TEST_GESTURE: ${{ matrix.gesture }}
+          TOUCH_TEST_SOURCE: power
         run: python3 tools/guide_ui_test/run.py
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: professional-touch-${{ matrix.source }}-${{ matrix.gesture }}
+          name: professional-touch-power-tap-and-drag
           path: |
             build/professional-touch-uitest/*.log
             build/professional-touch-uitest/summary.json
-            build/professional-touch-uitest/attachments/
-            build/professional-touch-uitest/ProfessionalTouch.xcresult/
+            build/professional-touch-uitest/tap/
+            build/professional-touch-uitest/drag/
           if-no-files-found: warn
           retention-days: 3

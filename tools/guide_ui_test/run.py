@@ -118,8 +118,6 @@ def main():
     if platform.system() != 'Darwin': raise SystemExit('Requires macOS and iOS Simulator')
     source = os.environ.get('TOUCH_TEST_SOURCE', 'power')
     if source not in ('power', 'mechanics'): raise ValueError('invalid synthetic source')
-    gesture = os.environ.get('TOUCH_TEST_GESTURE', 'tap')
-    if gesture not in ('tap', 'drag'): raise ValueError('invalid touch gesture')
     target = 'mechanics' if source == 'power' else 'power'
     os.chdir(ROOT); OUT.mkdir(parents=True, exist_ok=True)
     name, runtime, kind, info = select_device()
@@ -135,12 +133,11 @@ def main():
     subprocess.run(['python3', 'tools/guide_ui_test/generate_project.py', '--without-personal-resources'], check=True, env=env)
     device = sim('create', 'ProfessionalTouch-' + uuid.uuid4().hex[:12], kind, runtime).strip()
     report = {'status': 'INCOMPLETE', 'syntheticOnly': True, 'physicalDeviceTested': False,
-              'source': source, 'target': target, 'gesture': gesture, 'device': name, 'runtime': info.get('version'),
+              'source': source, 'target': target, 'device': name, 'runtime': info.get('version'), 'cases': {},
               'simulatorWorkaround': workaround, 'productionRootUnmodified': True,
-              'selectionMethod': 'XCUITest coordinate ' + gesture + ' on actual segmented control',
+              'selectionMethod': 'XCUITest coordinate tap and drag on actual segmented control',
               'limitations': ['Destination synthetic card package has no existing presentation.',
                               'Simulator test does not demonstrate physical iPhone behavior.']}
-    result = OUT / 'ProfessionalTouch.xcresult'
     try:
         sim('boot', device); sim('bootstatus', device, '-b')
         subprocess.run(['open', '-a', 'Simulator', '--args', '-CurrentDeviceUDID', device], check=True)
@@ -151,27 +148,47 @@ def main():
         run_logged(base + ['build-for-testing'], OUT / 'build.log', env, 1200)
         app = OUT / 'DerivedData/Build/Products/Debug-iphonesimulator/XKLStudy.app'
         if not app.is_dir(): raise RuntimeError('Simulator app not built')
-        sim('install', device, str(app))
-        container, baseline = seed(device, source, target, {**env, **launch_env})
-        case = ('testPowerToMechanics' if source == 'power' else 'testMechanicsToPower') + gesture.capitalize()
-        run_logged(base + ['test-without-building', '-resultBundlePath', str(result), '-parallel-testing-enabled', 'NO',
-                           '-only-testing:GuideDisclosureUITests/GuideDisclosureUITests/' + case,
-                           '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180',
-                           '-maximum-test-execution-time-allowance', '240'], OUT / 'xcodebuild-test.log', env, 1200)
-        actual_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
-        if actual_container != container: raise RuntimeError('App container changed during UI test')
-        report['records'] = check_records(container, source, target, baseline)
-        report['status'] = 'PASS_PRODUCTION_ROOT_REAL_COORDINATE_TAP'
+        for gesture in ('tap', 'drag'):
+            case_dir = OUT / gesture; case_dir.mkdir(exist_ok=True)
+            result = case_dir / 'ProfessionalTouch.xcresult'
+            case_report = {'status': 'INCOMPLETE', 'gesture': gesture}
+            report['cases'][gesture] = case_report
+            try:
+                sim('install', device, str(app))
+                container, baseline = seed(device, source, target, {**env, **launch_env})
+                case = ('testPowerToMechanics' if source == 'power' else 'testMechanicsToPower') + gesture.capitalize()
+                run_logged(base + ['test-without-building', '-resultBundlePath', str(result), '-parallel-testing-enabled', 'NO',
+                                   '-only-testing:GuideDisclosureUITests/GuideDisclosureUITests/' + case,
+                                   '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180',
+                                   '-maximum-test-execution-time-allowance', '240'], case_dir / 'xcodebuild-test.log', env, 1200)
+                actual_container = Path(sim('get_app_container', device, BUNDLE, 'data').strip()).resolve()
+                if actual_container != container: raise RuntimeError('App container changed during UI test')
+                case_report['records'] = check_records(container, source, target, baseline)
+                case_report['status'] = 'PASS'
+            except Exception as error:
+                case_report['failure'] = type(error).__name__ + ': ' + str(error)
+                case_report['status'] = 'FAIL_OR_INCOMPLETE'
+            finally:
+                if result.exists():
+                    attachments = case_dir / 'attachments'; attachments.mkdir(exist_ok=True)
+                    export = subprocess.run(['xcrun', 'xcresulttool', 'export', 'attachments', '--path', str(result),
+                                             '--output-path', str(attachments)], capture_output=True, text=True)
+                    case_report['attachmentExportExitCode'] = export.returncode
+                    if export.returncode: case_report['status'] = 'INCOMPLETE_ATTACHMENT_EXPORT_FAILED'
+                try: sim('terminate', device, BUNDLE)
+                except subprocess.CalledProcessError: pass
+                # This UDID was just created by this script and contains synthetic data only.
+                try: sim('uninstall', device, BUNDLE)
+                except subprocess.CalledProcessError: pass
+                (case_dir / 'summary.json').write_text(json.dumps(case_report, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
+                print('SYNTHETIC_TOUCH_CASE', gesture, case_report['status'], flush=True)
+        if not all(case.get('status') == 'PASS' for case in report['cases'].values()):
+            raise RuntimeError('At least one real-coordinate case failed or was incomplete')
+        report['status'] = 'PASS_PRODUCTION_ROOT_REAL_COORDINATE_TAP_AND_DRAG'
     except Exception as error:
         report['failure'] = type(error).__name__ + ': ' + str(error)
         raise
     finally:
-        if result.exists():
-            attachments = OUT / 'attachments'; attachments.mkdir(exist_ok=True)
-            export = subprocess.run(['xcrun', 'xcresulttool', 'export', 'attachments', '--path', str(result),
-                                     '--output-path', str(attachments)], capture_output=True, text=True)
-            report['attachmentExportExitCode'] = export.returncode
-            if export.returncode: report['status'] = 'INCOMPLETE_ATTACHMENT_EXPORT_FAILED'
         try: sim('shutdown', device)
         except subprocess.CalledProcessError: pass
         try: sim('delete', device)
