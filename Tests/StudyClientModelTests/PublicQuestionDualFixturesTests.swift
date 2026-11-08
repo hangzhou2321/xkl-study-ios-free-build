@@ -32,6 +32,38 @@ enum PublicQuestionDualFixtures {
             })
     }
 
+    /// Creates synthetic prior learned slots without inventing answers. The
+    /// Pocket import API explicitly supports packed-only old state and zero
+    /// prior events. 267 due plus 25 new resembles a 292-item active task.
+    @MainActor static func legacyWithDue(_ b: ExamBank, dueCount: Int) throws -> ExamLearningEngine {
+        precondition(dueCount >= 0 && dueCount <= b.questions.count)
+        let newCount = b.questions.count - dueCount
+        let packed = b.questions.indices.map { index -> UInt32 in
+            index < newCount ? 0 : ((1 << 20) | (1 << 16) | (day - 1))
+        }
+        var stream = UUID().uuid
+        let pointer = try XCTUnwrap(withUnsafeBytes(of: &stream) { streamRaw in
+            packed.withUnsafeBufferPointer { cards in
+                xkl_engine_import_cards(UInt32(cards.count), cards.baseAddress, day, UInt32.max,
+                                        streamRaw.bindMemory(to: UInt8.self).baseAddress)
+            }
+        })
+        defer { xkl_engine_free(pointer) }
+        var snapshot = Data(count: xkl_engine_snapshot_size(pointer))
+        let written = snapshot.withUnsafeMutableBytes { raw in
+            xkl_engine_snapshot(pointer, raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
+        }
+        XCTAssertEqual(written, snapshot.count)
+        let pocket = try PocketEngine(snapshot: snapshot)
+        var record = try ExamLearningEngine.fresh(bank: b, hash: hash, now: now).record
+        record.snapshot = snapshot
+        record.snapshotSHA256 = StudySHA256.hex(snapshot)
+        record.analysis = StudyAnalysisSettings(streamID: try pocket.streamID, nextSequence: 1, now: now)
+        let engine = try ExamLearningEngine(bank: b, hash: hash, record: record)
+        try engine.start(day: day, now: now)
+        return engine
+    }
+
     struct Slot: Equatable {
         let packed: UInt32
         let pendingStageMask: UInt32
@@ -136,5 +168,25 @@ final class PublicQuestionDualFixturesTests: XCTestCase {
         XCTAssertEqual(scored.gradedAt, gradedAt)
         XCTAssertEqual(try ConceptCalendar.studyDay(try XCTUnwrap(scored.gradedAt)), Int(nextDay))
         XCTAssertEqual(try ConceptCalendar.studyDay(scored.answeredAt), Int(firstDay))
+    }
+
+    @MainActor func testSyntheticLegacyTaskHasHundredsOfDistinctObligationsWithoutFabricatedGrades() async throws {
+        let bank = PublicQuestionDualFixtures.bank(292)
+        let legacy = try PublicQuestionDualFixtures.legacyWithDue(bank, dueCount: 267)
+        let info = try legacy.info
+        XCTAssertEqual(info.review_remaining, 267)
+        XCTAssertEqual(info.new_remaining, 25)
+        XCTAssertEqual(info.review_remaining + info.new_remaining, 292)
+        XCTAssertTrue(legacy.record.attempts.isEmpty)
+        let slots = try PublicQuestionDualFixtures.slots(snapshot: legacy.record.snapshot, count: bank.questions.count)
+        XCTAssertEqual(slots.prefix(25).filter { $0.packed == 0 }.count, 25)
+        XCTAssertEqual(slots.dropFirst(25).filter { ($0.packed & (1 << 20)) != 0 }.count, 267)
+        let saved = try JSONEncoder().encode(legacy.record)
+        let restored = try ExamLearningEngine(bank: bank, hash: PublicQuestionDualFixtures.hash,
+            record: JSONDecoder().decode(ExamDiskRecord.self, from: saved))
+        XCTAssertEqual(restored.record.presentation, legacy.record.presentation)
+        XCTAssertEqual(restored.record.snapshot, legacy.record.snapshot)
+        XCTAssertEqual(try restored.info.review_remaining + restored.info.new_remaining, 292)
+        XCTAssertTrue(restored.record.attempts.isEmpty)
     }
 }
