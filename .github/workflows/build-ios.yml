@@ -45,3 +45,18 @@ jobs:
           path: build/XKLStudy-unsigned-candidate.ipa
           if-no-files-found: error
           retention-days: 1
+  synthetic-store-tests:
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private content
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = {'.pdf','.xklcontent','.xklquestions','.xklflashcards','.xklqbank','.xklconcepts','.xklcourse','.xklmath','.xklmathguide','.xklguide','.p12','.pfx','.p8','.pem','.key','.mobileprovision'}
+          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in forbidden]
+          assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
+          PY
+      - name: Run synthetic ExamStore integration tests
+        run: swift test --jobs 2 --filter PublicDualStoreIntegrationTests
