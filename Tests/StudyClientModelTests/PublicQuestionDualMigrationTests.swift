@@ -215,7 +215,8 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         let info = try old.info
         try old.rotate(reference: ExamVolumeReference(filename: digest + ".json", sha256: digest,
             firstSequence: old.logBase + 1, lastSequence: info.log_records, attemptCount: old.record.attempts.count))
-        let source = try JSONEncoder().encode(old.record)
+        let canonical = JSONEncoder(); canonical.outputFormatting = [.sortedKeys]
+        let source = try canonical.encode(old.record)
         let (dual, bytes) = try migrate(old, bank, at: base.addingTimeInterval(3), volumes: [archive])
         XCTAssertEqual(dual.state.legacyAttempts.count, 1)
         XCTAssertEqual(dual.state.legacyRatings.count, 1)
@@ -223,7 +224,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertThrowsError(try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: []))
         var altered = archive; altered.append(0)
         XCTAssertThrowsError(try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [altered]))
-        XCTAssertEqual(try JSONEncoder().encode(old.record), source)
+        XCTAssertEqual(try canonical.encode(old.record), source)
     }
 
     @MainActor func testNextPageBalancesOldCarryAndNewlyDueWithoutLosingEither() async throws {
@@ -300,24 +301,37 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
     }
 
     @MainActor func testTimeZoneChangeReplaysOldAndNewEventsAndRejectsTampering() async throws {
-        let previous = NSTimeZone.default
-        defer { NSTimeZone.default = previous }
-        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
-        let boundary = base.addingTimeInterval(8 * 3_600)
+        func day(_ at: Date, zone: TimeZone) throws -> UInt32 {
+            var local = Calendar(identifier: .gregorian); local.timeZone = zone
+            var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+            let midnight = try XCTUnwrap(utc.date(from: local.dateComponents([.year, .month, .day], from: at)))
+            return UInt32(midnight.timeIntervalSince1970 / 86_400)
+        }
         let bank = PublicQuestionDualFixtures.bank(2)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: boundary)
-        try old.start(day: UInt32(try ConceptCalendar.studyDay(boundary)), now: boundary)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
+        try old.start(day: UInt32(try ConceptCalendar.studyDay(base)), now: base)
         let oldP = try XCTUnwrap(old.record.presentation)
-        try old.selectAndSubmit("B", presentationID: oldP.id, now: boundary.addingTimeInterval(1))
-        try old.nextQuestion(presentationID: oldP.id, now: boundary.addingTimeInterval(2))
-        let (dual, bytes) = try migrate(old, bank, at: boundary.addingTimeInterval(3))
+        try old.selectAndSubmit("B", presentationID: oldP.id, now: base.addingTimeInterval(1))
+        try old.nextQuestion(presentationID: oldP.id, now: base.addingTimeInterval(2))
+        let (dual, bytes) = try migrate(old, bank, at: base.addingTimeInterval(3))
+        let before = dual.state
         let p = try XCTUnwrap(dual.presentation)
-        try dual.selectAndSubmit("A", presentationID: p.id, now: boundary.addingTimeInterval(4))
-        let expected = dual.state
-        XCTAssertNotNil(expected.events.last?.timeZoneID)
+        let ratedAt = base.addingTimeInterval(2 * 86_400 + 8 * 3_600)
+        try dual.selectAndSubmit("A", presentationID: p.id, now: ratedAt)
+        var expected = dual.state
+        let e = try XCTUnwrap(expected.events.last)
+        let candidates = [TimeZone(identifier: "Asia/Shanghai")!, TimeZone(identifier: "America/Los_Angeles")!]
+        let savedZone = try XCTUnwrap(candidates.first { (try? day(ratedAt, zone: $0)) != e.day })
+        let savedDay = try day(ratedAt, zone: savedZone)
+        XCTAssertNotEqual(savedDay, e.day)
+        expected.events[expected.events.count - 1] = PublicDualEvent(sequence: e.sequence, kind: e.kind,
+            at: e.at, day: savedDay, timeZoneID: savedZone.identifier, round: e.round, attempt: e.attempt)
+        expected.daily[p.questionID] = try FSRS6Shadow.review(before.daily[p.questionID], day: savedDay,
+            rating: 3, timestampMs: milliseconds(ratedAt)).memory
+        expected.all[p.questionID] = try FSRS6Shadow.review(before.all[p.questionID], day: savedDay,
+            rating: 3, timestampMs: milliseconds(ratedAt)).memory
+        expected.lastRating[p.questionID] = PublicDualLastRating(day: savedDay, at: ratedAt, remembered: true)
         let saved = try JSONEncoder().encode(expected)
-        NSTimeZone.default = TimeZone(identifier: "America/Los_Angeles")!
-        XCTAssertNotEqual(TimeZone.current.identifier, expected.migrationTimeZoneID)
         let resumed = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self, from: saved),
                                                  bank: bank, hash: bankHash)
         XCTAssertEqual(resumed.state.daily, expected.daily)
