@@ -497,6 +497,13 @@ final class ExamStore: ObservableObject {
             throw ExamError.invalid("旧题库的撤销状态无法核对，原记录已保留。")
         }
         let now = clock()
+        // A result already closed in the dual view may still be present in the
+        // immutable original anchor. Close it only in this private clone; the
+        // old engine does not allow undo while its result page remains open.
+        if let review = old.record.answerReview {
+            try old.nextQuestion(presentationID: review.presentation.id, now: now)
+            guard old.record.answerReview == nil else { throw ExamError.invalid("无法关闭旧题库结果页，原记录已保留。") }
+        }
         try old.undo(now: now)
         guard old.record.lastUndoableAttemptID == nil else { throw ExamError.invalid("旧题库撤销未生效。") }
         let newAnchor = try encoded(old.record), anchorHash = StudySHA256.hex(newAnchor)
