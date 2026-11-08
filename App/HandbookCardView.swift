@@ -675,18 +675,14 @@ struct HandbookCardView: View {
                         ForEach(package.cards.filter { package.chapter(for: $0)?.id == chapter.id }, id: \.id) { card in
                             NavigationLink {
                                 ScrollView {
-                                    HStack(alignment: .top, spacing: 4) {
-                                        HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
-                                                         frequencyLabel: package.frequencyLabel(for: card),
-                                                         memoryGuide: package.memoryGuide(for: card))
-                                            .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
-                                        if !package.questions(for: card).isEmpty {
-                                            Button { outlineRelatedQuestionTarget = card } label: {
-                                                HandbookSideLink(symbol: "doc.text", title: "原题")
-                                            }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
-                                                .accessibilityIdentifier("handbook-outline-related-questions")
-                                        }
-                                    }.padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
+                                    HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
+                                                     frequencyLabel: package.frequencyLabel(for: card),
+                                                     memoryGuide: package.memoryGuide(for: card),
+                                                     previewQuestionAction: package.questions(for: card).isEmpty ? nil : {
+                                                         outlineRelatedQuestionTarget = card
+                                                     })
+                                        .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
+                                        .padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
                                     Text("目录预览不产生自评，也不改变复习日期。")
                                         .font(.footnote).foregroundStyle(.secondary).padding()
                                 }.background(Color(uiColor: .systemGroupedBackground))
@@ -1026,6 +1022,8 @@ private struct HandbookCardFace: View {
     var primarySourceTitle: String? = nil
     var frequencyLabel: String? = nil
     var memoryGuide: HandbookCardPackage.MemoryGuide? = nil
+    /// Directory previews only: the normal recall screen retains its side link.
+    var previewQuestionAction: (() -> Void)? = nil
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -1037,8 +1035,21 @@ private struct HandbookCardFace: View {
             if !focused { HStack {
                 Text(revealed ? "核对答案" : "主动回忆").font(.caption.weight(.semibold)).foregroundStyle(.blue)
                 Spacer()
-                Image(systemName: revealed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle")
-                    .foregroundStyle(.blue.opacity(0.7))
+                if let previewQuestionAction {
+                    Button(action: previewQuestionAction) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.text")
+                            Text("原题")
+                            Image(systemName: "chevron.right").font(.caption2.weight(.bold))
+                        }.font(.caption.weight(.semibold)).padding(.horizontal, 10).frame(minHeight: 36)
+                            .foregroundStyle(.blue)
+                            .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
+                    }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
+                        .accessibilityIdentifier("handbook-outline-related-questions")
+                } else {
+                    Image(systemName: revealed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle")
+                        .foregroundStyle(.blue.opacity(0.7))
+                }
             } }
             HandbookMarkedText(source: card.title, fieldID: "title").font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
