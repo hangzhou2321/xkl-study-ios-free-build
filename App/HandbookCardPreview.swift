@@ -89,7 +89,7 @@ extension EnvironmentValues {
     let switchSourceBytes: Data?
     let switchTargetBytes: Data?
     let switchFlowBytes: Data?
-    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "paused-front", "paused-switch", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
+    static let cases: Set<String> = ["front", "back", "table", "table-front", "long", "resume", "postponed", "completed", "missing-source", "normal-front", "normal-back", "paused-front", "paused-switch", "focus-toggle", "multi-source", "lecture-only", "multi-source-pages", "lecture-only-pages", "diagram-branch", "diagram-flow", "diagram-switch", "highlight-front", "highlight-back", "highlight-editor", "related-question", "related-review", "outline-question", "linked-table-entry", "linked-table-page", "table-index", "effective-import"]
 
     init() {
         handbookPreviewTrace("fixture-begin")
@@ -207,12 +207,12 @@ extension EnvironmentValues {
                 return result
             }
             var cards = [card("synthetic-handbook-first")]
-            if ["resume", "postponed", "completed", "diagram-switch", "paused-switch"].contains(selected) { cards.append(card("synthetic-handbook-second", second: true)) }
+            if ["resume", "postponed", "completed", "diagram-switch", "paused-switch", "outline-question"].contains(selected) { cards.append(card("synthetic-handbook-second", second: true)) }
             var package: [String: Any] = ["format": "xkl-handbook-cards-v1", "id": "synthetic-handbook-package", "subject": rawSubject,
                 "title": "纯合成卡组 · 不含用户资料", "revision": "synthetic-1",
                 "source": ["title": "纯合成来源", "fileName": "synthetic.pdf", "sha256": String(repeating: "b", count: 64), "pdfPageCount": archivePage, "includedPages": [sourcePage, archivePage]],
                 "chapters": [["id": "synthetic-chapter", "title": "合成章节 · 仅用于页面检查"]], "cards": cards]
-            if ["related-question", "related-review"].contains(selected) {
+            if ["related-question", "related-review", "outline-question"].contains(selected) {
                 var question: [String: Any] = ["id": "synthetic-question", "cardID": "synthetic-handbook-first",
                     "type": "single", "prompt": "合成原题：哪个选项是示例？",
                     "options": [["id": "A", "text": "合成选项甲"], ["id": "B", "text": "合成选项乙"]],
@@ -224,8 +224,13 @@ extension EnvironmentValues {
                 package["topicFrequencies"] = [["topicNumber": 1, "stars": 4, "sourcePage": sourcePage,
                     "cardIDs": selected == "normal-front" ? [] : ["synthetic-handbook-first"]]]
             }
-            if ["front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page"].contains(selected) {
-                let rows: [[String: String]] = selected.hasPrefix("linked-table-") ? [
+            if ["front", "back", "highlight-front", "highlight-back", "highlight-editor", "linked-table-entry", "linked-table-page", "outline-question"].contains(selected) {
+                let rows: [[String: String]] = selected == "outline-question" ? [
+                    ["cue": "合成提示甲", "answer": "纯合成较长答案，重复文字用于验证手机窄屏时侧边入口不会挡住卡片正文和提示内容。"],
+                    ["cue": "合成提示乙", "answer": "这是第二行纯合成答案，只验证界面排版，不包含任何私人课程或学习记录。"],
+                    ["cue": "合成提示丙", "answer": "这是第三行纯合成答案，用来测试较长文本换行和右侧按钮之间的间距。"],
+                    ["cue": "合成提示丁", "answer": "这是第四行纯合成答案，用来确认预览和原题不触发背卡评分。"]
+                ] : selected.hasPrefix("linked-table-") ? [
                     ["cue": "合成提示甲", "answer": "合成值甲，仅用于界面排版。"],
                     ["cue": "合成提示乙", "answer": "合成值乙，仅用于界面排版。"],
                     ["cue": "合成提示丙", "answer": "合成值丙，仅用于界面排版。"],
