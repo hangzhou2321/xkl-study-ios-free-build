@@ -123,7 +123,9 @@ final class ExamStore: ObservableObject {
     private func volumesURL(_ hash: String) -> URL { versionURL(hash).appendingPathComponent("volumes", isDirectory: true) }
     private func dualRoot(_ hash: String) -> URL { versionURL(hash).appendingPathComponent("dual-fsrs", isDirectory: true) }
     private func dualURL(_ hash: String) -> URL { dualRoot(hash).appendingPathComponent("current.json") }
-    private func dualMarkerURL(_ hash: String) -> URL { dualRoot(hash).appendingPathComponent("enabled.json") }
+    // Keep the sentinel outside the dual-state directory: accidental removal
+    // of that whole directory must not look like a never-migrated old bank.
+    private func dualMarkerURL(_ hash: String) -> URL { versionURL(hash).appendingPathComponent("dual-fsrs-enabled.json") }
     private func anchorURL(_ hash: String, _ value: String) -> URL { dualRoot(hash).appendingPathComponent("anchors", isDirectory: true).appendingPathComponent(value + ".json") }
     private func dualRevisionURL(_ hash: String, _ value: String) -> URL { dualRoot(hash).appendingPathComponent("revisions", isDirectory: true).appendingPathComponent(value + ".json") }
     private func encoded(_ record: ExamDiskRecord) throws -> Data {
