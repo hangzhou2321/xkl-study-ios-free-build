@@ -197,6 +197,39 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         XCTAssertEqual(store.engine?.record.attempts, before.word.attempts)
     }
 
+    @MainActor func testArchivedPocketLogVolumeRemainsIdenticalOnNineCardAppend() async throws {
+        let now = Date(), old = package(oldCount: 6, extraCount: 0), next = package(oldCount: 6, extraCount: 9)
+        let book = try HandbookWordEngine(package: old, now: now)
+        try book.start(now: now)
+        let first = try XCTUnwrap(book.presentation?.id)
+        try book.reveal(token: first, now: now); try book.rate(remembered: false, token: first, now: now)
+        let second = try XCTUnwrap(book.presentation?.id)
+        try book.reveal(token: second, now: now)
+        var rotated = book.state
+        let catalog = RecallDeck(subject: .computer, bankID: ConceptSubject.computer.bankID,
+            cards: (0..<6).map { index in
+                .init(conceptID: "handbook", conceptTitle: "Handbook slot",
+                      card: .init(id: "handbook:\(index)", prompt: "slot \(index)", answer: "slot \(index)"))
+            })
+        let core = try ProfessionalRecallEngine.restore(record: rotated.word, fallback: catalog)
+        try core.rotateLog()
+        rotated.word = core.record
+        XCTAssertEqual(rotated.word.volumes.count, 1)
+        let originalEvents = try events(rotated.word), originalSnapshot = rotated.word.snapshot
+        let reopened = try HandbookWordEngine(state: rotated)
+        try reopened.updatePackage(next, now: now)
+        let after = reopened.state
+        XCTAssertEqual(after.word.volumes, rotated.word.volumes)
+        XCTAssertEqual(after.word.attempts, rotated.word.attempts)
+        XCTAssertEqual(Array(try events(after.word).prefix(originalEvents.count)), originalEvents)
+        XCTAssertEqual(after.word.contentChanges?.last?.beforeSnapshot, originalSnapshot)
+        XCTAssertEqual(after.frozenCard, rotated.frozenCard)
+        XCTAssertEqual(after.frozenGuide, rotated.frozenGuide)
+        XCTAssertEqual(after.frozenToken, rotated.frozenToken)
+        XCTAssertEqual(try packed(after.word.snapshot, count: 6), try packed(originalSnapshot, count: 6))
+        XCTAssertEqual(Array(try packed(after.word.snapshot, count: 15).suffix(9)), Array(repeating: UInt32(0), count: 9))
+    }
+
     @MainActor func testNineRelatedQuestionsImportWithoutScoresAndSubmitOnceInSeparateStore() async throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let now = Date(), old = package(oldCount: 5, extraCount: 0)
