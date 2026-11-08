@@ -519,13 +519,17 @@ struct HandbookCardView: View {
                 HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
-                                 memoryGuide: engine.currentMemoryGuide)
+                                 memoryGuide: engine.currentMemoryGuide,
+                                 questionAction: subject == .computer && !engine.package.questions(for: card).isEmpty ? {
+                                     relatedQuestionTarget = card
+                                 } : nil,
+                                 questionAccessibilityID: "handbook-related-questions")
                     .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
                     .id(p.id)
-                if !engine.package.questions(for: card).isEmpty ||
+                if (subject != .computer && !engine.package.questions(for: card).isEmpty) ||
                     ((subject == .power || subject == .mechanics) && handbookHasTables(card, package: engine.package)) {
                     VStack(spacing: 10) {
-                        if !engine.package.questions(for: card).isEmpty {
+                        if subject != .computer && !engine.package.questions(for: card).isEmpty {
                             Button { relatedQuestionTarget = card } label: {
                                 HandbookSideLink(symbol: "doc.text", title: "原题")
                             }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
@@ -678,7 +682,7 @@ struct HandbookCardView: View {
                                     HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
                                                      frequencyLabel: package.frequencyLabel(for: card),
                                                      memoryGuide: package.memoryGuide(for: card),
-                                                     previewQuestionAction: package.questions(for: card).isEmpty ? nil : {
+                                                     questionAction: package.questions(for: card).isEmpty ? nil : {
                                                          outlineRelatedQuestionTarget = card
                                                      })
                                         .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
@@ -1022,8 +1026,9 @@ private struct HandbookCardFace: View {
     var primarySourceTitle: String? = nil
     var frequencyLabel: String? = nil
     var memoryGuide: HandbookCardPackage.MemoryGuide? = nil
-    /// Directory previews only: the normal recall screen retains its side link.
-    var previewQuestionAction: (() -> Void)? = nil
+    /// Compact top-right entry preserves the full card width on small screens.
+    var questionAction: (() -> Void)? = nil
+    var questionAccessibilityID = "handbook-outline-related-questions"
     @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
     @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
     @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
@@ -1032,11 +1037,13 @@ private struct HandbookCardFace: View {
     @ScaledMetric(relativeTo: .body) private var noteSize: CGFloat = 16.0
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            if !focused { HStack {
-                Text(revealed ? "核对答案" : "主动回忆").font(.caption.weight(.semibold)).foregroundStyle(.blue)
+            if !focused || questionAction != nil { HStack {
+                if !focused {
+                    Text(revealed ? "核对答案" : "主动回忆").font(.caption.weight(.semibold)).foregroundStyle(.blue)
+                }
                 Spacer()
-                if let previewQuestionAction {
-                    Button(action: previewQuestionAction) {
+                if let questionAction {
+                    Button(action: questionAction) {
                         HStack(spacing: 4) {
                             Image(systemName: "doc.text")
                             Text("原题")
@@ -1045,7 +1052,7 @@ private struct HandbookCardFace: View {
                             .foregroundStyle(.blue)
                             .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
                     }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
-                        .accessibilityIdentifier("handbook-outline-related-questions")
+                        .accessibilityIdentifier(questionAccessibilityID)
                 } else {
                     Image(systemName: revealed ? "rectangle.fill.on.rectangle.fill" : "rectangle.on.rectangle")
                         .foregroundStyle(.blue.opacity(0.7))
