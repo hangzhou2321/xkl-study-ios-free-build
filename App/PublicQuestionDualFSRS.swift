@@ -295,7 +295,7 @@ struct PublicQuestionDualState: Codable, Equatable {
     func startRetry(now: Date = Date()) throws {
         guard state.queue.isEmpty, state.presentation == nil, state.answerReview == nil else { return }
         let day = try checkedDay(now)
-        let round = Array(Self.retryCandidates(state: state, now: now).prefix(20))
+        let round = Array(Self.retryCandidates(state: state, now: now, day: day).prefix(20))
         guard !round.isEmpty else { return }
         var next = state; next.taskID = UUID()
         try Self.append(kind: "startRetry", round: round, attempt: nil, now: now, day: day, state: &next, bank: bank)
@@ -384,8 +384,8 @@ struct PublicQuestionDualState: Codable, Equatable {
         out.sessionPosition = state.sessionCount == 0 ? 0 : min(state.sessionCount, state.completedCount + (isShowingResult ? 0 : 1))
         out.newRemaining = fresh; out.reviewRemaining = state.queue.count - fresh
         out.totalRemaining = state.queue.count; out.carryRemaining = state.carry.count
-        out.retryAvailable = Self.retryCandidates(state: state, now: now).count
-        out.retryNextAvailableAt = Self.nextRetry(state: state, now: now)
+        out.retryAvailable = Self.retryCandidates(state: state, now: now, day: day).count
+        out.retryNextAvailableAt = Self.nextRetry(state: state, now: now, day: day)
         let newlyGraded = Self.newlyGradedIDs(state)
         out.dueTodayCount = state.legacyIDs.filter { Self.isDue($0, state: state, now: now, day: day, newlyGraded: newlyGraded) }.count
         out.totalAnsweredCount = latest.count; out.wrongCount = latest.values.filter { $0.mode == "answer" && !$0.isCorrect }.count
@@ -591,7 +591,7 @@ struct PublicQuestionDualState: Codable, Equatable {
                 before.events = Array(state.events.prefix(index))
                 assign(d, to: &before)
                 let expected = e.kind == "start" ? select(state: before, bank: bank, now: e.at, day: e.day) :
-                    Array(retryCandidates(state: before, now: e.at).prefix(20))
+                    Array(retryCandidates(state: before, now: e.at, day: e.day).prefix(20))
                 guard e.attempt == nil, d.queue.isEmpty, let round = e.round, !round.isEmpty,
                       round.count <= 20, Set(round).count == round.count,
                       round.allSatisfy({ idSet.contains($0) && !d.familiar.contains($0) }),
@@ -669,20 +669,21 @@ struct PublicQuestionDualState: Codable, Equatable {
             !state.familiar.contains(id)
     }
 
-    private static func retryCandidates(state: PublicQuestionDualState, now: Date) -> [String] {
+    private static func retryCandidates(state: PublicQuestionDualState, now: Date, day: UInt32) -> [String] {
         let carry = Set(state.carry), familiar = Set(state.familiar), wrong = latestWrongIDs(state)
         return state.lastRating.filter { id, rating in
-            wrong.contains(id) && !rating.remembered && !carry.contains(id) && !familiar.contains(id) &&
+            rating.day == day && wrong.contains(id) && !rating.remembered && !carry.contains(id) && !familiar.contains(id) &&
                 now.timeIntervalSince(rating.at) >= 600
         }.sorted {
             $0.value.at == $1.value.at ? $0.key < $1.key : $0.value.at < $1.value.at
         }.map(\.key)
     }
 
-    private static func nextRetry(state: PublicQuestionDualState, now: Date) -> Date? {
+    private static func nextRetry(state: PublicQuestionDualState, now: Date, day: UInt32) -> Date? {
         let carry = Set(state.carry), familiar = Set(state.familiar), wrong = latestWrongIDs(state)
         return state.lastRating.compactMap { id, rating -> Date? in
-            guard wrong.contains(id), !rating.remembered, !carry.contains(id), !familiar.contains(id) else { return nil }
+            guard rating.day == day, wrong.contains(id), !rating.remembered,
+                  !carry.contains(id), !familiar.contains(id) else { return nil }
             let ready = rating.at.addingTimeInterval(600)
             return ready > now ? ready : nil
         }.min()
@@ -716,6 +717,11 @@ struct PublicQuestionDualState: Codable, Equatable {
         guard !state.familiar.contains(id) else { return false }
         let packed = state.legacyPacked[id] ?? 0, level = (packed >> 16) & 15
         let due = packed & 65_535
+        // The old engine also represents already-known/imported items as
+        // learned with level 0 and no due date. If no real score can seed
+        // FSRS, admit a review without fabricating a historical outcome.
+        if !newlyGraded.contains(id), packed & (1 << 20) != 0,
+           level == 0, due == 65_535, state.daily[id] == nil { return true }
         if !newlyGraded.contains(id) && packed & (1 << 20) != 0 && (1...10).contains(level) &&
             due != 0 && due != 65_535 && due <= day { return true }
         guard let memory = state.daily[id], memory.dueDay <= day, memory.dueDay >= memory.lastDay else { return false }
