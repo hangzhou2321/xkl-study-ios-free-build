@@ -77,6 +77,7 @@ struct PublicQuestionDualState: Codable, Equatable {
     let legacyAttempts: [ExamAttempt]
     let migratedAt: Date
     let migratedDay: UInt32
+    let migrationTimeZoneID: String
     let initialCarry: [String]
     let initialQueue: [String]
     let initialFamiliar: [String]
@@ -126,9 +127,16 @@ struct PublicQuestionDualState: Codable, Equatable {
         date.timeIntervalSince1970.isFinite && (1_555_027_200...4_320_172_800).contains(date.timeIntervalSince1970)
     }
     private static func ms(_ date: Date) -> Int64 { Int64(date.timeIntervalSince1970 * 1_000) }
-    private static func day(_ date: Date) throws -> UInt32 {
+    private static func day(_ date: Date, timeZone: TimeZone = .current) throws -> UInt32 {
         guard finite(date) else { throw fail("手机日期异常") }
-        return UInt32(try ConceptCalendar.studyDay(date))
+        var local = Calendar(identifier: .gregorian); local.timeZone = timeZone
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let midnight = utc.date(from: local.dateComponents([.year, .month, .day], from: date)) else {
+            throw fail("手机日期无法解析")
+        }
+        let value = Int(midnight.timeIntervalSince1970 / 86_400)
+        guard (18_000...50_000).contains(value) else { throw fail("手机日期异常") }
+        return UInt32(value)
     }
 
     /// `priorVolumeBytes` are the unchanged archive bytes, in reference order.
@@ -140,11 +148,12 @@ struct PublicQuestionDualState: Codable, Equatable {
         try bank.validate(); try record.validateContent(bank: bank, hash: hash)
         let decoded = try JSONDecoder().decode(ExamDiskRecord.self, from: legacyRecordBytes)
         guard try Self.encode(decoded) == Self.encode(record) else { throw Self.fail("迁移原档与当前题库不一致") }
+        let zone = TimeZone.current
         let evidence = try Self.legacyEvidence(bank: bank, hash: hash, record: record,
-            priorVolumeBytes: priorVolumeBytes, now: now)
+            priorVolumeBytes: priorVolumeBytes, now: now, timeZone: zone)
         let old = try ExamLearningEngine(bank: bank, hash: hash, record: record)
         let info = try old.info
-        let captured = try Self.capture(snapshot: record.snapshot, count: bank.questions.count, on: Self.day(now))
+        let captured = try Self.capture(snapshot: record.snapshot, count: bank.questions.count, on: Self.day(now, timeZone: zone))
         guard captured.tokens == legacyTokens, captured.items == legacyItems else {
             throw Self.fail("旧任务清单与只读快照不一致")
         }
@@ -193,7 +202,7 @@ struct PublicQuestionDualState: Codable, Equatable {
             legacyAnchorSHA256: StudySHA256.hex(legacyRecordBytes), legacySnapshotSHA256: record.snapshotSHA256,
             legacyIDs: ids, legacyPacked: evidence.packed, legacyTokens: legacyTokens,
             legacyItems: legacyItems, legacyRatings: evidence.ratings, legacyAttempts: evidence.attempts,
-            migratedAt: now, migratedDay: try Self.day(now), initialCarry: carry,
+            migratedAt: now, migratedDay: try Self.day(now, timeZone: zone), migrationTimeZoneID: zone.identifier, initialCarry: carry,
             initialQueue: initialQueue, initialFamiliar: familiar,
             legacyUndoableAttemptID: info.can_undo != 0 ? record.lastUndoableAttemptID : nil,
             presentation: record.presentation, answerReview: record.answerReview,
@@ -210,6 +219,7 @@ struct PublicQuestionDualState: Codable, Equatable {
         guard state.format == "xkl-public-question-dual-fsrs-v1", state.bankID == bank.id,
               state.bankSHA256 == hash, state.legacyIDs == bank.questions.map(\.id),
               ExamContent.isHash(state.legacyAnchorSHA256), ExamContent.isHash(state.legacySnapshotSHA256),
+              TimeZone(identifier: state.migrationTimeZoneID) != nil,
               Set(state.legacyPacked.keys) == Set(state.legacyIDs) else { throw Self.fail("双FSRS题库身份不一致") }
         let d = try Self.replay(state, bank: bank)
         guard state.daily == d.daily, state.all == d.all, state.lastRating == d.lastRating,
@@ -231,8 +241,24 @@ struct PublicQuestionDualState: Codable, Equatable {
         guard captured.tokens == state.legacyTokens, captured.items == state.legacyItems else {
             throw Self.fail("旧任务清单与原始快照不一致")
         }
+        let oldCarry = captured.items.map { bank.questions[Int($0.word)].id }
+        let oldQueue = old.presentation == nil ? [] : Array(oldCarry.prefix(20))
+        guard state.initialCarry == oldCarry, state.initialQueue == oldQueue,
+              state.legacyUndoableAttemptID == (captured.canUndo ? old.lastUndoableAttemptID : nil) else {
+            throw Self.fail("旧任务起点或撤销身份不一致")
+        }
+        let hasNewGrade = state.events.contains { $0.kind == "answer" || $0.kind == "familiar" || $0.kind == "undo" }
+        if !hasNewGrade, let original = old.presentation {
+            guard let current = state.presentation, current.id == original.id,
+                  current.questionID == original.questionID, current.optionOrder == original.optionOrder,
+                  current.presentedAt == original.presentedAt, current.pending == original.pending,
+                  current.supplementVisible == original.supplementVisible else {
+                throw Self.fail("旧当前题的续学断点发生变化")
+            }
+        }
+        guard let zone = TimeZone(identifier: state.migrationTimeZoneID) else { throw Self.fail("迁移时区无效") }
         let proof = try Self.legacyEvidence(bank: bank, hash: hash, record: old,
-            priorVolumeBytes: priorVolumeBytes, now: state.migratedAt)
+            priorVolumeBytes: priorVolumeBytes, now: state.migratedAt, timeZone: zone)
         guard proof.packed == state.legacyPacked, proof.ratings == state.legacyRatings,
               proof.attempts == state.legacyAttempts else { throw Self.fail("旧事件或旧题目槽与迁移证据不一致") }
     }
@@ -417,7 +443,7 @@ struct PublicQuestionDualState: Codable, Equatable {
     }
 
     private static func legacyEvidence(bank: ExamBank, hash: String, record: ExamDiskRecord,
-                                       priorVolumeBytes: [Data], now: Date) throws ->
+                                       priorVolumeBytes: [Data], now: Date, timeZone: TimeZone) throws ->
         (packed: [String: UInt32], ratings: [PublicDualHistoricalRating], attempts: [ExamAttempt]) {
         guard priorVolumeBytes.count == record.volumes.count else { throw fail("旧题库分卷不完整") }
         let current = try PocketEngine(snapshot: record.snapshot)
@@ -480,7 +506,7 @@ struct PublicQuestionDualState: Codable, Equatable {
         for a in attempts where a.mode == "answer" {
             guard let grade = a.grade, let at = a.gradedAt, let seq = a.engineSequence else { throw fail("旧评分缺少实际时间") }
             ratings.append(.init(attemptID: a.id, sequence: seq, questionID: a.questionID,
-                                 at: at, day: try day(at), grade: grade, retracted: retracted.contains(a.id)))
+                                 at: at, day: try day(at, timeZone: timeZone), grade: grade, retracted: retracted.contains(a.id)))
         }
         let handle = record.snapshot.withUnsafeBytes {
             xkl_engine_restore($0.bindMemory(to: UInt8.self).baseAddress, $0.count)
@@ -520,14 +546,15 @@ struct PublicQuestionDualState: Codable, Equatable {
 
     private static func replay(_ state: PublicQuestionDualState, bank: ExamBank) throws -> Derived {
         let ids = bank.questions.map(\.id), idSet = Set(ids)
-        guard state.legacyIDs == ids, state.legacyItems.allSatisfy({ Int($0.word) < ids.count }),
+        guard let zone = TimeZone(identifier: state.migrationTimeZoneID),
+              state.legacyIDs == ids, state.legacyItems.allSatisfy({ Int($0.word) < ids.count }),
               Set(state.initialCarry).count == state.initialCarry.count,
               state.initialCarry.allSatisfy({ idSet.contains($0) }),
               state.initialCarry == state.legacyItems.map({ ids[Int($0.word)] }),
               state.initialQueue == Array(state.initialCarry.prefix(state.initialQueue.count)),
               state.initialQueue.count <= 20,
               state.initialFamiliar == ids.filter({ (state.legacyPacked[$0] ?? 0) & (1 << 21) != 0 }),
-              finite(state.migratedAt), try day(state.migratedAt) == state.migratedDay else {
+              finite(state.migratedAt), try day(state.migratedAt, timeZone: zone) == state.migratedDay else {
             throw fail("双FSRS迁移起点无效")
         }
         var d = Derived()
@@ -537,7 +564,7 @@ struct PublicQuestionDualState: Codable, Equatable {
         for rating in state.legacyRatings where !rating.retracted {
             guard idSet.contains(rating.questionID), [Int32(0), 1, 3].contains(rating.grade),
                   finite(rating.at), rating.at <= state.migratedAt,
-                  try day(rating.at) == rating.day else { throw fail("旧评分回放证据无效") }
+                  try day(rating.at, timeZone: zone) == rating.day else { throw fail("旧评分回放证据无效") }
             let value = rating.grade == 0 ? 3 : 1
             if d.daily[rating.questionID]?.lastDay != rating.day {
                 d.daily[rating.questionID] = try FSRS6Shadow.review(d.daily[rating.questionID],
@@ -553,7 +580,7 @@ struct PublicQuestionDualState: Codable, Equatable {
         let questions = Dictionary(uniqueKeysWithValues: bank.questions.map { ($0.id, $0) })
         for (index, e) in state.events.enumerated() {
             guard e.sequence == index + 1, finite(e.at), e.at >= lastAt, e.day >= lastDay,
-                  try day(e.at) == e.day else { throw fail("双FSRS事件时间或顺序无效") }
+                  (18_000...50_000).contains(e.day) else { throw fail("双FSRS事件时间或顺序无效") }
             lastAt = e.at; lastDay = e.day
             if e.kind == "start" || e.kind == "startRetry" {
                 var before = state
