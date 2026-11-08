@@ -223,7 +223,8 @@ struct PublicQuestionDualState: Codable, Equatable {
               TimeZone(identifier: state.migrationTimeZoneID) != nil,
               Set(state.legacyPacked.keys) == Set(state.legacyIDs) else { throw Self.fail("双FSRS题库身份不一致") }
         let d = try Self.replay(state, bank: bank)
-        guard state.daily == d.daily, state.all == d.all, state.lastRating == d.lastRating,
+        guard Self.memoryCachesMatch(state.daily, d.daily), Self.memoryCachesMatch(state.all, d.all),
+              state.lastRating == d.lastRating,
               state.familiar == d.familiar.sorted(), state.carry == d.carry,
               state.queue == d.queue, state.roundKind == d.roundKind,
               state.lastUndoableAttemptID == d.lastUndoable,
@@ -232,6 +233,29 @@ struct PublicQuestionDualState: Codable, Equatable {
         }
         try Self.validatePresentation(state, bank: bank, hash: hash)
         self.bank = bank; self.hash = hash; self.state = state
+    }
+
+    /// FSRS uses libm pow/exp, whose last bits can differ across OS/CPU
+    /// implementations. Accept only minute relative differences in the two
+    /// floating values; identity and every discrete scheduling field must
+    /// remain exact. The caller keeps the decoded cache, without rewriting it.
+    private static func memoryCachesMatch(_ stored: [String: FSRS6Shadow.Memory],
+                                          _ replayed: [String: FSRS6Shadow.Memory]) -> Bool {
+        guard stored.count == replayed.count else { return false }
+        func close(_ a: Double, _ b: Double) -> Bool {
+            guard a.isFinite, b.isFinite else { return false }
+            return a == b || abs(a - b) <= max(abs(a), abs(b)) * 1e-12
+        }
+        for (key, actual) in stored {
+            guard let expected = replayed[key],
+                  actual.stability.isFinite, actual.stability >= 0.001,
+                  actual.difficulty.isFinite, (1...10).contains(actual.difficulty),
+                  actual.lastDay == expected.lastDay, actual.dueDay == expected.dueDay,
+                  actual.timestampMs == expected.timestampMs,
+                  close(actual.stability, expected.stability),
+                  close(actual.difficulty, expected.difficulty) else { return false }
+        }
+        return true
     }
 
     func validateLegacy(recordBytes: Data, priorVolumeBytes: [Data]) throws {
