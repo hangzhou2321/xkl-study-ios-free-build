@@ -73,7 +73,7 @@ final class HandbookComputerSplitImportTests: XCTestCase {
     @MainActor func testAppendPreservesPocketStreamActiveQueueFrozenAnswerAndVisibleRedMark() async throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let now = Date()
-        let old = package(oldCount: 30, extraCount: 0), next = package(oldCount: 30, extraCount: 8)
+        let old = package(oldCount: 30, extraCount: 0), next = package(oldCount: 30, extraCount: 9)
         XCTAssertEqual(Array(next.cards.prefix(old.cards.count)), old.cards)
         XCTAssertEqual(Array(try XCTUnwrap(next.memoryGuides).prefix(old.cards.count)), try XCTUnwrap(old.memoryGuides))
         let oldRaw = try JSONEncoder().encode(old), nextRaw = try JSONEncoder().encode(next)
@@ -109,10 +109,10 @@ final class HandbookComputerSplitImportTests: XCTestCase {
 
         store.importData(nextRaw); XCTAssertNil(store.error); XCTAssertFalse(store.blocked)
         let after = try XCTUnwrap(store.engine?.state)
-        XCTAssertEqual(after.originalCardIDs, before.originalCardIDs + (30..<38).map { "synthetic-card-\($0)" })
-        XCTAssertEqual(after.word.cardIDs, before.word.cardIDs + (30..<38).map { "handbook:\($0)" })
+        XCTAssertEqual(after.originalCardIDs, before.originalCardIDs + (30..<39).map { "synthetic-card-\($0)" })
+        XCTAssertEqual(after.word.cardIDs, before.word.cardIDs + (30..<39).map { "handbook:\($0)" })
         XCTAssertEqual(try packed(after.word.snapshot, count: 30), try packed(before.word.snapshot, count: 30))
-        XCTAssertEqual(Array(try packed(after.word.snapshot, count: 38).suffix(8)), Array(repeating: UInt32(0), count: 8))
+        XCTAssertEqual(Array(try packed(after.word.snapshot, count: 39).suffix(9)), Array(repeating: UInt32(0), count: 9))
         XCTAssertEqual(try pending(after.word.snapshot, count: 30), try pending(before.word.snapshot, count: 30))
         XCTAssertEqual(after.word.attempts, before.word.attempts)
         XCTAssertEqual(after.word.analysis, before.word.analysis)
@@ -200,9 +200,9 @@ final class HandbookComputerSplitImportTests: XCTestCase {
     @MainActor func testNineRelatedQuestionsImportWithoutScoresAndSubmitOnceInSeparateStore() async throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let now = Date(), old = package(oldCount: 5, extraCount: 0)
-        var next = package(oldCount: 5, extraCount: 8)
+        var next = package(oldCount: 5, extraCount: 9)
         next.relatedQuestions = (0..<9).map { index in
-            HandbookRelatedQuestion(id: "synthetic-question-\(index)", cardID: "synthetic-card-\(5 + index % 8)",
+            HandbookRelatedQuestion(id: "synthetic-question-\(index)", cardID: "synthetic-card-\(5 + index)",
                 type: .single, prompt: "Synthetic question \(index)",
                 options: [.init(id: "A", text: "Synthetic option A"), .init(id: "B", text: "Synthetic option B")],
                 answer: ["A"], explanation: "Synthetic explanation", sourcePage: 1, sourceLabel: "Synthetic source")
