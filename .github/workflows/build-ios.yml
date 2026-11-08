@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/public-dual-performance
-          swift test --jobs 2 --filter PublicQuestionDualPerformanceTests 2>&1 | tee build/public-dual-performance/results.log
+          swift test -c release --jobs 2 --filter PublicQuestionDualPerformanceTests 2>&1 | tee build/public-dual-performance/results.log
           grep 'PUBLIC_DUAL_SYNTHETIC_3525' build/public-dual-performance/results.log
           grep "Test Suite 'PublicQuestionDualPerformanceTests' passed" build/public-dual-performance/results.log
       - if: always()
