@@ -566,6 +566,97 @@ uint32_t xkl_engine_pending_stages(const xkl_engine_t *e, uint32_t word,
     return 0;
 }
 
+bool xkl_engine_capture_task(const xkl_engine_t *e, uint32_t bank_count,
+    uint32_t today, xkl_task_token_t *tokens, uint32_t token_capacity,
+    xkl_task_item_t *items, uint32_t item_capacity, xkl_task_capture_info_t *info) {
+    if (!live_ready(e) || !info || !bank_count || bank_count > XKL_WORD_COUNT ||
+        today < 18000u || today > 50000u || !state_consistent(e)) return false;
+    const pocket_word_body_t *b = &e->state.body;
+    if (today < b->day || today < b->selection_day ||
+        (e->state.can_undo && e->state.undo_word >= bank_count)) return false;
+    if (e->state.can_undo) for (unsigned i = 0; i < POCKET_ACTIVE_MAX; ++i)
+        if (e->state.undo.active[i].used && e->state.undo.active[i].word >= bank_count) return false;
+    const bool query = !tokens && !items && !token_capacity && !item_capacity;
+    xkl_task_capture_info_t capture = {0};
+    capture.day = b->day; capture.selection_day = b->selection_day;
+    capture.can_undo = e->state.can_undo;
+    capture.undo_word = e->state.can_undo ? e->state.undo_word : XKL_NO_WORD;
+
+    /* Scratch buffers allow every error, including capacity exhaustion, to
+       leave both the engine and all caller-provided buffers untouched. */
+    xkl_task_token_t queued[POCKET_QUEUE_MAX];
+    xkl_task_item_t *distinct = calloc(bank_count, sizeof(*distinct));
+    uint32_t *index = calloc(bank_count, sizeof(*index));
+    if (!distinct || !index) { free(distinct); free(index); return false; }
+    bool ok = false;
+    uint32_t active_new = 0, active_review = 0;
+    for (uint32_t i = 0; i < b->length; ++i) {
+        const pocket_token_t *t = &b->queue[i];
+        const pocket_word_cached_t *a = &b->active[t->slot];
+        if (a->word >= bank_count || t->stage > 7u) goto done;
+        queued[i] = (xkl_task_token_t){a->word, t->stage, a->failed_round};
+        if (!index[a->word]) {
+            if (capture.item_count >= bank_count) goto done;
+            const uint32_t category = pocket_unpack_card(a->packed).learned ?
+                XKL_TASK_ACTIVE_REVIEW : XKL_TASK_ACTIVE_NEW;
+            distinct[capture.item_count] = (xkl_task_item_t){a->word, 0, a->failed_round, category};
+            index[a->word] = ++capture.item_count;
+            ++capture.active_count;
+            if (category == XKL_TASK_ACTIVE_REVIEW) ++active_review;
+            else ++active_new;
+        }
+        xkl_task_item_t *item = &distinct[index[a->word] - 1u];
+        if (item->stage_mask & (1u << t->stage)) goto done;
+        item->stage_mask |= 1u << t->stage;
+    }
+    capture.token_count = b->length;
+    if (active_new != (uint32_t)b->new_loaded - b->new_done ||
+        active_review != (uint32_t)b->review_loaded - b->review_done) goto done;
+    for (uint32_t i = 0; i < capture.active_count; ++i) {
+        uint32_t failed = 0;
+        if (xkl_engine_pending_stages(e, distinct[i].word, &failed) != distinct[i].stage_mask ||
+            failed != distinct[i].failed_round) goto done;
+    }
+
+    /* Replay only the existing selection cursors. A task can have hundreds of
+       selected words behind the 50 cached active slots. */
+    const uint32_t review_left = (uint32_t)b->review_total - b->review_loaded;
+    for (uint32_t word = b->review_cursor;
+         word < XKL_WORD_COUNT && capture.unloaded_review_count < review_left; ++word) {
+        if (word < bank_count && index[word]) continue;
+        uint32_t packed = e->state.changed_word == word ? e->state.changed_card : e->cards[word];
+        pocket_card_t c = pocket_unpack_card(packed);
+        if (c.familiar || !c.learned || !c.level || c.level > POCKET_MAX_LEVEL || c.due_day > b->selection_day) continue;
+        if (word >= bank_count || capture.item_count >= bank_count) goto done;
+        distinct[capture.item_count] = (xkl_task_item_t){word, 0, 0, XKL_TASK_UNLOADED_REVIEW};
+        index[word] = ++capture.item_count; ++capture.unloaded_review_count;
+    }
+    if (capture.unloaded_review_count != review_left) goto done;
+    const uint32_t new_left = (uint32_t)b->new_total - b->new_loaded;
+    for (uint32_t word = b->new_cursor;
+         word < b->new_end && capture.unloaded_new_count < new_left; ++word) {
+        if (word < bank_count && index[word]) continue;
+        uint32_t packed = e->state.changed_word == word ? e->state.changed_card : e->cards[word];
+        pocket_card_t c = pocket_unpack_card(packed);
+        if (c.familiar || c.learned) continue;
+        if (word >= bank_count || capture.item_count >= bank_count) goto done;
+        distinct[capture.item_count] = (xkl_task_item_t){word, 0, 0, XKL_TASK_UNLOADED_NEW};
+        index[word] = ++capture.item_count; ++capture.unloaded_new_count;
+    }
+    if (capture.unloaded_new_count != new_left ||
+        capture.item_count != pocket_word_unique_remaining(&e->state)) goto done;
+    if (!query && ((capture.token_count && !tokens) || (capture.item_count && !items) ||
+        token_capacity < capture.token_count || item_capacity < capture.item_count)) goto done;
+    if (!query) {
+        if (capture.token_count) memcpy(tokens, queued, capture.token_count * sizeof(*tokens));
+        if (capture.item_count) memcpy(items, distinct, capture.item_count * sizeof(*items));
+    }
+    *info = capture;
+    ok = true;
+done:
+    free(index); free(distinct); return ok;
+}
+
 bool xkl_engine_reconcile_collection(xkl_engine_t *e,
     uint32_t old_count, uint32_t new_count, const uint8_t *enabled,
     const uint32_t *activated_cards, int64_t at,
