@@ -31,6 +31,7 @@ struct HandbookCardView: View {
     @State private var highlightTarget: HandbookHighlightTarget?
     @State private var outlineHighlightTarget: HandbookHighlightTarget?
     @State private var relatedQuestionTarget: HandbookCard?
+    @State private var outlineRelatedQuestionTarget: HandbookCard?
     @State private var tableTarget: HandbookCard?
     @State private var document = HandbookCardRecordDocument(data: Data())
     @State private var displayDate = Date()
@@ -372,7 +373,7 @@ struct HandbookCardView: View {
             highlightTarget != nil || outlineHighlightTarget != nil || relatedQuestionTarget != nil || tableTarget != nil
         let blocking = importing || exporting || store.error != nil || (showingOldQuestions && oldQuestionBlockingOverlay) ||
             ((highlightTarget != nil || outlineHighlightTarget != nil) && highlightStore.blocked) ||
-            (relatedQuestionTarget != nil && relatedQuestionStore.blocked)
+            ((relatedQuestionTarget != nil || outlineRelatedQuestionTarget != nil) && relatedQuestionStore.blocked)
         return (study ? 1 : 0) | (blocking ? 2 : 0)
     }
     private var fullScreenActive: Bool { studying && fullScreenEnabled }
@@ -674,11 +675,18 @@ struct HandbookCardView: View {
                         ForEach(package.cards.filter { package.chapter(for: $0)?.id == chapter.id }, id: \.id) { card in
                             NavigationLink {
                                 ScrollView {
-                                    HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
-                                                     frequencyLabel: package.frequencyLabel(for: card),
-                                                     memoryGuide: package.memoryGuide(for: card))
-                                        .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
-                                        .padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
+                                    HStack(alignment: .top, spacing: 4) {
+                                        HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
+                                                         frequencyLabel: package.frequencyLabel(for: card),
+                                                         memoryGuide: package.memoryGuide(for: card))
+                                            .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
+                                        if !package.questions(for: card).isEmpty {
+                                            Button { outlineRelatedQuestionTarget = card } label: {
+                                                HandbookSideLink(symbol: "doc.text", title: "原题")
+                                            }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
+                                                .accessibilityIdentifier("handbook-outline-related-questions")
+                                        }
+                                    }.padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
                                     Text("目录预览不产生自评，也不改变复习日期。")
                                         .font(.footnote).foregroundStyle(.secondary).padding()
                                 }.background(Color(uiColor: .systemGroupedBackground))
@@ -706,6 +714,11 @@ struct HandbookCardView: View {
         }
         .sheet(item: $outlineHighlightTarget) { target in
             HandbookHighlightEditor(target: target, store: highlightStore)
+        }
+        .fullScreenCover(item: $outlineRelatedQuestionTarget) { card in
+            HandbookRelatedQuestionPage(card: card, questions: package.questions(for: card),
+                assetRoot: sourceRoot, store: relatedQuestionStore,
+                cardAnswerWasVisible: true)
         }
     }
     private func sourceLabel(_ card: HandbookCard) -> String {
