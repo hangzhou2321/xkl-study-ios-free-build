@@ -140,8 +140,8 @@ struct ExamView: View {
             examPlanSection(bank)
 
             if store.isDualFSRS {
-                Section("错题自选重练") {
-                    Text("答错后至少间隔 10 分钟，可自己选择重练；不强制重复，也不改变按天复习的记录。")
+                Section("当天错题自选重练") {
+                    Text("当天答错后至少间隔 10 分钟，可自己选择重练；不强制重复，也不改变按天复习的记录。")
                         .font(.footnote).foregroundStyle(.secondary)
                     if store.retryAvailable > 0 {
                         Text("有 \(store.retryAvailable) 题可以重练。")
@@ -150,7 +150,7 @@ struct ExamView: View {
                         Text("下一题约 \(ready.formatted(date: .omitted, time: .shortened)) 可重练。")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
-                        Text("暂时没有可重练的错题。")
+                        Text("当天暂时没有可重练的错题。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if store.retryAvailable > 0 && store.sessionIsActive {
