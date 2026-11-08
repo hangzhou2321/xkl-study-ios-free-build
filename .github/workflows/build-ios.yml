@@ -18,8 +18,9 @@ jobs:
           assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
           PY
       - name: Run synthetic public scheduler tests
-        run: swift test --jobs 2 --filter PublicDual
+        run: swift test --jobs 2 --filter 'Public.*Dual'
       - name: Build unsigned iOS app
         run: |
           python3 tools/generate_xcode_project.py --without-personal-resources
           xcodebuild -project XKLStudy.xcodeproj -scheme XKLStudy -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+
