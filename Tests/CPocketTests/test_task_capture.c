@@ -103,4 +103,33 @@ static void test_undo_and_empty_task(void) {
     puts("PASS empty task and genuine undo remain usable");
 }
 
-int main(void) { test_large_queue_and_calendar(); test_undo_and_empty_task(); return 0; }
+static void test_mixed_queue_after_midnight(void) {
+    uint32_t cards[BANK];
+    const uint32_t complete = pocket_pack_card((pocket_card_t){.due_day=UINT32_MAX, .learned=1}) | POCKET_IMPORTED_KNOWN;
+    for (uint32_t i=0;i<BANK;++i) cards[i]=complete;
+    for (uint32_t i=0;i<25;++i)
+        cards[i]=pocket_pack_card((pocket_card_t){.due_day=DAY, .level=1, .learned=1});
+    for (uint32_t i=25;i<50;++i) cards[i]=0;
+    for (uint32_t i=50;i<292;++i)
+        cards[i]=pocket_pack_card((pocket_card_t){.due_day=DAY+1u, .level=1, .learned=1});
+    xkl_engine_t *e=xkl_engine_import_cards(BANK,cards,DAY,XKL_NO_WORD,stream); assert(e);
+    assert(xkl_engine_start(e,DAY,1));
+    assert(xkl_engine_start(e,DAY+1u,2));
+    size_t n; uint8_t *before=snapshot(e,&n);
+    xkl_task_token_t tokens[350]; xkl_task_item_t items[BANK]; xkl_task_capture_info_t info;
+    assert(xkl_engine_capture_task(e,BANK,DAY+1u,tokens,350,items,BANK,&info));
+    assert(info.token_count==50 && info.item_count==292 && info.active_count==50);
+    assert(info.unloaded_review_count==242 && info.unloaded_new_count==0);
+    for (uint32_t i=0;i<25;++i)
+        assert(items[i].word==i && items[i].category==XKL_TASK_ACTIVE_REVIEW);
+    for (uint32_t i=25;i<50;++i)
+        assert(items[i].word==i && items[i].category==XKL_TASK_ACTIVE_NEW);
+    for (uint32_t i=50;i<292;++i)
+        assert(items[i].word==i && items[i].category==XKL_TASK_UNLOADED_REVIEW);
+    size_t after_n; uint8_t *after=snapshot(e,&after_n);
+    assert(n==after_n && !memcmp(before,after,n));
+    free(after); free(before); xkl_engine_free(e);
+    puts("PASS midnight-refreshed mixed 25 new + 25 reviews + 242 unloaded reviews");
+}
+
+int main(void) { test_large_queue_and_calendar(); test_mixed_queue_after_midnight(); test_undo_and_empty_task(); return 0; }
