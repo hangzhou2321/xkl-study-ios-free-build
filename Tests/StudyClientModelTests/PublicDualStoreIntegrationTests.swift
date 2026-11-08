@@ -35,6 +35,10 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         }
     }
 
+    private final class TestClock {
+        var now = Date()
+    }
+
     @MainActor private func fixture(_ initial: InitialState = .selected,
                                      yesterday: Bool = false) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("public-dual-tests-\(UUID().uuidString)", isDirectory: true)
@@ -278,6 +282,74 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let reopened = ExamStore(baseDirectory: f.root)
         XCTAssertEqual(reopened.presentationID, nextPresentation.id)
         XCTAssertFalse(reopened.isShowingResult)
+    }
+
+    @MainActor func testDelayedRetryKeepsCurrentAnswerAndDoesNotChangeDailyTrack() async throws {
+        let f = try fixture(.familiar); defer { remove(f) }
+        let old = try Data(contentsOf: f.legacyURL), clock = TestClock()
+        let store = ExamStore(baseDirectory: f.root, clock: { clock.now })
+        store.prepareDualFSRSIfNeeded()
+        XCTAssertTrue(store.isDualFSRS, store.error ?? "")
+        let wrongID = try XCTUnwrap(store.currentQuestion?.id)
+        let shown = try XCTUnwrap(store.presentationID)
+        store.selectAndSubmit("B", presentationID: shown)
+        XCTAssertTrue(store.isShowingResult, store.error ?? "")
+        XCTAssertEqual(store.retryAvailable, 0)
+        XCTAssertEqual(store.retryNextAvailableAt, clock.now.addingTimeInterval(600))
+        clock.now = clock.now.addingTimeInterval(599)
+        store.refreshStudyDate()
+        XCTAssertEqual(store.retryAvailable, 0)
+        XCTAssertFalse(store.canStartRetry)
+        clock.now = clock.now.addingTimeInterval(1)
+        store.refreshStudyDate()
+        XCTAssertEqual(store.retryAvailable, 1)
+        XCTAssertFalse(store.canStartRetry)
+        let beforeResultAttempt = try Data(contentsOf: f.currentURL)
+        store.startRetry()
+        XCTAssertEqual(try Data(contentsOf: f.currentURL), beforeResultAttempt)
+        XCTAssertEqual(store.presentationID, shown)
+        XCTAssertTrue(store.isShowingResult)
+
+        store.nextQuestion(presentationID: shown)
+        let next = try XCTUnwrap(store.presentationID)
+        store.toggleOption("B", presentationID: next)
+        XCTAssertEqual(store.selectedOptionIDs, ["B"])
+        let beforeSelectedAttempt = try Data(contentsOf: f.currentURL)
+        store.startRetry()
+        XCTAssertEqual(try Data(contentsOf: f.currentURL), beforeSelectedAttempt)
+        XCTAssertEqual(store.presentationID, next)
+        XCTAssertEqual(store.selectedOptionIDs, ["B"])
+        XCTAssertFalse(store.canStartRetry)
+
+        // Finish only the already-open synthetic page; this does not discard
+        // the rest of the carried task or force it to be completed first.
+        var completed = 0
+        while store.presentationID != nil && !store.isShowingResult {
+            XCTAssertLessThan(completed, 20)
+            if completed >= 20 { break }
+            store.markFamiliar(); completed += 1
+        }
+        XCTAssertNil(store.error)
+        XCTAssertTrue(store.canStartRetry)
+        let before = try disk(f).state
+        let daily = try XCTUnwrap(before.daily[wrongID])
+        let shadow = try XCTUnwrap(before.all[wrongID])
+        let carried = before.carry
+        store.startRetry()
+        XCTAssertEqual(store.currentQuestion?.id, wrongID)
+        XCTAssertEqual(try disk(f).state.carry, carried)
+        let retryToken = try XCTUnwrap(store.presentationID)
+        store.selectAndSubmit("A", presentationID: retryToken)
+        XCTAssertTrue(store.isShowingResult, store.error ?? "")
+        let after = try disk(f).state
+        XCTAssertEqual(after.daily[wrongID], daily)
+        XCTAssertNotEqual(after.all[wrongID], shadow)
+        XCTAssertEqual(after.carry, carried)
+        XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
+        let reopened = ExamStore(baseDirectory: f.root, clock: { clock.now })
+        XCTAssertTrue(reopened.isShowingResult, reopened.error ?? "")
+        XCTAssertEqual(reopened.latestAttempt?.id, store.latestAttempt?.id)
+        XCTAssertEqual(try disk(f).state.events.filter { $0.kind == "startRetry" }.count, 1)
     }
 }
 #endif
