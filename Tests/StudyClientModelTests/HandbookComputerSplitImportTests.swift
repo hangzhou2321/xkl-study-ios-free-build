@@ -209,6 +209,45 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         XCTAssertEqual(store.engine?.record.attempts, before.word.attempts)
     }
 
+    @MainActor func testCompleted214SyntheticCardsAdmitExactlyNineNewCardsOnNextTask() async throws {
+        let now = Date(), old = package(oldCount: 214, extraCount: 0), next = package(oldCount: 214, extraCount: 9)
+        let book = try HandbookWordEngine(package: old, now: now)
+        var completed: Set<String> = [], batches = 0
+        while completed.count < 214 {
+            try book.start(now: now)
+            XCTAssertNotNil(book.presentation, "Old synthetic batch unexpectedly unavailable")
+            while let shown = book.presentation {
+                let cardID = try XCTUnwrap(book.currentCard?.id)
+                XCTAssertTrue(completed.insert(cardID).inserted, "A familiar card must not be re-presented")
+                try book.markFamiliar(token: shown.id, now: now)
+                XCTAssertLessThanOrEqual(completed.count, 214)
+            }
+            batches += 1; XCTAssertLessThan(batches, 12)
+            if batches >= 12 { break }
+        }
+        XCTAssertEqual(completed.count, 214)
+        let before = book.state, priorEvents = try events(before.word)
+        XCTAssertEqual(priorEvents.filter { $0.kind == 7 }.count, 214)
+        XCTAssertNil(book.presentation)
+        try book.updatePackage(next, now: now)
+        let after = book.state
+        XCTAssertEqual(after.originalCardIDs, before.originalCardIDs + (214..<223).map { "synthetic-card-\($0)" })
+        XCTAssertEqual(try packed(after.word.snapshot, count: 214), try packed(before.word.snapshot, count: 214))
+        XCTAssertEqual(Array(try packed(after.word.snapshot, count: 223).suffix(9)), Array(repeating: UInt32(0), count: 9))
+        XCTAssertEqual(Array(try events(after.word).prefix(priorEvents.count)), priorEvents)
+        XCTAssertEqual(after.word.attempts, before.word.attempts)
+        XCTAssertNil(book.presentation)
+        try book.start(now: now)
+        var newSeen: Set<String> = []
+        while let shown = book.presentation {
+            let id = try XCTUnwrap(book.currentCard?.id)
+            XCTAssertTrue(newSeen.insert(id).inserted)
+            try book.markFamiliar(token: shown.id, now: now)
+            XCTAssertLessThanOrEqual(newSeen.count, 9)
+        }
+        XCTAssertEqual(newSeen, Set((214..<223).map { "synthetic-card-\($0)" }))
+    }
+
     @MainActor func testArchivedPocketLogVolumeRemainsIdenticalOnNineCardAppend() async throws {
         let now = Date(), old = package(oldCount: 6, extraCount: 0), next = package(oldCount: 6, extraCount: 9)
         let book = try HandbookWordEngine(package: old, now: now)
