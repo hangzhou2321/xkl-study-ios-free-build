@@ -21,15 +21,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/public-dual-tests
-          swift test --jobs 2 --filter PublicQuestionDualFixturesTests 2>&1 | tee build/public-dual-tests/fixtures.log
+          swift test --jobs 2 --filter PublicQuestionDual 2>&1 | tee build/public-dual-tests/fixtures.log
           python3 - <<'PY'
           from pathlib import Path
           import re
           s=Path('build/public-dual-tests/fixtures.log').read_text(errors='replace')
           assert "Test Suite 'PublicQuestionDualFixturesTests' passed" in s
+          assert "Test Suite 'PublicQuestionDualMigrationTests' passed" in s
           m=re.findall(r"Test Suite 'Selected tests' passed[^\n]*\n[^\n]*Executed\s+(\d+)\s+tests?,\s+with\s+(?:(\d+)\s+tests? skipped and\s+)?(\d+)\s+failures",s)
-          assert len(m)==1 and int(m[0][0])==5 and int(m[0][1] or 0)==0 and int(m[0][2])==0
-          print('PUBLIC_DUAL_FIXTURES total=5 skipped=0 failed=0')
+          assert len(m)==1 and int(m[0][0])==11 and int(m[0][1] or 0)==0 and int(m[0][2])==0
+          print('PUBLIC_DUAL_FIXTURES_AND_MIGRATION total=11 skipped=0 failed=0')
           PY
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
