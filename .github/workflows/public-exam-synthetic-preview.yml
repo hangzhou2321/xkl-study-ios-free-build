@@ -1,0 +1,33 @@
+name: Synthetic public exam simulator rendering
+on:
+  push:
+    branches:
+      - 'public-exam-simulator-preview-*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preview:
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private materials
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden = {'.pdf', '.xklcontent', '.xklquestions', '.xklflashcards', '.xklqbank',
+                       '.xklconcepts', '.xklcourse', '.xklmath', '.xklmathguide', '.xklguide',
+                       '.p12', '.pfx', '.p8', '.pem', '.key', '.mobileprovision'}
+          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in forbidden]
+          assert not any(Path(p).exists() for p in ('Resources/deck.json', 'Resources/personal-state.bin', 'Resources/resource-manifest.json'))
+          PY
+      - name: Capture synthetic production ExamView
+        run: python3 tools/capture_public_exam_previews.py
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: public-exam-synthetic-render-only
+          path: build/public-exam-previews/
+          if-no-files-found: error
+          retention-days: 3
