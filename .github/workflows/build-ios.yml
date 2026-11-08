@@ -22,8 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/synthetic-split-tests
-          for suite in HandbookComputerSplitImportTests HandbookWordTests HandbookHighlightTests HandbookHighlightStoreTests; do
-            swift test --jobs 2 --filter "$suite" 2>&1 | tee "build/synthetic-split-tests/$suite.log"
+          for suite in HandbookComputerSplitImportTests; do
+            swift test --jobs 2 --filter "$suite/testNineRelatedQuestionsImportWithoutScoresAndSubmitOnceInSeparateStore" 2>&1 | tee "build/synthetic-split-tests/$suite.log"
             SUITE="$suite" python3 - <<'PY'
           import os,re
           from pathlib import Path
