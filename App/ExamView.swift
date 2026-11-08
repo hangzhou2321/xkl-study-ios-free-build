@@ -48,7 +48,14 @@ struct ExamView: View {
                     }
                 }
         }
-        .onAppear { store.prepareDualFSRSIfNeeded() }
+        .onAppear { store.prepareDualFSRSIfNeeded(); store.refreshStudyDate() }
+        .task(id: store.retryNextAvailableAt) {
+            guard let ready = store.retryNextAvailableAt else { return }
+            let delay = max(0, ready.timeIntervalSinceNow) + 0.05
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            store.refreshStudyDate()
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url):
@@ -112,7 +119,7 @@ struct ExamView: View {
 
             Section("学习") {
                 Text(store.isDualFSRS ? "双 FSRS 题目复习" : "每课 25 道新题").font(.headline)
-                Text(store.isDualFSRS ? "先处理旧任务和到期复习，再安排新题。" : "先复习，再学新题。到期复习不限量。")
+                Text(store.isDualFSRS ? "旧任务和到期题分批安排；旧任务处理完后继续学新题。" : "先复习，再学新题。到期复习不限量。")
                     .font(.footnote).foregroundStyle(.secondary)
                 if store.isDualFSRS && store.carryRemaining > 0 {
                     Text("旧任务尚有 \(store.carryRemaining) 题，分小批继续。")
@@ -131,6 +138,35 @@ struct ExamView: View {
             }
 
             examPlanSection(bank)
+
+            if store.isDualFSRS {
+                Section("错题自选重练") {
+                    Text("答错后至少间隔 10 分钟，可自己选择重练；不强制重复，也不改变按天复习的记录。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if store.retryAvailable > 0 {
+                        Text("有 \(store.retryAvailable) 题可以重练。")
+                            .font(.subheadline)
+                    } else if let ready = store.retryNextAvailableAt {
+                        Text("下一题约 \(ready.formatted(date: .omitted, time: .shortened)) 可重练。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("暂时没有可重练的错题。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if store.retryAvailable > 0 && store.sessionIsActive {
+                        Text("完成当前小批并关闭结果页后，再选择重练。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Button("重练错题", systemImage: "arrow.clockwise") {
+                        guard store.canStartRetry else { return }
+                        performAction { store.startRetry() }
+                        if store.error == nil && store.currentQuestion != nil {
+                            showingPractice = true; onStart()
+                        }
+                    }
+                    .disabled(!store.canStartRetry || store.storageBlocked || actionLocked)
+                }
+            }
 
             Section("题库复习") {
                 if store.isDualFSRS {
@@ -220,7 +256,7 @@ struct ExamView: View {
                 }
             }
             Text(store.isDualFSRS
-                 ? "先处理旧任务和到期复习，再学新题；可以随时暂停。时间预算不代表完成用时，也不会隐藏到期题。"
+                 ? "旧任务和到期题会分批安排；可以随时暂停。时间预算不代表完成用时，也不会隐藏到期题。"
                  : "先处理到期复习，再学新题。目标包含主动标记已熟悉的题；每课仍为 25 道新题，可中途暂停。时间预算不代表完成用时，也不会隐藏到期题。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
