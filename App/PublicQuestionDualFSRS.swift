@@ -56,6 +56,8 @@ struct PublicDualStats: Equatable {
     var unseenQuestionCount = 0
     var newIntroducedToday = 0
     var carryRemaining = 0
+    var retryAvailable = 0
+    var retryNextAvailableAt: Date?
 }
 
 /// The old ExamDiskRecord and its volumes remain immutable, separately
@@ -261,6 +263,19 @@ struct PublicQuestionDualState: Codable, Equatable {
         state = next
     }
 
+    /// Explicitly chosen wrong-question practice. This does not steal the
+    /// unfinished page or the original carry, and affects only the all track.
+    func startRetry(now: Date = Date()) throws {
+        guard state.queue.isEmpty, state.presentation == nil, state.answerReview == nil else { return }
+        let day = try checkedDay(now)
+        let round = Array(Self.retryCandidates(state: state, now: now).prefix(20))
+        guard !round.isEmpty else { return }
+        var next = state; next.taskID = UUID()
+        try Self.append(kind: "startRetry", round: round, attempt: nil, now: now, day: day, state: &next, bank: bank)
+        Self.present(&next, bank: bank, now: now)
+        state = next
+    }
+
     func toggle(_ id: String, token: UUID?) throws {
         guard state.answerReview == nil, var p = state.presentation, p.id == token,
               p.pending == nil, let q = question(p.questionID), q.options.contains(where: { $0.id == id }) else { return }
@@ -294,7 +309,9 @@ struct PublicQuestionDualState: Codable, Equatable {
         // chooses Next, which is the first actual score in the new model.
         var next = state
         next.presentation?.pending = nil; next.presentation?.supplementVisible = false
-        try Self.grade(&next, bank: bank, hash: hash, shown: p, attempt: pending,
+        var realPending = pending
+        realPending.gradingSource = p.supplementVisible ? "legacy-explicit-partial" : "legacy-pending-auto"
+        try Self.grade(&next, bank: bank, hash: hash, shown: p, attempt: realPending,
                        grade: p.supplementVisible ? 3 : (pending.isCorrect ? 0 : 1), now: now)
         next.answerReview = nil
         state = next
@@ -340,7 +357,10 @@ struct PublicQuestionDualState: Codable, Equatable {
         out.sessionPosition = state.sessionCount == 0 ? 0 : min(state.sessionCount, state.completedCount + (isShowingResult ? 0 : 1))
         out.newRemaining = fresh; out.reviewRemaining = state.queue.count - fresh
         out.totalRemaining = state.queue.count; out.carryRemaining = state.carry.count
-        out.dueTodayCount = state.legacyIDs.filter { Self.isDue($0, state: state, now: now, day: day) }.count
+        out.retryAvailable = Self.retryCandidates(state: state, now: now).count
+        out.retryNextAvailableAt = Self.nextRetry(state: state, now: now)
+        let newlyGraded = Self.newlyGradedIDs(state)
+        out.dueTodayCount = state.legacyIDs.filter { Self.isDue($0, state: state, now: now, day: day, newlyGraded: newlyGraded) }.count
         out.totalAnsweredCount = latest.count; out.wrongCount = latest.values.filter { $0.mode == "answer" && !$0.isCorrect }.count
         out.unseenQuestionCount = max(0, bank.questions.count - known.count)
         var first: [String: Date] = [:]
@@ -368,7 +388,8 @@ struct PublicQuestionDualState: Codable, Equatable {
                                hash: String, now: Date) throws {
         guard let p = state.presentation, let q = bank.questions.first(where: { $0.id == p.questionID }),
               q.accepts(Set(p.selectedOptionIDs)) else { throw fail("请先选择答案") }
-        let a = attempt(bank: bank, hash: hash, q: q, presentation: p, mode: "answer", sessionID: state.taskID, now: now)
+        var a = attempt(bank: bank, hash: hash, q: q, presentation: p, mode: "answer", sessionID: state.taskID, now: now)
+        a.gradingSource = "automatic-choice"
         try grade(&state, bank: bank, hash: hash, shown: p, attempt: a, grade: a.isCorrect ? 0 : 1, now: now)
     }
 
@@ -534,15 +555,20 @@ struct PublicQuestionDualState: Codable, Equatable {
             guard e.sequence == index + 1, finite(e.at), e.at >= lastAt, e.day >= lastDay,
                   try day(e.at) == e.day else { throw fail("双FSRS事件时间或顺序无效") }
             lastAt = e.at; lastDay = e.day
-            if e.kind == "start" {
+            if e.kind == "start" || e.kind == "startRetry" {
+                var before = state
+                before.events = Array(state.events.prefix(index))
+                assign(d, to: &before)
+                let expected = e.kind == "start" ? select(state: before, bank: bank, now: e.at, day: e.day) :
+                    Array(retryCandidates(state: before, now: e.at).prefix(20))
                 guard e.attempt == nil, d.queue.isEmpty, let round = e.round, !round.isEmpty,
                       round.count <= 20, Set(round).count == round.count,
                       round.allSatisfy({ idSet.contains($0) && !d.familiar.contains($0) }),
-                      d.carry.isEmpty || round == Array(d.carry.prefix(20)) else {
+                      round == expected else {
                     throw fail("双FSRS任务分页无效")
                 }
                 d.queue = round; d.sessionCount = round.count; d.completedCount = 0
-                d.roundKind = d.carry.isEmpty ? "main" : "carry"
+                d.roundKind = e.kind == "startRetry" ? "retry" : (d.carry.isEmpty ? "main" : "carry")
                 d.lastUndoable = nil; checkpoint = nil; target = nil
                 continue
             }
@@ -572,7 +598,7 @@ struct PublicQuestionDualState: Codable, Equatable {
                       q.accepts(Set(a.selectedOptions)), a.isCorrect == q.isCorrect(Set(a.selectedOptions)),
                       a.isCorrect || grade == 1 else { throw fail("双FSRS答案或评分无效") }
                 let rating = grade == 0 ? 3 : 1
-                if d.daily[q.id]?.lastDay != e.day {
+                if d.roundKind != "retry" && d.daily[q.id]?.lastDay != e.day {
                     d.daily[q.id] = try FSRS6Shadow.review(d.daily[q.id], day: e.day,
                         rating: rating, timestampMs: ms(e.at)).memory
                 }
@@ -612,15 +638,54 @@ struct PublicQuestionDualState: Codable, Equatable {
             !state.familiar.contains(id)
     }
 
-    private static func isDue(_ id: String, state: PublicQuestionDualState, now: Date, day: UInt32) -> Bool {
-        guard !state.familiar.contains(id) else { return false }
-        let undone = Set(state.events.compactMap { $0.kind == "undo" ? $0.attempt?.undoneAttemptID : nil })
-        let newlyGraded = state.events.contains {
-            $0.kind == "answer" && $0.attempt?.questionID == id && !undone.contains($0.attempt!.id)
+    private static func retryCandidates(state: PublicQuestionDualState, now: Date) -> [String] {
+        let carry = Set(state.carry), familiar = Set(state.familiar), wrong = latestWrongIDs(state)
+        return state.lastRating.filter { id, rating in
+            wrong.contains(id) && !rating.remembered && !carry.contains(id) && !familiar.contains(id) &&
+                now.timeIntervalSince(rating.at) >= 600
+        }.sorted {
+            $0.value.at == $1.value.at ? $0.key < $1.key : $0.value.at < $1.value.at
+        }.map(\.key)
+    }
+
+    private static func nextRetry(state: PublicQuestionDualState, now: Date) -> Date? {
+        let carry = Set(state.carry), familiar = Set(state.familiar), wrong = latestWrongIDs(state)
+        return state.lastRating.compactMap { id, rating -> Date? in
+            guard wrong.contains(id), !rating.remembered, !carry.contains(id), !familiar.contains(id) else { return nil }
+            let ready = rating.at.addingTimeInterval(600)
+            return ready > now ? ready : nil
+        }.min()
+    }
+
+    private static func latestWrongIDs(_ state: PublicQuestionDualState) -> Set<String> {
+        let attempts = state.legacyAttempts + state.events.compactMap(\.attempt)
+        let undone = Set(attempts.compactMap(\.undoneAttemptID))
+        var latest: [String: ExamAttempt] = [:]
+        for attempt in attempts where attempt.mode == "answer" && !undone.contains(attempt.id) {
+            latest[attempt.questionID] = attempt
         }
+        return Set(latest.values.filter { !$0.isCorrect }.map(\.questionID))
+    }
+
+    private static func newlyGradedIDs(_ state: PublicQuestionDualState) -> Set<String> {
+        let undone = Set(state.events.compactMap { $0.kind == "undo" ? $0.attempt?.undoneAttemptID : nil })
+        var isRetry = false, ids = Set<String>()
+        for event in state.events {
+            if event.kind == "start" { isRetry = false }
+            if event.kind == "startRetry" { isRetry = true }
+            if event.kind == "answer", !isRetry, let a = event.attempt, !undone.contains(a.id) {
+                ids.insert(a.questionID)
+            }
+        }
+        return ids
+    }
+
+    private static func isDue(_ id: String, state: PublicQuestionDualState, now: Date, day: UInt32,
+                              newlyGraded: Set<String>) -> Bool {
+        guard !state.familiar.contains(id) else { return false }
         let packed = state.legacyPacked[id] ?? 0, level = (packed >> 16) & 15
         let due = packed & 65_535
-        if !newlyGraded && packed & (1 << 20) != 0 && (1...10).contains(level) &&
+        if !newlyGraded.contains(id) && packed & (1 << 20) != 0 && (1...10).contains(level) &&
             due != 0 && due != 65_535 && due <= day { return true }
         guard let memory = state.daily[id], memory.dueDay <= day, memory.dueDay >= memory.lastDay else { return false }
         guard let at = memory.timestampMs else { return true }
@@ -631,13 +696,15 @@ struct PublicQuestionDualState: Codable, Equatable {
 
     private static func select(state: PublicQuestionDualState, bank: ExamBank,
                                now: Date, day: UInt32) -> [String] {
-        if !state.carry.isEmpty { return Array(state.carry.prefix(20)) }
-        let ids = bank.questions.map(\.id)
-        let due = ids.filter { isDue($0, state: state, now: now, day: day) }
-        let fresh = ids.filter { isFresh($0, state: state) }
-        var result = Array(due.prefix(10)) + Array(fresh.prefix(10))
+        let ids = bank.questions.map(\.id), newlyGraded = newlyGradedIDs(state)
+        let carrySet = Set(state.carry)
+        let due = ids.filter {
+            !carrySet.contains($0) && isDue($0, state: state, now: now, day: day, newlyGraded: newlyGraded)
+        }
+        let other = state.carry.isEmpty ? ids.filter { isFresh($0, state: state) } : state.carry
+        var result = Array(other.prefix(10)) + Array(due.prefix(10))
         let selected = Set(result)
-        let remaining = (due + fresh).filter { !selected.contains($0) }
+        let remaining = (other + due).filter { !selected.contains($0) }
         if result.count < 20 { result += remaining.prefix(20 - result.count) }
         return result
     }
