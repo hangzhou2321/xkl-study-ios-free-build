@@ -7,7 +7,7 @@ import StudyCore
 /// Synthetic-only migration and replay checks; these use neither actual user
 /// history nor a real question bank.
 final class PublicQuestionDualMigrationTests: XCTestCase {
-    private let hash = PublicQuestionDualFixtures.hash
+    private let bankHash = PublicQuestionDualFixtures.hash
     private let base = PublicQuestionDualFixtures.now
 
     @MainActor private func migrate(_ legacy: ExamLearningEngine, _ bank: ExamBank,
@@ -15,7 +15,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         let bytes = try JSONEncoder().encode(legacy.record)
         let captured = try PublicDualLegacyCapture.read(snapshot: legacy.record.snapshot,
                                                          bankCount: bank.questions.count, now: at)
-        let dual = try PublicQuestionDualFSRS(migrating: bank, hash: hash, record: legacy.record,
+        let dual = try PublicQuestionDualFSRS(migrating: bank, hash: bankHash, record: legacy.record,
             legacyRecordBytes: bytes, priorVolumeBytes: volumes, legacyTokens: captured.tokens,
             legacyItems: captured.items, now: at)
         return (dual, bytes)
@@ -44,10 +44,10 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         }
         XCTAssertEqual(written, snapshot.count)
         let pocket = try PocketEngine(snapshot: snapshot)
-        var record = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base).record
+        var record = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base).record
         record.snapshot = snapshot; record.snapshotSHA256 = StudySHA256.hex(snapshot)
         record.analysis = StudyAnalysisSettings(streamID: try pocket.streamID, nextSequence: 1, now: base)
-        let legacy = try ExamLearningEngine(bank: bank, hash: hash, record: record)
+        let legacy = try ExamLearningEngine(bank: bank, hash: bankHash, record: record)
         try legacy.start(day: day, now: base)
         return legacy
     }
@@ -87,7 +87,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
             if i % 20 == 19 {
                 let saved = try JSONEncoder().encode(dual.state)
                 dual = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self, from: saved),
-                                                  bank: bank, hash: hash)
+                                                  bank: bank, hash: bankHash)
                 try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
             }
         }
@@ -100,7 +100,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
 
     @MainActor func testPartialMultipleSelectionSurvivesAndStrictSubsetIsWrong() async throws {
         let bank = PublicQuestionDualFixtures.bank(30, kind: .multiple)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
         try old.start(day: PublicQuestionDualFixtures.day, now: base)
         try old.toggle("A")
         let oldPresentation = try XCTUnwrap(old.record.presentation)
@@ -109,7 +109,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertTrue(dual.state.events.isEmpty)
         let saved = try JSONEncoder().encode(dual.state)
         let resumed = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self, from: saved),
-                                                 bank: bank, hash: hash)
+                                                 bank: bank, hash: bankHash)
         try resumed.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
         let at = base.addingTimeInterval(2)
         try resumed.submitAutomatically(presentationID: oldPresentation.id, now: at)
@@ -129,7 +129,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
 
     @MainActor func testLegacyResultAndNextQuestionAndOldUndoSurvive() async throws {
         let bank = PublicQuestionDualFixtures.bank(1)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
         try old.start(day: PublicQuestionDualFixtures.day, now: base)
         let first = try XCTUnwrap(old.presentationOrNil)
         try old.selectAndSubmit("A", presentationID: first.id, now: base.addingTimeInterval(1))
@@ -141,7 +141,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertEqual(dual.state.legacyAttempts.count, 1)
         XCTAssertTrue(dual.state.events.isEmpty)
         let resumed = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self,
-            from: JSONEncoder().encode(dual.state)), bank: bank, hash: hash)
+            from: JSONEncoder().encode(dual.state)), bank: bank, hash: bankHash)
         try resumed.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
         try resumed.selectAndSubmit("A", presentationID: first.id, now: base.addingTimeInterval(3))
         XCTAssertTrue(resumed.state.events.isEmpty)
@@ -155,7 +155,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         let bank = PublicQuestionDualFixtures.bank(1)
         let startOfDay = Calendar.current.startOfDay(for: base)
         let midnight = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1, to: startOfDay))
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: midnight.addingTimeInterval(-5))
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: midnight.addingTimeInterval(-5))
         let firstDay = UInt32(try ConceptCalendar.studyDay(midnight.addingTimeInterval(-5)))
         let nextDay = UInt32(try ConceptCalendar.studyDay(midnight.addingTimeInterval(1)))
         try old.start(day: firstDay, now: midnight.addingTimeInterval(-5))
@@ -182,7 +182,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
 
     @MainActor func testNewUndoPreservesAuditTrailAndDoesNotChangeLegacy() async throws {
         let bank = PublicQuestionDualFixtures.bank(2)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
         try old.start(day: PublicQuestionDualFixtures.day, now: base)
         let (dual, bytes) = try migrate(old, bank, at: base.addingTimeInterval(1))
         let beforeDaily = dual.state.daily, beforeAll = dual.state.all, beforeCarry = dual.state.carry
@@ -200,12 +200,12 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertEqual(dual.presentation?.questionID, p.questionID)
         try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
         _ = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self,
-            from: JSONEncoder().encode(dual.state)), bank: bank, hash: hash)
+            from: JSONEncoder().encode(dual.state)), bank: bank, hash: bankHash)
     }
 
     @MainActor func testArchivedVolumeRemainsVerifiableAndMissingOrAlteredVolumeFails() async throws {
         let bank = PublicQuestionDualFixtures.bank(2)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
         try old.start(day: PublicQuestionDualFixtures.day, now: base)
         let p = try XCTUnwrap(old.record.presentation)
         try old.selectAndSubmit("B", presentationID: p.id, now: base.addingTimeInterval(1))
@@ -248,7 +248,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertEqual(dual.state.queue.filter { carryBefore.contains($0) }.count, 10)
         XCTAssertEqual(dual.state.carry, carryBefore)
         let state = try JSONDecoder().decode(PublicQuestionDualState.self, from: JSONEncoder().encode(dual.state))
-        let resumed = try PublicQuestionDualFSRS(state: state, bank: bank, hash: hash)
+        let resumed = try PublicQuestionDualFSRS(state: state, bank: bank, hash: bankHash)
         XCTAssertEqual(resumed.state.queue, dual.state.queue)
         XCTAssertEqual(resumed.state.carry, carryBefore)
         try resumed.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
@@ -262,7 +262,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
             to: Calendar.current.startOfDay(for: base)))
         let start = midnight.addingTimeInterval(-610)
         let bank = PublicQuestionDualFixtures.bank(1)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: start)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: start)
         try old.start(day: UInt32(try ConceptCalendar.studyDay(start)), now: start)
         let (dual, bytes) = try migrate(old, bank, at: start.addingTimeInterval(1))
         let first = try XCTUnwrap(dual.presentation)
@@ -293,7 +293,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertEqual(dual.state.events.filter { $0.kind == "answer" }.count, 2)
         try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
         let restored = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self,
-            from: JSONEncoder().encode(dual.state)), bank: bank, hash: hash)
+            from: JSONEncoder().encode(dual.state)), bank: bank, hash: bankHash)
         XCTAssertEqual(restored.state.daily, daily)
         XCTAssertEqual(restored.state.all, dual.state.all)
     }
@@ -302,21 +302,23 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         let previous = NSTimeZone.default
         defer { NSTimeZone.default = previous }
         NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        let boundary = base.addingTimeInterval(8 * 3_600)
         let bank = PublicQuestionDualFixtures.bank(2)
-        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base)
-        try old.start(day: UInt32(try ConceptCalendar.studyDay(base)), now: base)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: boundary)
+        try old.start(day: UInt32(try ConceptCalendar.studyDay(boundary)), now: boundary)
         let oldP = try XCTUnwrap(old.record.presentation)
-        try old.selectAndSubmit("B", presentationID: oldP.id, now: base.addingTimeInterval(1))
-        try old.nextQuestion(presentationID: oldP.id, now: base.addingTimeInterval(2))
-        let (dual, bytes) = try migrate(old, bank, at: base.addingTimeInterval(3))
+        try old.selectAndSubmit("B", presentationID: oldP.id, now: boundary.addingTimeInterval(1))
+        try old.nextQuestion(presentationID: oldP.id, now: boundary.addingTimeInterval(2))
+        let (dual, bytes) = try migrate(old, bank, at: boundary.addingTimeInterval(3))
         let p = try XCTUnwrap(dual.presentation)
-        try dual.selectAndSubmit("A", presentationID: p.id, now: base.addingTimeInterval(4))
+        try dual.selectAndSubmit("A", presentationID: p.id, now: boundary.addingTimeInterval(4))
         let expected = dual.state
         XCTAssertNotNil(expected.events.last?.timeZoneID)
         let saved = try JSONEncoder().encode(expected)
         NSTimeZone.default = TimeZone(identifier: "America/Los_Angeles")!
+        XCTAssertNotEqual(TimeZone.current.identifier, expected.migrationTimeZoneID)
         let resumed = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self, from: saved),
-                                                 bank: bank, hash: hash)
+                                                 bank: bank, hash: bankHash)
         XCTAssertEqual(resumed.state.daily, expected.daily)
         XCTAssertEqual(resumed.state.all, expected.all)
         try resumed.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
@@ -327,12 +329,12 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         events[events.count - 1] = event; obj["events"] = events
         let badDay = try JSONSerialization.data(withJSONObject: obj)
         let bad = try JSONDecoder().decode(PublicQuestionDualState.self, from: badDay)
-        XCTAssertThrowsError(try PublicQuestionDualFSRS(state: bad, bank: bank, hash: hash))
+        XCTAssertThrowsError(try PublicQuestionDualFSRS(state: bad, bank: bank, hash: bankHash))
         event["timeZoneID"] = "Not/A_Real_Time_Zone"
         events[events.count - 1] = event; obj["events"] = events
         let badZone = try JSONDecoder().decode(PublicQuestionDualState.self,
             from: JSONSerialization.data(withJSONObject: obj))
-        XCTAssertThrowsError(try PublicQuestionDualFSRS(state: badZone, bank: bank, hash: hash))
+        XCTAssertThrowsError(try PublicQuestionDualFSRS(state: badZone, bank: bank, hash: bankHash))
     }
 }
 
