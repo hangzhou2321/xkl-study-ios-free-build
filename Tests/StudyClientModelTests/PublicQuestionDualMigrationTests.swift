@@ -185,6 +185,30 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
     }
 
+    @MainActor func testHistoricalSelfAssessmentDoesNotFabricateAnObjectiveMistake() async throws {
+        for grade in [Int32(1), Int32(3)] {
+            let bank = PublicQuestionDualFixtures.bank(1)
+            let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
+            try old.start(day: UInt32(try ConceptCalendar.studyDay(base)), now: base)
+            try old.toggle("A")
+            try old.submit(now: base.addingTimeInterval(1))
+            try old.confirm(grade, now: base.addingTimeInterval(2))
+            if grade == 3 { try old.confirm(grade, now: base.addingTimeInterval(2)) }
+            let attempt = try XCTUnwrap(old.record.attempts.last)
+            XCTAssertTrue(attempt.isCorrect)
+            XCTAssertEqual(attempt.grade, grade)
+            let (dual, bytes) = try migrate(old, bank, at: base.addingTimeInterval(3))
+            XCTAssertEqual(dual.state.legacyRatings.first?.grade, grade)
+            let day = UInt32(try ConceptCalendar.studyDay(base.addingTimeInterval(2)))
+            let again = try FSRS6Shadow.review(nil, day: day, rating: 1,
+                timestampMs: milliseconds(base.addingTimeInterval(2))).memory
+            XCTAssertEqual(dual.state.daily[attempt.questionID], again)
+            XCTAssertEqual(dual.state.all[attempt.questionID], again)
+            XCTAssertEqual(try dual.stats(now: base.addingTimeInterval(3)).wrongCount, 0)
+            try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+        }
+    }
+
     @MainActor func testNewUndoPreservesAuditTrailAndDoesNotChangeLegacy() async throws {
         let bank = PublicQuestionDualFixtures.bank(2)
         let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base)
