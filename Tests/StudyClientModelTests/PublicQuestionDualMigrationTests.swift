@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import CPocket
 import StudyCore
 @testable import StudyClientModel
 
@@ -21,6 +22,35 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
     }
 
     private func milliseconds(_ at: Date) -> Int64 { Int64(at.timeIntervalSince1970 * 1_000) }
+
+    @MainActor private func withFutureDue(_ bank: ExamBank) throws -> ExamLearningEngine {
+        let day = PublicQuestionDualFixtures.day
+        let packed: [UInt32] = bank.questions.indices.map { i in
+            if i < 25 { return 0 }
+            let due = i < 292 ? day - 1 : day + 1
+            return (1 << 20) | (1 << 16) | due
+        }
+        var stream = UUID().uuid
+        let handle = try XCTUnwrap(withUnsafeBytes(of: &stream) { raw in
+            packed.withUnsafeBufferPointer { cards in
+                xkl_engine_import_cards(UInt32(cards.count), cards.baseAddress, day, UInt32.max,
+                                        raw.bindMemory(to: UInt8.self).baseAddress)
+            }
+        })
+        defer { xkl_engine_free(handle) }
+        var snapshot = Data(count: xkl_engine_snapshot_size(handle))
+        let written = snapshot.withUnsafeMutableBytes {
+            xkl_engine_snapshot(handle, $0.bindMemory(to: UInt8.self).baseAddress, $0.count)
+        }
+        XCTAssertEqual(written, snapshot.count)
+        let pocket = try PocketEngine(snapshot: snapshot)
+        var record = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base).record
+        record.snapshot = snapshot; record.snapshotSHA256 = StudySHA256.hex(snapshot)
+        record.analysis = StudyAnalysisSettings(streamID: try pocket.streamID, nextSequence: 1, now: base)
+        let legacy = try ExamLearningEngine(bank: bank, hash: hash, record: record)
+        try legacy.start(day: day, now: base)
+        return legacy
+    }
 
     @MainActor func testAll292PendingItemsSurvivePagingAndRestarts() async throws {
         let bank = PublicQuestionDualFixtures.bank(292)
@@ -194,6 +224,115 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         var altered = archive; altered.append(0)
         XCTAssertThrowsError(try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [altered]))
         XCTAssertEqual(try JSONEncoder().encode(old.record), source)
+    }
+
+    @MainActor func testNextPageBalancesOldCarryAndNewlyDueWithoutLosingEither() async throws {
+        let bank = PublicQuestionDualFixtures.bank(312)
+        let old = try withFutureDue(bank)
+        let (dual, bytes) = try migrate(old, bank, at: base)
+        XCTAssertEqual(dual.state.carry.count, 292)
+        for i in 0..<20 {
+            let p = try XCTUnwrap(dual.presentation)
+            let at = base.addingTimeInterval(Double(i + 1))
+            try dual.selectAndSubmit("A", presentationID: p.id, now: at)
+            try dual.nextQuestion(presentationID: p.id, now: at)
+        }
+        let carryBefore = dual.state.carry
+        XCTAssertEqual(carryBefore.count, 272)
+        XCTAssertNil(dual.presentation)
+        let tomorrow = base.addingTimeInterval(86_400)
+        try dual.start(now: tomorrow)
+        XCTAssertEqual(dual.state.queue.count, 20)
+        let future = Set(bank.questions[292..<312].map(\.id))
+        XCTAssertEqual(dual.state.queue.filter { future.contains($0) }.count, 10)
+        XCTAssertEqual(dual.state.queue.filter { carryBefore.contains($0) }.count, 10)
+        XCTAssertEqual(dual.state.carry, carryBefore)
+        let state = try JSONDecoder().decode(PublicQuestionDualState.self, from: JSONEncoder().encode(dual.state))
+        let resumed = try PublicQuestionDualFSRS(state: state, bank: bank, hash: hash)
+        XCTAssertEqual(resumed.state.queue, dual.state.queue)
+        XCTAssertEqual(resumed.state.carry, carryBefore)
+        try resumed.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+        let before = resumed.state
+        try resumed.start(now: tomorrow.addingTimeInterval(1))
+        XCTAssertEqual(resumed.state, before)
+    }
+
+    @MainActor func testOptionalWrongRetryWaitsTenMinutesAndDoesNotTouchDailyAcrossMidnight() async throws {
+        let midnight = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1,
+            to: Calendar.current.startOfDay(for: base)))
+        let start = midnight.addingTimeInterval(-610)
+        let bank = PublicQuestionDualFixtures.bank(1)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: start)
+        try old.start(day: UInt32(try ConceptCalendar.studyDay(start)), now: start)
+        let (dual, bytes) = try migrate(old, bank, at: start.addingTimeInterval(1))
+        let first = try XCTUnwrap(dual.presentation)
+        let scoredAt = midnight.addingTimeInterval(-601)
+        try dual.selectAndSubmit("B", presentationID: first.id, now: scoredAt)
+        let firstState = dual.state
+        try dual.startRetry(now: midnight.addingTimeInterval(-1)) // result page still visible
+        XCTAssertEqual(dual.state, firstState)
+        try dual.nextQuestion(presentationID: first.id, now: scoredAt)
+        let daily = dual.state.daily, all = dual.state.all
+        let tooSoon = scoredAt.addingTimeInterval(599)
+        try dual.startRetry(now: tooSoon)
+        XCTAssertNil(dual.presentation)
+        XCTAssertEqual(try dual.stats(now: tooSoon).retryAvailable, 0)
+        let ready = scoredAt.addingTimeInterval(601)
+        XCTAssertNotEqual(try ConceptCalendar.studyDay(scoredAt), try ConceptCalendar.studyDay(ready))
+        XCTAssertEqual(try dual.stats(now: ready).retryAvailable, 1)
+        try dual.startRetry(now: ready)
+        XCTAssertEqual(dual.state.roundKind, "retry")
+        let retry = try XCTUnwrap(dual.presentation)
+        XCTAssertEqual(retry.questionID, first.questionID)
+        let active = dual.state
+        try dual.startRetry(now: ready)
+        XCTAssertEqual(dual.state, active)
+        try dual.selectAndSubmit("A", presentationID: retry.id, now: ready.addingTimeInterval(1))
+        XCTAssertEqual(dual.state.daily, daily)
+        XCTAssertNotEqual(dual.state.all, all)
+        XCTAssertEqual(dual.state.events.filter { $0.kind == "answer" }.count, 2)
+        try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+        let restored = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self,
+            from: JSONEncoder().encode(dual.state)), bank: bank, hash: hash)
+        XCTAssertEqual(restored.state.daily, daily)
+        XCTAssertEqual(restored.state.all, dual.state.all)
+    }
+
+    @MainActor func testTimeZoneChangeReplaysOldAndNewEventsAndRejectsTampering() async throws {
+        let previous = NSTimeZone.default
+        defer { NSTimeZone.default = previous }
+        NSTimeZone.default = TimeZone(identifier: "Asia/Shanghai")!
+        let bank = PublicQuestionDualFixtures.bank(2)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: hash, now: base)
+        try old.start(day: UInt32(try ConceptCalendar.studyDay(base)), now: base)
+        let oldP = try XCTUnwrap(old.record.presentation)
+        try old.selectAndSubmit("B", presentationID: oldP.id, now: base.addingTimeInterval(1))
+        try old.nextQuestion(presentationID: oldP.id, now: base.addingTimeInterval(2))
+        let (dual, bytes) = try migrate(old, bank, at: base.addingTimeInterval(3))
+        let p = try XCTUnwrap(dual.presentation)
+        try dual.selectAndSubmit("A", presentationID: p.id, now: base.addingTimeInterval(4))
+        let expected = dual.state
+        XCTAssertNotNil(expected.events.last?.timeZoneID)
+        let saved = try JSONEncoder().encode(expected)
+        NSTimeZone.default = TimeZone(identifier: "America/Los_Angeles")!
+        let resumed = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self, from: saved),
+                                                 bank: bank, hash: hash)
+        XCTAssertEqual(resumed.state.daily, expected.daily)
+        XCTAssertEqual(resumed.state.all, expected.all)
+        try resumed.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+        var obj = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        var events = try XCTUnwrap(obj["events"] as? [[String: Any]])
+        var event = try XCTUnwrap(events.last)
+        event["day"] = (event["day"] as! Int) + 1
+        events[events.count - 1] = event; obj["events"] = events
+        let badDay = try JSONSerialization.data(withJSONObject: obj)
+        let bad = try JSONDecoder().decode(PublicQuestionDualState.self, from: badDay)
+        XCTAssertThrowsError(try PublicQuestionDualFSRS(state: bad, bank: bank, hash: hash))
+        event["timeZoneID"] = "Not/A_Real_Time_Zone"
+        events[events.count - 1] = event; obj["events"] = events
+        let badZone = try JSONDecoder().decode(PublicQuestionDualState.self,
+            from: JSONSerialization.data(withJSONObject: obj))
+        XCTAssertThrowsError(try PublicQuestionDualFSRS(state: badZone, bank: bank, hash: hash))
     }
 }
 
