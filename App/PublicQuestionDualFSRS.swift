@@ -33,6 +33,7 @@ struct PublicDualEvent: Codable, Equatable {
     let kind: String
     let at: Date
     let day: UInt32
+    let timeZoneID: String
     let round: [String]?
     let attempt: ExamAttempt?
 }
@@ -579,8 +580,11 @@ struct PublicQuestionDualState: Codable, Equatable {
         var lastAt = state.migratedAt, lastDay = state.migratedDay
         let questions = Dictionary(uniqueKeysWithValues: bank.questions.map { ($0.id, $0) })
         for (index, e) in state.events.enumerated() {
-            guard e.sequence == index + 1, finite(e.at), e.at >= lastAt, e.day >= lastDay,
-                  (18_000...50_000).contains(e.day) else { throw fail("双FSRS事件时间或顺序无效") }
+            guard let eventZone = TimeZone(identifier: e.timeZoneID),
+                  e.sequence == index + 1, finite(e.at), e.at >= lastAt, e.day >= lastDay,
+                  (18_000...50_000).contains(e.day), try day(e.at, timeZone: eventZone) == e.day else {
+                throw fail("双FSRS事件时间或顺序无效")
+            }
             lastAt = e.at; lastDay = e.day
             if e.kind == "start" || e.kind == "startRetry" {
                 var before = state
@@ -654,7 +658,7 @@ struct PublicQuestionDualState: Codable, Equatable {
                                bank: ExamBank) throws {
         var next = state
         next.events.append(.init(sequence: next.events.count + 1, kind: kind, at: now,
-                                 day: day, round: round, attempt: attempt))
+                                 day: day, timeZoneID: TimeZone.current.identifier, round: round, attempt: attempt))
         assign(try replay(next, bank: bank), to: &next)
         state = next
     }
