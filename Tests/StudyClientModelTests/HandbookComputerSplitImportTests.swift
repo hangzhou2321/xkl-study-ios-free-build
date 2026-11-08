@@ -20,16 +20,24 @@ final class HandbookComputerSplitImportTests: XCTestCase {
             HandbookCard(id: "synthetic-card-\(index)", sourceGroupIDs: ["synthetic-group-\(index)"], topicNumber: 1,
                 title: "Synthetic title \(index)", prompt: "Synthetic prompt \(index)",
                 answerSummary: "Synthetic summary \(index)", blocks: [], sourcePages: [1], examples: [],
-                sourceNotes: [], chapterID: "synthetic-chapter")
+                sourceNotes: [], chapterID: index < oldCount ? "synthetic-chapter" : "synthetic-extra-chapter",
+                sourceReferences: index < oldCount ? nil : [.init(sourceID: "synthetic-bank", page: 1)])
         }
         let guides = cards.map { card in
             HandbookCardPackage.MemoryGuide(cardID: card.id, explanation: nil,
                 rows: [.init(cue: "Synthetic cue", answer: "Synthetic answer for \(card.id)")], mnemonic: nil)
         }
+        let chapters: [HandbookCardPackage.Chapter] = extraCount == 0
+            ? [.init(id: "synthetic-chapter", title: "Synthetic chapter")]
+            : [.init(id: "synthetic-chapter", title: "Synthetic chapter"),
+               .init(id: "synthetic-extra-chapter", title: "Synthetic extra chapter")]
+        let additional: [HandbookCardPackage.AdditionalSource]? = extraCount == 0 ? nil : [
+            .init(id: "synthetic-bank", source: .init(title: "Synthetic bank source", fileName: "synthetic-bank.pdf",
+                sha256: String(repeating: "b", count: 64), pdfPageCount: 1, includedPages: [1]))]
         return .init(id: "synthetic-computer-book", subject: .computer, title: "Synthetic book",
             revision: extraCount == 0 ? "1.0" : "1.1",
             source: .init(title: "Synthetic source", fileName: "synthetic.pdf", sha256: String(repeating: "a", count: 64), pdfPageCount: 1, includedPages: [1]),
-            chapters: [.init(id: "synthetic-chapter", title: "Synthetic chapter")], cards: cards, memoryGuides: guides)
+            chapters: chapters, cards: cards, additionalSources: additional, memoryGuides: guides)
     }
 
     private func packed(_ snapshot: Data, count: Int) throws -> [UInt32] {
@@ -74,6 +82,8 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let now = Date()
         let old = package(oldCount: 30, extraCount: 0), next = package(oldCount: 30, extraCount: 9)
+        XCTAssertEqual(next.chapters.count, old.chapters.count + 1)
+        XCTAssertEqual(next.additionalSources?.first?.id, "synthetic-bank")
         XCTAssertEqual(Array(next.cards.prefix(old.cards.count)), old.cards)
         XCTAssertEqual(Array(try XCTUnwrap(next.memoryGuides).prefix(old.cards.count)), try XCTUnwrap(old.memoryGuides))
         let oldRaw = try JSONEncoder().encode(old), nextRaw = try JSONEncoder().encode(next)
@@ -237,10 +247,12 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         let now = Date(), old = package(oldCount: 5, extraCount: 0)
         var next = package(oldCount: 5, extraCount: 9)
         next.relatedQuestions = (0..<9).map { index in
-            HandbookRelatedQuestion(id: "synthetic-question-\(index)", cardID: "synthetic-card-\(5 + index)",
+            var question = HandbookRelatedQuestion(id: "synthetic-question-\(index)", cardID: "synthetic-card-\(5 + index)",
                 type: .single, prompt: "Synthetic question \(index)",
                 options: [.init(id: "A", text: "Synthetic option A"), .init(id: "B", text: "Synthetic option B")],
                 answer: ["A"], explanation: "Synthetic explanation", sourcePage: 1, sourceLabel: "Synthetic source")
+            question.additionalSourceID = "synthetic-bank"
+            return question
         }
         let raw = try JSONEncoder().encode(next)
         let store = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
@@ -250,13 +262,27 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         let before = try XCTUnwrap(store.engine?.state)
         let oldEvents = try events(before.word)
         XCTAssertEqual(before.word.attempts.map(\.remembered), [false])
-        let oldQuestionsFolder = root.appendingPathComponent("ProfessionalQuestions/computer", isDirectory: true)
-        try FileManager.default.createDirectory(at: oldQuestionsFolder, withIntermediateDirectories: true)
-        let oldQuestionRecords = oldQuestionsFolder.appendingPathComponent("synthetic-history.json")
-        let sentinel = Data("old question bank records are not migrated".utf8); try sentinel.write(to: oldQuestionRecords)
+        let original = ProfessionalObjectiveQuestion(id: "synthetic-question-0", type: .single, book: "basic",
+            chapter: "Synthetic chapter", prompt: "Synthetic question 0",
+            options: [.init(id: "A", text: "Synthetic option A"), .init(id: "B", text: "Synthetic option B")],
+            answer: ["A"], sourceLocation: "Synthetic PDF page 1", sourceDocumentID: "synthetic-source", pdfPage: 1,
+            sourceAnswer: "A", explanation: "Synthetic explanation")
+        let originalBank = ProfessionalQuestionPackage(id: "synthetic-bank", subject: .computer, title: "Synthetic originals",
+            revision: "1.0", sources: [.init(id: "synthetic-source", title: "Synthetic source", reference: "fixture")],
+            questions: [original])
+        let bankStore = ProfessionalQuestionStore(subject: .computer, baseDirectory: root)
+        bankStore.importData(try JSONEncoder().encode(originalBank)); XCTAssertNil(bankStore.error)
+        bankStore.start(now: now)
+        let bankToken = try XCTUnwrap(bankStore.engine?.presentation?.id)
+        bankStore.saveDraft(["B"], token: bankToken); bankStore.submit(token: bankToken, now: now)
+        XCTAssertNil(bankStore.error); XCTAssertNotNil(bankStore.engine?.result)
+        let oldQuestionRecords = root.appendingPathComponent("ProfessionalQuestions/computer/current.json")
+        let sentinel = try Data(contentsOf: oldQuestionRecords)
         let relatedFolder = root.appendingPathComponent("HandbookWordRecall/computer/related-question-events", isDirectory: true)
         store.importData(raw); XCTAssertNil(store.error); XCTAssertFalse(store.blocked)
         XCTAssertEqual(store.package?.relatedQuestions?.count, 9)
+        XCTAssertEqual(store.package?.relatedQuestions?.first?.id, original.id, "The same ID is used in both independent stores")
+        XCTAssertEqual(store.package?.relatedQuestions?.first?.additionalSourceID, "synthetic-bank")
         XCTAssertFalse(FileManager.default.fileExists(atPath: relatedFolder.path), "Importing questions must not fabricate attempts")
         XCTAssertEqual(store.engine?.record.attempts, before.word.attempts)
         let afterImportEvents = try events(XCTUnwrap(store.engine?.record))
