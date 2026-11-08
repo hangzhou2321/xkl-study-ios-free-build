@@ -7,6 +7,8 @@ import StudyCore
 /// operations. The printed times are measured on the test runner, not iPhone.
 final class PublicQuestionDualPerformanceTests: XCTestCase {
     @MainActor func testReplay3525RealSyntheticAnswers() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["XKL_PUBLIC_DUAL_SCALE_TEST"] == "1",
+            "The 3,525-score replay benchmark runs only on an explicit diagnostic runner.")
         let base = PublicQuestionDualFixtures.now
         let bank = PublicQuestionDualFixtures.bank(1_000)
         let hash = PublicQuestionDualFixtures.hash
