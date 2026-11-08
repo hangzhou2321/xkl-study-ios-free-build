@@ -348,6 +348,23 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: relatedFolder.path).count, 1)
         let reopened = HandbookRelatedQuestionStore(subject: .computer, baseDirectory: root)
         XCTAssertFalse(reopened.blocked, reopened.error ?? "")
+        let decodedFirst = try JSONDecoder().decode(HandbookRelatedAttempt.self,
+            from: Data(contentsOf: relatedFolder.appendingPathComponent(attemptID.uuidString + ".json")))
+        XCTAssertEqual(decodedFirst, first)
+        XCTAssertTrue(decodedFirst.cardAnswerWasVisible, "Reading the card answer before opening the question must be recorded")
+        let independentID = UUID(), independentAt = now.addingTimeInterval(1)
+        let independent = try XCTUnwrap(reopened.submit(question: question, selected: ["B"],
+            cardAnswerWasVisible: false, id: independentID, at: independentAt))
+        XCTAssertFalse(independent.correct); XCTAssertFalse(independent.cardAnswerWasVisible)
+        XCTAssertEqual(reopened.submit(question: question, selected: ["B"],
+            cardAnswerWasVisible: false, id: independentID, at: independentAt), independent)
+        let decodedIndependent = try JSONDecoder().decode(HandbookRelatedAttempt.self,
+            from: Data(contentsOf: relatedFolder.appendingPathComponent(independentID.uuidString + ".json")))
+        XCTAssertEqual(decodedIndependent, independent)
+        XCTAssertFalse(decodedIndependent.cardAnswerWasVisible, "Opening the question before a card answer must not be labelled helped")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: relatedFolder.path).count, 2)
+        XCTAssertEqual(try Data(contentsOf: currentURL), afterImportBytes)
+        XCTAssertEqual(try Data(contentsOf: oldQuestionRecords), sentinel)
     }
 
     @MainActor func testFailedCommitRetainsOldStateAndCanRetryAfterReopen() async throws {
