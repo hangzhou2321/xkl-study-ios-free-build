@@ -361,9 +361,6 @@ final class ExamStore: ObservableObject {
                 _ = try verifyDual(disk, loaded: loaded)
             } else if markerExists {
                 throw ExamError.invalid("双 FSRS 当前记录缺失，拒绝用旧题库覆盖。")
-            } else {
-                try loaded.engine.setPolicy(requestedConservative)
-                try DurableFile.write(encoded(loaded.engine.record), to: stateURL(content.bankSHA256))
             }
             // Reimport of the currently active bank is a verified no-op.
             if isDualFSRS, record?.bankSHA256 == content.bankSHA256 {
@@ -416,32 +413,19 @@ final class ExamStore: ObservableObject {
     }
     func setPolicy(conservative enabled: Bool) {
         requestedConservative = enabled
-        guard !isDualFSRS else { return }
-        guard record?.analysis.conservativeEnabled != enabled else { return }
-        change { try $0.setPolicy(enabled) }
+        // RootView may synchronize settings before opening the bank. Migrate
+        // first and never alter the original scheduler as a side effect.
+        if !isDualFSRS { prepareDualFSRSIfNeeded() }
     }
     func setExamReduction(enabled: Bool) {
-        guard !isDualFSRS else { return }
-        guard record?.examReductionEnabled != enabled else { return }
-        change { $0.setExamReduction(enabled) }
+        if !isDualFSRS { prepareDualFSRSIfNeeded() }
     }
     func refreshStudyDate() {
-        guard !storageBlocked, let record else { return }
-        if isDualFSRS, let disk = dualDisk, let bank {
-            do { try refreshDual(PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)) }
-            catch { self.error = error.localizedDescription }
-            return
-        }
-        do {
-            let snapshot = try PocketEngine(snapshot: record.snapshot)
-            let info = try snapshot.info, today = try Self.studyDay(Date())
-            dueTodayCount = snapshot.dueCount(on: today, limit: bank?.questions.count ?? 0)
-            guard today >= info.day else { throw ExamError.invalid("手机日期早于已有题库记录，请核对时间。") }
-            if info.has_task != 0 && (today != info.day || today != info.selection_day) {
-                change { _ in } // The existing candidate transaction reconciles the date.
-            }
-        } catch { self.error = error.localizedDescription }
-        refreshPlanningCounts()
+        guard !storageBlocked, record != nil else { return }
+        if !isDualFSRS { prepareDualFSRSIfNeeded() }
+        guard isDualFSRS, let disk = dualDisk, let bank else { return }
+        do { try refreshDual(PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)) }
+        catch { self.error = error.localizedDescription }
     }
     func displayLabel(for optionID: String) -> String {
         ExamPresentation.label(optionID,
