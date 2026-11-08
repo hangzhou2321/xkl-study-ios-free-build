@@ -1048,7 +1048,7 @@ private struct HandbookCardFace: View {
                             Image(systemName: "doc.text")
                             Text("原题")
                             Image(systemName: "chevron.right").font(.caption2.weight(.bold))
-                        }.font(.caption.weight(.semibold)).padding(.horizontal, 10).frame(minHeight: 36)
+                        }.font(.caption.weight(.semibold)).padding(.horizontal, 10).frame(minHeight: 44)
                             .foregroundStyle(.blue)
                             .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
                     }.buttonStyle(.plain).accessibilityLabel("查看本考点对应原题")
