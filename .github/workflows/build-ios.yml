@@ -1,12 +1,14 @@
-name: Synthetic public self rating correctness check
+name: Synthetic public dual scale Release check
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  self_rating:
+  scale:
     runs-on: macos-15-intel
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      XKL_PUBLIC_DUAL_SCALE_TEST: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content
@@ -17,17 +19,17 @@ jobs:
           assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in bad]
           assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
           PY
-      - name: Check preserved objective correctness
+      - name: Measure Release synthetic history replay
         run: |
           set -euo pipefail
-          mkdir -p build/public-self-rating
-          swift test --jobs 2 --filter testHistoricalSelfAssessmentDoesNotFabricateAnObjectiveMistake 2>&1 | tee build/public-self-rating/results.log
-          grep 'testHistoricalSelfAssessmentDoesNotFabricateAnObjectiveMistake.*passed' build/public-self-rating/results.log
-          grep -E 'Executed 1 test, with 0 failures' build/public-self-rating/results.log
+          mkdir -p build/public-dual-scale
+          swift test -c release -Xswiftc -DDEBUG --jobs 2 --filter PublicQuestionDualPerformanceTests 2>&1 | tee build/public-dual-scale/results.log
+          grep 'PUBLIC_DUAL_SYNTHETIC_3525' build/public-dual-scale/results.log
+          grep "Test Suite 'PublicQuestionDualPerformanceTests' passed" build/public-dual-scale/results.log
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: synthetic-public-self-rating
-          path: build/public-self-rating/
+          name: synthetic-public-dual-scale-release
+          path: build/public-dual-scale/
           if-no-files-found: warn
           retention-days: 3
