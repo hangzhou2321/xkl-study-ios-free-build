@@ -26,7 +26,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-          for name, expected in [('fixtures',5),('migration',11)]:
+          for name, expected in [('fixtures',5),('migration',12)]:
               s=Path(f'build/public-dual-tests/{name}.log').read_text(errors='replace')
               m=re.findall(r"Test Suite 'Selected tests' passed[^\n]*\n[^\n]*Executed\s+(\d+)\s+tests?,\s+with\s+(?:(\d+)\s+tests? skipped and\s+)?(\d+)\s+failures",s)
               assert len(m)==1 and int(m[0][0])==expected and int(m[0][1] or 0)==0 and int(m[0][2])==0
