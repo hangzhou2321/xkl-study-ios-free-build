@@ -1,12 +1,12 @@
-name: Synthetic public question migration safety tests
+name: Synthetic public self rating correctness check
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  behavior:
+  self_rating:
     runs-on: macos-15-intel
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content
@@ -17,54 +17,17 @@ jobs:
           assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in bad]
           assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
           PY
-      - name: Synthetic behavior tests
+      - name: Check preserved objective correctness
         run: |
           set -euo pipefail
-          mkdir -p build/public-dual-tests
-          swift test --jobs 2 --filter PublicQuestionDualFixturesTests 2>&1 | tee build/public-dual-tests/fixtures.log
-          swift test --jobs 2 --filter PublicQuestionDualMigrationTests 2>&1 | tee build/public-dual-tests/migration.log
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          for name, expected in [('fixtures',5),('migration',12)]:
-              s=Path(f'build/public-dual-tests/{name}.log').read_text(errors='replace')
-              m=re.findall(r"Test Suite 'Selected tests' passed[^\n]*\n[^\n]*Executed\s+(\d+)\s+tests?,\s+with\s+(?:(\d+)\s+tests? skipped and\s+)?(\d+)\s+failures",s)
-              assert len(m)==1 and int(m[0][0])==expected and int(m[0][1] or 0)==0 and int(m[0][2])==0
-              print(f'PUBLIC_DUAL_{name.upper()} total={expected} skipped=0 failed=0')
-          PY
+          mkdir -p build/public-self-rating
+          swift test --jobs 2 --filter testHistoricalSelfAssessmentDoesNotFabricateAnObjectiveMistake 2>&1 | tee build/public-self-rating/results.log
+          grep 'testHistoricalSelfAssessmentDoesNotFabricateAnObjectiveMistake.*passed' build/public-self-rating/results.log
+          grep -E 'Executed 1 test, with 0 failures' build/public-self-rating/results.log
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: synthetic-public-dual-behavior
-          path: build/public-dual-tests/
-          if-no-files-found: warn
-          retention-days: 3
-  performance:
-    runs-on: macos-15-intel
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Reject private content
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          bad={'.pdf','.xklcontent','.xklquestions','.xklflashcards','.xklqbank','.xklconcepts','.xklcourse','.xklmath','.xklmathguide','.xklguide','.p12','.pfx','.p8','.pem','.key','.mobileprovision'}
-          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in bad]
-          assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
-          PY
-      - name: Measure real synthetic history replay
-        env:
-          XKL_PUBLIC_DUAL_SCALE_TEST: '1'
-        run: |
-          set -euo pipefail
-          mkdir -p build/public-dual-performance
-          swift test -c release --jobs 2 --filter PublicQuestionDualPerformanceTests 2>&1 | tee build/public-dual-performance/results.log
-          grep 'PUBLIC_DUAL_SYNTHETIC_3525' build/public-dual-performance/results.log
-          grep "Test Suite 'PublicQuestionDualPerformanceTests' passed" build/public-dual-performance/results.log
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: synthetic-public-dual-performance
-          path: build/public-dual-performance/
+          name: synthetic-public-self-rating
+          path: build/public-self-rating/
           if-no-files-found: warn
           retention-days: 3
