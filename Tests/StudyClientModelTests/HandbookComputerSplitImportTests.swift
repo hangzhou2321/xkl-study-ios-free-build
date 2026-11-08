@@ -89,6 +89,8 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         store.reveal(token: current.id, now: now)
         let before = try XCTUnwrap(store.engine?.state)
         let beforeEvents = try events(before.word)
+        XCTAssertEqual(before.word.attempts.map(\.remembered), [false, true], "The fixture must contain two genuine earlier grades")
+        XCTAssertEqual(beforeEvents.filter { $0.kind == 5 || $0.kind == 6 }.count, 2)
         let beforeStream = try PocketEngine(snapshot: before.word.snapshot).streamID
         let beforeInfo = try info(before.word.snapshot)
         let beforeQueue = try XCTUnwrap(store.engine).fork()
@@ -247,6 +249,7 @@ final class HandbookComputerSplitImportTests: XCTestCase {
         store.reveal(token: shown, now: now); store.rate(remembered: false, token: shown, now: now)
         let before = try XCTUnwrap(store.engine?.state)
         let oldEvents = try events(before.word)
+        XCTAssertEqual(before.word.attempts.map(\.remembered), [false])
         let oldQuestionsFolder = root.appendingPathComponent("ProfessionalQuestions/computer", isDirectory: true)
         try FileManager.default.createDirectory(at: oldQuestionsFolder, withIntermediateDirectories: true)
         let oldQuestionRecords = oldQuestionsFolder.appendingPathComponent("synthetic-history.json")
