@@ -48,6 +48,7 @@ struct ExamView: View {
                     }
                 }
         }
+        .onAppear { store.prepareDualFSRSIfNeeded() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url):
@@ -110,9 +111,13 @@ struct ExamView: View {
             }
 
             Section("学习") {
-                Text("每课 25 道新题").font(.headline)
-                Text("先复习，再学新题。到期复习不限量。")
+                Text(store.isDualFSRS ? "双 FSRS 题目复习" : "每课 25 道新题").font(.headline)
+                Text(store.isDualFSRS ? "先处理旧任务和到期复习，再安排新题。" : "先复习，再学新题。到期复习不限量。")
                     .font(.footnote).foregroundStyle(.secondary)
+                if store.isDualFSRS && store.carryRemaining > 0 {
+                    Text("旧任务尚有 \(store.carryRemaining) 题，分小批继续。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Text("新题默认进入学习；确定已经掌握的题，可点右上角“已熟悉”跳过。")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button(store.sessionIsActive ? "继续任务" : "开始学习", systemImage: "play.fill") {
@@ -128,20 +133,27 @@ struct ExamView: View {
             examPlanSection(bank)
 
             Section("题库复习") {
-                Toggle("题库减轮（试行）", isOn: Binding(
-                    get: { store.examReductionEnabled },
-                    set: { store.setExamReduction(enabled: $0) }
-                ))
-                .disabled(store.storageBlocked || actionLocked)
-                if store.examReductionEnabled {
-                    Text("新题或首次答错后最多核对 3 次；同一任务再次答错会加强。只剩同一道题时，答对当前这次后，剩余核对留到明天。")
+                if store.isDualFSRS {
+                    Label("双 FSRS 已启用", systemImage: "checkmark.circle")
+                        .font(.subheadline.weight(.medium))
+                    Text("按真实答对或答错安排复习；同一天的额外作答不会伪装成跨天记忆。")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    Text("关闭后，新题和答错题按七轮强化规则；已有安排保留，不再提前结束只剩同题的核对。")
+                    Toggle("题库减轮（试行）", isOn: Binding(
+                        get: { store.examReductionEnabled },
+                        set: { store.setExamReduction(enabled: $0) }
+                    ))
+                    .disabled(store.storageBlocked || actionLocked)
+                    if store.examReductionEnabled {
+                        Text("新题或首次答错后最多核对 3 次；同一任务再次答错会加强。只剩同一道题时，答对当前这次后，剩余核对留到明天。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("关闭后，新题和答错题按七轮强化规则；已有安排保留，不再提前结束只剩同题的核对。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Text("双 FSRS 尚未启用；旧题库记录会保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Text("这是一项可关闭的试行调整，长期记忆效果仍需从后续记录检验。")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
 
             Section("章节") {
@@ -207,7 +219,9 @@ struct ExamView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            Text("先处理到期复习，再学新题。目标包含主动标记已熟悉的题；每课仍为 25 道新题，可中途暂停。时间预算不代表完成用时，也不会隐藏到期题。")
+            Text(store.isDualFSRS
+                 ? "先处理旧任务和到期复习，再学新题；可以随时暂停。时间预算不代表完成用时，也不会隐藏到期题。"
+                 : "先处理到期复习，再学新题。目标包含主动标记已熟悉的题；每课仍为 25 道新题，可中途暂停。时间预算不代表完成用时，也不会隐藏到期题。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -276,7 +290,7 @@ struct ExamView: View {
             Button("返回题库") { showingPractice = false }
                 .buttonStyle(.borderedProminent)
             if store.canUndo {
-                Button("撤销上次跳过", systemImage: "arrow.uturn.backward") {
+                Button("撤销上一次操作", systemImage: "arrow.uturn.backward") {
                     performAction { store.undoFamiliar() }
                 }
                 .disabled(actionLocked || store.storageBlocked)
@@ -336,7 +350,7 @@ struct ExamView: View {
     private func questionHeader(_ question: ExamQuestion) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("待完成 \(store.totalRemaining) 题")
+                Text(store.isDualFSRS ? "本批待完成 \(store.totalRemaining) 题" : "待完成 \(store.totalRemaining) 题")
                     .monospacedDigit()
                 Spacer()
                 Text(question.type.title)
@@ -412,7 +426,7 @@ struct ExamView: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: actionHeight)
                 }
-                Button("撤销上次跳过", systemImage: "arrow.uturn.backward") {
+                Button("撤销上一次操作", systemImage: "arrow.uturn.backward") {
                     guard store.canUndo else { return }
                     performAction { store.undoFamiliar() }
                 }
@@ -459,6 +473,8 @@ struct ExamView: View {
     }
 
     private func start() {
+        if !store.isDualFSRS { store.prepareDualFSRSIfNeeded() }
+        guard store.isDualFSRS else { return }
         if !store.sessionIsActive {
             store.start()
         }
