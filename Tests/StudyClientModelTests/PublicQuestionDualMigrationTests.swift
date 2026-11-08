@@ -3,6 +3,11 @@ import XCTest
 import CPocket
 import StudyCore
 @testable import StudyClientModel
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Synthetic-only migration and replay checks; these use neither actual user
 /// history nor a real question bank.
@@ -385,6 +390,34 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         XCTAssertTrue(dual.state.daily.isEmpty) // opening a review does not create a score
         XCTAssertTrue(dual.state.all.isEmpty)
         try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+    }
+
+    @MainActor func testActualTimeZoneChangeDoesNotRewriteMigratedHistory() async throws {
+        let oldEnv = getenv("TZ").map { String(cString: $0) }
+        defer {
+            if let oldEnv { setenv("TZ", oldEnv, 1) } else { unsetenv("TZ") }
+            tzset(); NSTimeZone.resetSystemTimeZone()
+        }
+        setenv("TZ", "Asia/Shanghai", 1); tzset(); NSTimeZone.resetSystemTimeZone()
+        XCTAssertEqual(TimeZone.current.identifier, "Asia/Shanghai")
+        let at = base.addingTimeInterval(8 * 3_600) // This instant is on different dates in the two zones.
+        let bank = PublicQuestionDualFixtures.bank(2)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: at)
+        try old.start(day: UInt32(try ConceptCalendar.studyDay(at)), now: at)
+        let p = try XCTUnwrap(old.record.presentation)
+        try old.selectAndSubmit("B", presentationID: p.id, now: at.addingTimeInterval(1))
+        try old.nextQuestion(presentationID: p.id, now: at.addingTimeInterval(2))
+        let (dual, bytes) = try migrate(old, bank, at: at.addingTimeInterval(3))
+        let original = dual.state
+        setenv("TZ", "America/Los_Angeles", 1); tzset(); NSTimeZone.resetSystemTimeZone()
+        XCTAssertEqual(TimeZone.current.identifier, "America/Los_Angeles")
+        XCTAssertNotEqual(UInt32(try ConceptCalendar.studyDay(at)), original.migratedDay)
+        let restored = try PublicQuestionDualFSRS(state: JSONDecoder().decode(PublicQuestionDualState.self,
+            from: JSONEncoder().encode(original)), bank: bank, hash: bankHash)
+        try restored.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+        XCTAssertEqual(restored.state.legacyRatings, original.legacyRatings)
+        XCTAssertEqual(restored.state.daily, original.daily)
+        XCTAssertEqual(restored.state.all, original.all)
     }
 
     @MainActor func testRetryDoesNotStartForYesterdayWrongAnswer() async throws {
