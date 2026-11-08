@@ -6,7 +6,7 @@ import StudyCore
 
 /// Synthetic banks and temporary directories only. No device or user archive is read.
 final class PublicDualStoreIntegrationTests: XCTestCase {
-    private enum InitialState: Equatable { case selected, familiar, result }
+    private enum InitialState: Equatable { case selected, familiar, result, resultUndo }
 
     private struct Fixture {
         let root: URL
@@ -23,6 +23,21 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let rootLegacySHA256: String
         let state: PublicQuestionDualState
         let priorDualRevisionSHA256s: [String]
+    }
+
+    private struct ExportDualProbe: Decodable {
+        let bankSHA256: String
+        let legacyCurrentBytes: Data
+        let markerBytes: Data
+        let dualCurrentBytes: Data
+        let anchors: [String: Data]
+        let revisions: [String: Data]
+    }
+    private struct ExportProbe: Decodable {
+        let format: String
+        let activeBankSHA256: String?
+        let versions: [ExamVersionExport]
+        let dualVersions: [ExportDualProbe]
     }
 
     private final class WriteGate {
@@ -78,15 +93,48 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         case .result:
             try old.selectAndSubmit("A", presentationID: old.record.presentation?.id,
                                     now: oldTime.addingTimeInterval(2))
+        case .resultUndo:
+            break // A genuine legacy plan-0 answer is constructed below.
+        }
+        var legacy = old.record
+        var remaining = Int(try old.info.total_remaining)
+        if initial == .resultUndo {
+            let shown = try XCTUnwrap(legacy.presentation)
+            let q = try XCTUnwrap(bank.questions.first { $0.id == shown.questionID })
+            let engine = try PocketEngine(snapshot: legacy.snapshot)
+            let before = try engine.info
+            try engine.reveal(); try engine.answer(0) // real old plan-0 correct event, with undo
+            let after = try engine.info
+            let event = try XCTUnwrap(engine.events(from: before.log_records + 1).first { $0.kind == 5 })
+            let answerTime = oldTime.addingTimeInterval(2)
+            var a = ExamAttempt(id: UUID(), bankID: bank.id, bankSHA256: hash, questionID: q.id,
+                number: q.number, selectedOptions: ["A"], correctOptions: q.answer.sorted(),
+                optionOrder: shown.optionOrder, isCorrect: true, answeredAt: answerTime,
+                sessionID: legacy.taskID, presentationID: shown.id, mode: "answer")
+            a.grade = 0; a.gradedAt = answerTime; a.engineSequence = event.sequence
+            a.beforeRevision = before.revision; a.afterRevision = after.revision
+            a.examPlan = 0; a.shortenedRepeats = 0; a.tailRemoved = 0
+            a.tailDeferred = false; a.failureCountInTask = 0
+            legacy.attempts.append(a); legacy.lastUndoableAttemptID = a.id
+            var result = shown; result.selectedOptionIDs = ["A"]
+            legacy.answerReview = ExamAnswerReview(presentation: result, attempt: a)
+            XCTAssertNotEqual(after.has_task, 0)
+            let nextQuestion = bank.questions[Int(after.word)]
+            let order = ExamPresentation.order(for: nextQuestion, avoiding: legacy.previousOrders[nextQuestion.id])
+            legacy.previousOrders[nextQuestion.id] = order
+            legacy.presentation = ExamPresentation(id: UUID(), questionID: nextQuestion.id, optionOrder: order,
+                selectedOptionIDs: [], pending: nil, supplementVisible: false, presentedAt: answerTime)
+            legacy.snapshot = try engine.snapshot(); legacy.snapshotSHA256 = StudySHA256.hex(legacy.snapshot)
+            remaining = Int(after.total_remaining)
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let stateURL = version.appendingPathComponent("current-state.json")
-        try encoder.encode(old.record).write(to: stateURL)
+        try encoder.encode(legacy).write(to: stateURL)
         let active = try JSONSerialization.data(withJSONObject: ["format": 2, "bankSHA256": hash], options: [.sortedKeys])
         try active.write(to: qroot.appendingPathComponent("active-bank.json"))
         return Fixture(root: root, package: importFile, legacyURL: stateURL,
             dualRoot: version.appendingPathComponent("dual-fsrs", isDirectory: true),
-            hash: hash, legacy: old.record, legacyRemaining: Int(try old.info.total_remaining))
+            hash: hash, legacy: legacy, legacyRemaining: remaining)
     }
 
     private func disk(_ fixture: Fixture) throws -> DiskProbe {
@@ -226,6 +274,48 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(reopened.currentQuestion?.id, oldAttempt.questionID)
     }
 
+    @MainActor func testLegacyResultUndoWaitsForDismissalAndClearedSelection() async throws {
+        let f = try fixture(.resultUndo); defer { remove(f) }
+        let old = try Data(contentsOf: f.legacyURL)
+        let result = try XCTUnwrap(f.legacy.answerReview)
+        let originalAttempt = try XCTUnwrap(f.legacy.attempts.last)
+        XCTAssertEqual(try PocketEngine(snapshot: f.legacy.snapshot).info.can_undo, 1)
+        let store = ExamStore(baseDirectory: f.root); store.prepareDualFSRSIfNeeded()
+        XCTAssertTrue(store.isDualFSRS, store.error ?? "")
+        XCTAssertTrue(store.isShowingResult)
+        XCTAssertFalse(store.canUndo)
+        let resultBytes = try Data(contentsOf: f.currentURL)
+        store.undoFamiliar()
+        XCTAssertEqual(try Data(contentsOf: f.currentURL), resultBytes)
+        store.nextQuestion(presentationID: result.presentation.id)
+        XCTAssertFalse(store.isShowingResult)
+        XCTAssertTrue(store.canUndo)
+        let next = try XCTUnwrap(store.presentationID)
+        store.toggleOption("B", presentationID: next)
+        XCTAssertEqual(store.selectedOptionIDs, ["B"])
+        XCTAssertFalse(store.canUndo)
+        let selectedBytes = try Data(contentsOf: f.currentURL)
+        store.undoFamiliar()
+        XCTAssertEqual(try Data(contentsOf: f.currentURL), selectedBytes)
+        XCTAssertEqual(store.selectedOptionIDs, ["B"])
+        store.toggleOption("B", presentationID: next)
+        XCTAssertTrue(store.selectedOptionIDs.isEmpty)
+        XCTAssertTrue(store.canUndo)
+        store.undoFamiliar()
+        XCTAssertNil(store.error)
+        XCTAssertEqual(store.currentQuestion?.id, originalAttempt.questionID)
+        let after = try disk(f)
+        let rebased = try anchor(f, hash: after.state.legacyAnchorSHA256)
+        XCTAssertEqual(rebased.attempts.filter { $0.mode == "answer" }.map(\.id), [originalAttempt.id])
+        XCTAssertEqual(rebased.attempts.filter { $0.mode == "undo" }.count, 1)
+        XCTAssertEqual(rebased.attempts.last?.undoneAttemptID, originalAttempt.id)
+        XCTAssertTrue(after.state.events.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
+        let reopened = ExamStore(baseDirectory: f.root)
+        XCTAssertEqual(reopened.currentQuestion?.id, originalAttempt.questionID)
+        XCTAssertFalse(reopened.isShowingResult)
+    }
+
     @MainActor func testNewScorePreventsRebasingOldUndoAndStaleWriterCannotOverwrite() async throws {
         let f = try fixture(.familiar); defer { remove(f) }
         let old = try Data(contentsOf: f.legacyURL)
@@ -350,6 +440,100 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertTrue(reopened.isShowingResult, reopened.error ?? "")
         XCTAssertEqual(reopened.latestAttempt?.id, store.latestAttempt?.id)
         XCTAssertEqual(try disk(f).state.events.filter { $0.kind == "startRetry" }.count, 1)
+    }
+
+    @MainActor func testMissingCorruptOrDeletedDualDirectoryNeverFallsBackToLegacy() async throws {
+        for scenario in ["missing-current", "corrupt-current", "deleted-directory"] {
+            let f = try fixture(.familiar); defer { remove(f) }
+            let old = try Data(contentsOf: f.legacyURL)
+            let original = ExamStore(baseDirectory: f.root); original.prepareDualFSRSIfNeeded()
+            XCTAssertTrue(original.isDualFSRS, original.error ?? "")
+            let marker = f.legacyURL.deletingLastPathComponent().appendingPathComponent("dual-fsrs-enabled.json")
+            let markerBytes = try Data(contentsOf: marker)
+            switch scenario {
+            case "missing-current": try FileManager.default.removeItem(at: f.currentURL)
+            case "corrupt-current": try Data("{}".utf8).write(to: f.currentURL)
+            default: try FileManager.default.removeItem(at: f.dualRoot)
+            }
+            let broken = try? Data(contentsOf: f.currentURL)
+            let reopened = ExamStore(baseDirectory: f.root)
+            XCTAssertTrue(reopened.storageBlocked, scenario)
+            XCTAssertNotNil(reopened.error, scenario)
+            reopened.start(); reopened.prepareDualFSRSIfNeeded(); reopened.importContent(from: f.package)
+            XCTAssertTrue(reopened.storageBlocked, scenario)
+            XCTAssertEqual(try Data(contentsOf: f.legacyURL), old, scenario)
+            XCTAssertEqual(try Data(contentsOf: marker), markerBytes, scenario)
+            XCTAssertEqual(try? Data(contentsOf: f.currentURL), broken, scenario)
+            XCTAssertThrowsError(try reopened.exportRecords(), scenario)
+        }
+    }
+
+    @MainActor func testValidCurrentWithMissingMarkerCanCompleteInterruptedEnable() async throws {
+        let f = try fixture(); defer { remove(f) }
+        let old = try Data(contentsOf: f.legacyURL)
+        let original = ExamStore(baseDirectory: f.root); original.prepareDualFSRSIfNeeded()
+        XCTAssertTrue(original.isDualFSRS, original.error ?? "")
+        let current = try Data(contentsOf: f.currentURL)
+        let marker = f.legacyURL.deletingLastPathComponent().appendingPathComponent("dual-fsrs-enabled.json")
+        try FileManager.default.removeItem(at: marker)
+        let recovered = ExamStore(baseDirectory: f.root)
+        XCTAssertTrue(recovered.isDualFSRS, recovered.error ?? "")
+        XCTAssertFalse(recovered.storageBlocked)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertEqual(try Data(contentsOf: f.currentURL), current)
+        XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
+    }
+
+    @MainActor func testV3ExportPreservesLegacyUndoAnchorsAndNewScoresWithoutDuplication() async throws {
+        let f = try fixture(.familiar); defer { remove(f) }
+        let originalBytes = try Data(contentsOf: f.legacyURL)
+        let originalAttempt = try XCTUnwrap(f.legacy.attempts.last)
+        let store = ExamStore(baseDirectory: f.root); store.prepareDualFSRSIfNeeded()
+        XCTAssertTrue(store.isDualFSRS, store.error ?? "")
+        let priorDualBytes = try Data(contentsOf: f.currentURL)
+        let priorDual = try disk(f)
+        store.undoFamiliar()
+        XCTAssertNil(store.error)
+        let rebased = try disk(f)
+        XCTAssertNotEqual(rebased.state.legacyAnchorSHA256, priorDual.state.legacyAnchorSHA256)
+        let undoAnchor = try anchor(f, hash: rebased.state.legacyAnchorSHA256)
+        XCTAssertEqual(undoAnchor.attempts.last?.undoneAttemptID, originalAttempt.id)
+        let token = try XCTUnwrap(store.presentationID)
+        store.selectAndSubmit("B", presentationID: token)
+        XCTAssertTrue(store.isShowingResult, store.error ?? "")
+        let latest = try XCTUnwrap(store.latestAttempt)
+        XCTAssertFalse(latest.isCorrect)
+        let currentBytes = try Data(contentsOf: f.currentURL)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .millisecondsSince1970
+        let result = try decoder.decode(ExportProbe.self, from: store.exportRecords())
+        XCTAssertEqual(result.format, "xkl-ios-question-records-v3")
+        XCTAssertEqual(result.activeBankSHA256, f.hash)
+        XCTAssertEqual(result.versions.count, 1)
+        XCTAssertEqual(result.versions[0].attempts.map(\.id), f.legacy.attempts.map(\.id))
+        let exported = try XCTUnwrap(result.dualVersions.first)
+        XCTAssertEqual(result.dualVersions.count, 1)
+        XCTAssertEqual(exported.bankSHA256, f.hash)
+        XCTAssertEqual(exported.legacyCurrentBytes, originalBytes)
+        XCTAssertEqual(exported.dualCurrentBytes, currentBytes)
+        XCTAssertEqual(exported.anchors[priorDual.state.legacyAnchorSHA256], originalBytes)
+        XCTAssertEqual(exported.anchors[rebased.state.legacyAnchorSHA256], try Data(contentsOf:
+            f.dualRoot.appendingPathComponent("anchors").appendingPathComponent(rebased.state.legacyAnchorSHA256 + ".json")))
+        XCTAssertEqual(exported.revisions[StudySHA256.hex(priorDualBytes)], priorDualBytes)
+        let embedded = try JSONDecoder().decode(DiskProbe.self, from: exported.dualCurrentBytes)
+        XCTAssertEqual(embedded.state.legacyAttempts.last?.undoneAttemptID, originalAttempt.id)
+        let answers = embedded.state.events.filter { $0.kind == "answer" }
+        XCTAssertEqual(answers.count, 1)
+        XCTAssertEqual(answers.first?.attempt?.id, latest.id)
+        XCTAssertNil(answers.first?.attempt?.engineSequence)
+        let reopened = ExamStore(baseDirectory: f.root)
+        XCTAssertTrue(reopened.isShowingResult, reopened.error ?? "")
+        let repeated = try decoder.decode(ExportProbe.self, from: reopened.exportRecords())
+        let repeatedDual = try XCTUnwrap(repeated.dualVersions.first)
+        XCTAssertEqual(repeatedDual.dualCurrentBytes, currentBytes)
+        XCTAssertEqual(repeatedDual.legacyCurrentBytes, originalBytes)
+        XCTAssertEqual(repeatedDual.anchors, exported.anchors)
+        XCTAssertEqual(repeatedDual.revisions, exported.revisions)
+        XCTAssertEqual(try Data(contentsOf: f.legacyURL), originalBytes)
     }
 }
 #endif
