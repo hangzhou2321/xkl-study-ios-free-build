@@ -4,9 +4,9 @@ on:
 permissions:
   contents: read
 jobs:
-  synthetic:
+  behavior:
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Reject private content
@@ -17,27 +17,52 @@ jobs:
           assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in bad]
           assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
           PY
-      - name: Run public question synthetic tests
+      - name: Synthetic behavior tests
         run: |
           set -euo pipefail
           mkdir -p build/public-dual-tests
-          swift test --jobs 2 --filter PublicQuestionDual 2>&1 | tee build/public-dual-tests/fixtures.log
+          swift test --jobs 2 --filter PublicQuestionDualFixturesTests 2>&1 | tee build/public-dual-tests/fixtures.log
+          swift test --jobs 2 --filter PublicQuestionDualMigrationTests 2>&1 | tee build/public-dual-tests/migration.log
           python3 - <<'PY'
           from pathlib import Path
           import re
-          s=Path('build/public-dual-tests/fixtures.log').read_text(errors='replace')
-          assert "Test Suite 'PublicQuestionDualFixturesTests' passed" in s
-          assert "Test Suite 'PublicQuestionDualMigrationTests' passed" in s
-          assert "Test Suite 'PublicQuestionDualPerformanceTests' passed" in s
-          assert 'PUBLIC_DUAL_SYNTHETIC_3525' in s
-          m=re.findall(r"Test Suite 'Selected tests' passed[^\n]*\n[^\n]*Executed\s+(\d+)\s+tests?,\s+with\s+(?:(\d+)\s+tests? skipped and\s+)?(\d+)\s+failures",s)
-          assert len(m)==1 and int(m[0][0])==15 and int(m[0][1] or 0)==0 and int(m[0][2])==0
-          print('PUBLIC_DUAL_FIXTURES_AND_MIGRATION total=15 skipped=0 failed=0')
+          for name, expected in [('fixtures',5),('migration',11)]:
+              s=Path(f'build/public-dual-tests/{name}.log').read_text(errors='replace')
+              m=re.findall(r"Test Suite 'Selected tests' passed[^\n]*\n[^\n]*Executed\s+(\d+)\s+tests?,\s+with\s+(?:(\d+)\s+tests? skipped and\s+)?(\d+)\s+failures",s)
+              assert len(m)==1 and int(m[0][0])==expected and int(m[0][1] or 0)==0 and int(m[0][2])==0
+              print(f'PUBLIC_DUAL_{name.upper()} total={expected} skipped=0 failed=0')
           PY
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: synthetic-public-dual-fixtures
+          name: synthetic-public-dual-behavior
           path: build/public-dual-tests/
+          if-no-files-found: warn
+          retention-days: 3
+  performance:
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject private content
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          bad={'.pdf','.xklcontent','.xklquestions','.xklflashcards','.xklqbank','.xklconcepts','.xklcourse','.xklmath','.xklmathguide','.xklguide','.p12','.pfx','.p8','.pem','.key','.mobileprovision'}
+          assert not [p for p in Path('.').rglob('*') if p.is_file() and p.suffix.lower() in bad]
+          assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
+          PY
+      - name: Measure real synthetic history replay
+        run: |
+          set -euo pipefail
+          mkdir -p build/public-dual-performance
+          swift test --jobs 2 --filter PublicQuestionDualPerformanceTests 2>&1 | tee build/public-dual-performance/results.log
+          grep 'PUBLIC_DUAL_SYNTHETIC_3525' build/public-dual-performance/results.log
+          grep "Test Suite 'PublicQuestionDualPerformanceTests' passed" build/public-dual-performance/results.log
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-public-dual-performance
+          path: build/public-dual-performance/
           if-no-files-found: warn
           retention-days: 3
