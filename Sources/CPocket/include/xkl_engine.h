@@ -81,6 +81,32 @@ bool xkl_engine_reconcile_collection(xkl_engine_t *engine,
  * failed_round receives 0/1/2 when non-NULL. */
 uint32_t xkl_engine_pending_stages(const xkl_engine_t *engine, uint32_t word,
     uint32_t *failed_round);
+/* A read-only, lossless view of an already-selected task. This does not call
+ * start or refresh the calendar and never changes the original engine. */
+typedef struct { uint32_t word, stage, failed_round; } xkl_task_token_t;
+typedef struct { uint32_t word, stage_mask, failed_round, category; } xkl_task_item_t;
+enum {
+    XKL_TASK_ACTIVE_NEW = 0, XKL_TASK_ACTIVE_REVIEW = 1,
+    XKL_TASK_UNLOADED_REVIEW = 2, XKL_TASK_UNLOADED_NEW = 3
+};
+typedef struct {
+    uint32_t day, selection_day, token_count, item_count, active_count;
+    uint32_t unloaded_review_count, unloaded_new_count, can_undo, undo_word;
+} xkl_task_capture_info_t;
+/* tokens retain exact queue order and repeated stages. items are distinct,
+ * active words in first-token order followed by not-yet-loaded reviews and
+ * new words, in the original cursors' order. Inactive items have mask zero.
+ * Selection uses the saved selection_day, not today: newly due cards must be
+ * kept separately by the caller. today is supplied only to reject a clock
+ * rollback; bank_count is the exact permanent-ID collection size.
+ *
+ * With both arrays NULL and both capacities zero, validate and return sizes in
+ * info. Otherwise provide adequate arrays (NULL is allowed only for a zero
+ * result). On any failure every caller output is unchanged. Caller must
+ * serialize query and copy with all other engine operations. */
+bool xkl_engine_capture_task(const xkl_engine_t *engine, uint32_t bank_count,
+    uint32_t today, xkl_task_token_t *tokens, uint32_t token_capacity,
+    xkl_task_item_t *items, uint32_t item_capacity, xkl_task_capture_info_t *info);
 /* Restore preserves presentation state for local atomic-save rollback.
  * On app launch, clock discontinuity, or cross-device handoff call start before
  * learning: it logs a new session and hides the old answer. */

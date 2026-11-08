@@ -10,7 +10,7 @@ mkdir -p build/c-tests
 if [[ "${XKL_REUSE_VERIFIED_MODEL_TESTS:-false}" == "true" ]]; then
   python3 tools/verify_reused_model_tests.py
 else
-for suite in test_engine test_exam_engine test_midnight_engine test_import; do
+for suite in test_engine test_exam_engine test_midnight_engine test_import test_task_capture; do
   clang -std=c11 -Wall -Wextra -Werror -O2 -I Sources/CPocket/include -I Sources/CPocket/internal \
     "Tests/CPocketTests/${suite}.c" Sources/CPocket/xkl_engine.c \
     Sources/CPocket/internal/pocket_model.c Sources/CPocket/internal/pocket_word_model.c \
