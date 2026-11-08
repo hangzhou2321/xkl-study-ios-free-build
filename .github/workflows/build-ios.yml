@@ -53,6 +53,8 @@ jobs:
           assert not any(Path(p).exists() for p in ('Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json'))
           PY
       - name: Measure real synthetic history replay
+        env:
+          XKL_PUBLIC_DUAL_SCALE_TEST: '1'
         run: |
           set -euo pipefail
           mkdir -p build/public-dual-performance
