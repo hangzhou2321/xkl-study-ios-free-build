@@ -260,16 +260,16 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
     @MainActor func testOptionalWrongRetryWaitsTenMinutesAndDoesNotTouchDailyAcrossMidnight() async throws {
         let midnight = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1,
             to: Calendar.current.startOfDay(for: base)))
-        let start = midnight.addingTimeInterval(-610)
+        let start = midnight.addingTimeInterval(-1_220)
         let bank = PublicQuestionDualFixtures.bank(1)
         let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: start)
         try old.start(day: UInt32(try ConceptCalendar.studyDay(start)), now: start)
         let (dual, bytes) = try migrate(old, bank, at: start.addingTimeInterval(1))
         let first = try XCTUnwrap(dual.presentation)
-        let scoredAt = midnight.addingTimeInterval(-601)
+        let scoredAt = midnight.addingTimeInterval(-1_201)
         try dual.selectAndSubmit("B", presentationID: first.id, now: scoredAt)
         let firstState = dual.state
-        try dual.startRetry(now: midnight.addingTimeInterval(-1)) // result page still visible
+        try dual.startRetry(now: scoredAt.addingTimeInterval(600)) // result page still visible
         XCTAssertEqual(dual.state, firstState)
         try dual.nextQuestion(presentationID: first.id, now: scoredAt)
         let daily = dual.state.daily, all = dual.state.all
@@ -277,8 +277,7 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         try dual.startRetry(now: tooSoon)
         XCTAssertNil(dual.presentation)
         XCTAssertEqual(try dual.stats(now: tooSoon).retryAvailable, 0)
-        let ready = scoredAt.addingTimeInterval(601)
-        XCTAssertNotEqual(try ConceptCalendar.studyDay(scoredAt), try ConceptCalendar.studyDay(ready))
+        let ready = scoredAt.addingTimeInterval(600)
         XCTAssertEqual(try dual.stats(now: ready).retryAvailable, 1)
         try dual.startRetry(now: ready)
         XCTAssertEqual(dual.state.roundKind, "retry")
@@ -287,7 +286,9 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         let active = dual.state
         try dual.startRetry(now: ready)
         XCTAssertEqual(dual.state, active)
-        try dual.selectAndSubmit("A", presentationID: retry.id, now: ready.addingTimeInterval(1))
+        let answeredAfterMidnight = midnight.addingTimeInterval(1)
+        XCTAssertNotEqual(try ConceptCalendar.studyDay(scoredAt), try ConceptCalendar.studyDay(answeredAfterMidnight))
+        try dual.selectAndSubmit("A", presentationID: retry.id, now: answeredAfterMidnight)
         XCTAssertEqual(dual.state.daily, daily)
         XCTAssertNotEqual(dual.state.all, all)
         XCTAssertEqual(dual.state.events.filter { $0.kind == "answer" }.count, 2)
@@ -335,6 +336,59 @@ final class PublicQuestionDualMigrationTests: XCTestCase {
         let badZone = try JSONDecoder().decode(PublicQuestionDualState.self,
             from: JSONSerialization.data(withJSONObject: obj))
         XCTAssertThrowsError(try PublicQuestionDualFSRS(state: badZone, bank: bank, hash: bankHash))
+    }
+
+    @MainActor func testImportedKnownWithoutScoresIsReviewableButFutureDueIsNotEarly() async throws {
+        let bank = PublicQuestionDualFixtures.bank(2)
+        let day = PublicQuestionDualFixtures.day
+        let packed: [UInt32] = [(1 << 20) | UInt32(UInt16.max), (1 << 20) | (1 << 16) | (day + 1)]
+        var stream = UUID().uuid
+        let handle = try XCTUnwrap(withUnsafeBytes(of: &stream) { raw in
+            packed.withUnsafeBufferPointer { cards in
+                xkl_engine_import_cards(UInt32(cards.count), cards.baseAddress, day, UInt32.max,
+                                        raw.bindMemory(to: UInt8.self).baseAddress)
+            }
+        })
+        defer { xkl_engine_free(handle) }
+        var snapshot = Data(count: xkl_engine_snapshot_size(handle))
+        let written = snapshot.withUnsafeMutableBytes {
+            xkl_engine_snapshot(handle, $0.bindMemory(to: UInt8.self).baseAddress, $0.count)
+        }
+        XCTAssertEqual(written, snapshot.count)
+        let pocket = try PocketEngine(snapshot: snapshot)
+        var record = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: base).record
+        record.snapshot = snapshot; record.snapshotSHA256 = StudySHA256.hex(snapshot)
+        record.analysis = StudyAnalysisSettings(streamID: try pocket.streamID, nextSequence: 1, now: base)
+        let old = try ExamLearningEngine(bank: bank, hash: bankHash, record: record)
+        let (dual, bytes) = try migrate(old, bank, at: base)
+        XCTAssertTrue(dual.state.legacyRatings.isEmpty)
+        XCTAssertTrue(dual.state.legacyAttempts.isEmpty)
+        XCTAssertTrue(dual.state.daily.isEmpty)
+        XCTAssertTrue(dual.state.all.isEmpty)
+        try dual.start(now: base.addingTimeInterval(1))
+        XCTAssertEqual(dual.state.queue, [bank.questions[0].id])
+        XCTAssertFalse(dual.state.queue.contains(bank.questions[1].id))
+        XCTAssertTrue(dual.state.daily.isEmpty) // opening a review does not create a score
+        XCTAssertTrue(dual.state.all.isEmpty)
+        try dual.validateLegacy(recordBytes: bytes, priorVolumeBytes: [])
+    }
+
+    @MainActor func testRetryDoesNotStartForYesterdayWrongAnswer() async throws {
+        let midnight = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1,
+            to: Calendar.current.startOfDay(for: base)))
+        let scoredAt = midnight.addingTimeInterval(-601)
+        let bank = PublicQuestionDualFixtures.bank(1)
+        let old = try ExamLearningEngine.fresh(bank: bank, hash: bankHash, now: scoredAt.addingTimeInterval(-2))
+        try old.start(day: UInt32(try ConceptCalendar.studyDay(scoredAt)), now: scoredAt.addingTimeInterval(-2))
+        let (dual, _) = try migrate(old, bank, at: scoredAt.addingTimeInterval(-1))
+        let first = try XCTUnwrap(dual.presentation)
+        try dual.selectAndSubmit("B", presentationID: first.id, now: scoredAt)
+        try dual.nextQuestion(presentationID: first.id, now: scoredAt)
+        let tomorrow = midnight.addingTimeInterval(1)
+        XCTAssertEqual(try dual.stats(now: tomorrow).retryAvailable, 0)
+        try dual.startRetry(now: tomorrow)
+        XCTAssertNil(dual.presentation)
+        XCTAssertEqual(dual.state.events.filter { $0.kind == "startRetry" }.count, 0)
     }
 }
 
