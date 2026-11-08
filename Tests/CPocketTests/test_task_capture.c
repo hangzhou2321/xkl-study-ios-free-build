@@ -83,7 +83,17 @@ static void test_large_queue_and_calendar(void) {
     assert(!xkl_engine_capture_task(e,100,DAY,tokens,350,items,BANK,&untouched));
     after=snapshot(e,&after_n); assert(n==after_n && !memcmp(before,after,n)); free(after);
     before[n-1]^=1; assert(!xkl_engine_restore(before,n));
-    free(before); xkl_engine_free(e);
+    free(before);
+    /* Let the unchanged scheduler actually drain its queue: first occurrence
+       of every subsequent item must agree with our read-only cursor export. */
+    for (uint32_t i=0;i<info.item_count;++i) {
+        xkl_info_t now; assert(xkl_engine_info(e,&now));
+        assert(now.has_task && now.word==items[i].word);
+        assert(xkl_engine_answer(e,2,4+(int64_t)i));
+    }
+    xkl_info_t drained; assert(xkl_engine_info(e,&drained));
+    assert(!drained.has_task && drained.total_remaining==0);
+    xkl_engine_free(e);
     puts("PASS capture 292 selected, exact stages, midnight separation, atomic failures and unchanged snapshot");
 }
 
@@ -128,7 +138,15 @@ static void test_mixed_queue_after_midnight(void) {
         assert(items[i].word==i && items[i].category==XKL_TASK_UNLOADED_REVIEW);
     size_t after_n; uint8_t *after=snapshot(e,&after_n);
     assert(n==after_n && !memcmp(before,after,n));
-    free(after); free(before); xkl_engine_free(e);
+    free(after); free(before);
+    for (uint32_t i=0;i<info.item_count;++i) {
+        xkl_info_t now; assert(xkl_engine_info(e,&now));
+        assert(now.has_task && now.word==items[i].word);
+        assert(xkl_engine_answer(e,2,3+(int64_t)i));
+    }
+    xkl_info_t drained; assert(xkl_engine_info(e,&drained));
+    assert(!drained.has_task && drained.total_remaining==0);
+    xkl_engine_free(e);
     puts("PASS midnight-refreshed mixed 25 new + 25 reviews + 242 unloaded reviews");
 }
 
