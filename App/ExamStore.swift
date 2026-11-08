@@ -33,6 +33,9 @@ final class ExamStore: ObservableObject {
     @Published private(set) var totalRemaining = 0
     @Published private(set) var reinforcementRemaining = 0
     @Published private(set) var carryRemaining = 0
+    @Published private(set) var retryAvailable = 0
+    @Published private(set) var retryNextAvailableAt: Date?
+    @Published private(set) var canStartRetry = false
     @Published private(set) var partialPending = false
     @Published private(set) var conservativeEnabled = true
     @Published private(set) var examReductionEnabled = true
@@ -47,6 +50,7 @@ final class ExamStore: ObservableObject {
     private var requestedConservative = true
     private let directory: URL
     private let dualWriter: (Data, URL) throws -> Void
+    private let clock: () -> Date
     private var dualDisk: PublicDualStoreDisk?
     private var dualDurableSHA256: String?
     private var dualLegacyAnchor: Data?
@@ -91,8 +95,10 @@ final class ExamStore: ObservableObject {
         let volumes: [String: Data]
     }
 
-    init(baseDirectory: URL? = nil, dualWriter: @escaping (Data, URL) throws -> Void = DurableFile.write) {
+    init(baseDirectory: URL? = nil, dualWriter: @escaping (Data, URL) throws -> Void = DurableFile.write,
+         clock: @escaping () -> Date = Date.init) {
         self.dualWriter = dualWriter
+        self.clock = clock
         directory = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
             .appendingPathComponent("QuestionBank", isDirectory: true)
         do {
@@ -293,7 +299,7 @@ final class ExamStore: ObservableObject {
                 throw ExamError.invalid("题库正在变化，请重新打开后再切换；原记录已保留。")
             }
             let volumes = try orderedVolumes(loaded)
-            let now = Date()
+            let now = clock()
             let capture = try PublicDualLegacyCapture.read(snapshot: reread.snapshot, bankCount: loaded.bank.questions.count, now: now)
             let model = try PublicQuestionDualFSRS(migrating: loaded.bank, hash: hash, record: reread,
                 legacyRecordBytes: rawLegacy, priorVolumeBytes: volumes,
@@ -384,7 +390,11 @@ final class ExamStore: ObservableObject {
     func start() {
         if !isDualFSRS { prepareDualFSRSIfNeeded() }
         guard isDualFSRS else { return }
-        changeDual { try $0.start(now: Date()) }
+        changeDual { try $0.start(now: clock()) }
+    }
+    func startRetry() {
+        guard isDualFSRS, canStartRetry else { return }
+        changeDual { try $0.startRetry(now: clock()) }
     }
     func toggleOption(_ id: String, presentationID token: UUID? = nil) {
         guard let token, token == presentationID, !isShowingResult else { return }
@@ -392,22 +402,22 @@ final class ExamStore: ObservableObject {
     }
     func selectAndSubmit(_ id: String, presentationID token: UUID?) {
         guard let token, token == presentationID, !isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.selectAndSubmit(id, presentationID: token, now: Date()) } }
+        if isDualFSRS { changeDual { try $0.selectAndSubmit(id, presentationID: token, now: clock()) } }
     }
     func submit(presentationID token: UUID? = nil) {
         guard let token, token == presentationID, !isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.submitAutomatically(presentationID: token, now: Date()) } }
+        if isDualFSRS { changeDual { try $0.submitAutomatically(presentationID: token, now: clock()) } }
     }
     func nextQuestion(presentationID token: UUID? = nil) {
         guard let token, token == presentationID, isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.nextQuestion(presentationID: token, now: Date()) } }
+        if isDualFSRS { changeDual { try $0.nextQuestion(presentationID: token, now: clock()) } }
     }
-    func markFamiliar() { if isDualFSRS { changeDual { try $0.familiar(now: Date()) } } }
+    func markFamiliar() { if isDualFSRS { changeDual { try $0.familiar(now: clock()) } } }
     func undoFamiliar() {
         guard isDualFSRS, let disk = dualDisk, let bank, let anchor = dualLegacyAnchor else { return }
         do {
             let model = try PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)
-            if model.canUndo { changeDual { try $0.undo(now: Date()) } }
+            if model.canUndo { changeDual { try $0.undo(now: clock()) } }
             else if model.canUndoLegacy { try rebaseLegacyUndo(disk: disk, bank: bank, anchor: anchor) }
         } catch { self.error = error.localizedDescription }
     }
@@ -445,7 +455,7 @@ final class ExamStore: ObservableObject {
             }
             let candidate = try PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)
             try operation(candidate)
-            _ = try candidate.stats(now: Date())
+            _ = try candidate.stats(now: clock())
             var next = disk; next.state = candidate.state
             let bytes = try encodedDual(next)
             if bytes != current {
@@ -484,7 +494,7 @@ final class ExamStore: ObservableObject {
         guard try old.info.can_undo != 0, old.record.lastUndoableAttemptID != nil else {
             throw ExamError.invalid("旧题库的撤销状态无法核对，原记录已保留。")
         }
-        let now = Date()
+        let now = clock()
         try old.undo(now: now)
         guard old.record.lastUndoableAttemptID == nil else { throw ExamError.invalid("旧题库撤销未生效。") }
         let newAnchor = try encoded(old.record), anchorHash = StudySHA256.hex(newAnchor)
@@ -516,7 +526,7 @@ final class ExamStore: ObservableObject {
     }
 
     private func refreshDual(_ model: PublicQuestionDualFSRS) throws {
-        let now = Date(), stats = try model.stats(now: now), p = model.displayPresentation
+        let now = clock(), stats = try model.stats(now: now), p = model.displayPresentation
         bank = model.bank; dualDisplayPresentation = p
         currentQuestion = model.displayQuestion; presentationID = p?.id
         selectedOptionIDs = Set(p?.selectedOptionIDs ?? [])
@@ -534,6 +544,9 @@ final class ExamStore: ObservableObject {
         totalRemaining = stats.totalRemaining; dueTodayCount = stats.dueTodayCount
         reinforcementRemaining = stats.reinforcementRemaining
         carryRemaining = stats.carryRemaining
+        retryAvailable = stats.retryAvailable; retryNextAvailableAt = stats.retryNextAvailableAt
+        canStartRetry = stats.retryAvailable > 0 && model.state.queue.isEmpty &&
+            model.presentation == nil && !isShowingResult && !storageBlocked
         canMarkFamiliar = model.presentation != nil && !isShowingResult && !storageBlocked
         canUndo = (model.canUndo || model.canUndoLegacy) && !storageBlocked
         totalAnsweredCount = stats.totalAnsweredCount; wrongCount = stats.wrongCount
@@ -562,7 +575,7 @@ final class ExamStore: ObservableObject {
                 try candidate.rotate(reference: ExamVolumeReference(filename: hash + ".json", sha256: hash,
                     firstSequence: candidate.logBase + 1, lastSequence: info.log_records, attemptCount: newlyArchived.count))
             }
-            let today = try Self.studyDay(Date()), ready = try candidate.info
+            let today = try Self.studyDay(clock()), ready = try candidate.info
             if ready.has_task != 0 &&
                 (needsClockResume || ready.day != today || ready.selection_day != today) {
                 try candidate.start(day: today)
@@ -580,8 +593,8 @@ final class ExamStore: ObservableObject {
 
     private func refresh(_ engine: ExamLearningEngine) throws {
         let info = try engine.info, p = engine.displayPresentation
-        carryRemaining = 0
-        if let day = try? Self.studyDay(Date()) {
+        carryRemaining = 0; retryAvailable = 0; retryNextAvailableAt = nil; canStartRetry = false
+        if let day = try? Self.studyDay(clock()) {
             dueTodayCount = engine.dueCount(on: day)
         }
         bank = engine.bank; currentQuestion = engine.displayQuestion; presentationID = p?.id
@@ -614,7 +627,7 @@ final class ExamStore: ObservableObject {
     /// Coverage is not mastery: a first graded answer or explicit familiar
     /// action covers a question. Undone actions are excluded. No card is edited.
     private func refreshPlanningCounts() {
-        guard let bank, let record, let day = try? Self.studyDay(Date()) else { return }
+        guard let bank, let record, let day = try? Self.studyDay(clock()) else { return }
         let all = priorAttempts + record.attempts
         let undone = Set(all.compactMap(\.undoneAttemptID))
         var first: [String: ExamAttempt] = [:]
@@ -683,10 +696,10 @@ final class ExamStore: ObservableObject {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         if !dualVersions.isEmpty {
             return try encoder.encode(PublicRecordsExportV3(format: "xkl-ios-question-records-v3",
-                exportedAt: Date(), activeBankSHA256: record?.bankSHA256, versions: versions, dualVersions: dualVersions))
+                exportedAt: clock(), activeBankSHA256: record?.bankSHA256, versions: versions, dualVersions: dualVersions))
         }
         return try encoder.encode(ExamRecordsExport(format: "xkl-ios-question-records-v2",
-            exportedAt: Date(), activeBankSHA256: record?.bankSHA256, versions: versions))
+            exportedAt: clock(), activeBankSHA256: record?.bankSHA256, versions: versions))
     }
     static func studyDay(_ date: Date) throws -> UInt32 {
         var local = Calendar(identifier: .gregorian); local.timeZone = .current
