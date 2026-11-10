@@ -1029,12 +1029,12 @@ private struct HandbookCardFace: View {
     /// Compact top-right entry preserves the full card width on small screens.
     var questionAction: (() -> Void)? = nil
     var questionAccessibilityID = "handbook-outline-related-questions"
-    @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24.0
-    @ScaledMetric(relativeTo: .title2) private var promptSize: CGFloat = 21.0
-    @ScaledMetric(relativeTo: .title2) private var summarySize: CGFloat = 20.0
-    @ScaledMetric(relativeTo: .body) private var exampleSize: CGFloat = 18.0
-    @ScaledMetric(relativeTo: .body) private var stepSize: CGFloat = 18.0
-    @ScaledMetric(relativeTo: .body) private var noteSize: CGFloat = 16.0
+    @ScaledMetric(relativeTo: .headline) private var titleSize: CGFloat = 21.0
+    @ScaledMetric(relativeTo: .body) private var promptSize: CGFloat = 18.0
+    @ScaledMetric(relativeTo: .body) private var summarySize: CGFloat = 18.0
+    @ScaledMetric(relativeTo: .body) private var exampleSize: CGFloat = 17.0
+    @ScaledMetric(relativeTo: .body) private var stepSize: CGFloat = 17.0
+    @ScaledMetric(relativeTo: .body) private var noteSize: CGFloat = 15.0
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if !focused || questionAction != nil { HStack {
@@ -1058,7 +1058,7 @@ private struct HandbookCardFace: View {
                         .foregroundStyle(.blue.opacity(0.7))
                 }
             } }
-            HandbookMarkedText(source: card.title, fieldID: "title").font(.system(size: titleSize, weight: .bold, design: .rounded))
+            HandbookMarkedText(source: card.title, fieldID: "title").font(.system(size: titleSize, weight: .semibold, design: .default))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
             if let label = frequencyLabel {
                 Text(verbatim: label).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
@@ -1085,7 +1085,7 @@ private struct HandbookCardFace: View {
                     if !block.collapsed { HandbookCardBlockView(block: block, blockID: "blocks.\(index)", masked: true, focused: focused) }
                 }
             } else if !revealed {
-                HandbookMarkedText(source: card.prompt, fieldID: "prompt").font(.system(size: promptSize)).lineSpacing(8)
+                HandbookMarkedText(source: card.prompt, fieldID: "prompt").font(.system(size: promptSize)).lineSpacing(6)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("handbook-card-prompt")
                     .padding(.top, 5).padding(.bottom, 34)
@@ -1100,7 +1100,7 @@ private struct HandbookCardFace: View {
     private var fullAnswer: some View {
         VStack(alignment: .leading, spacing: 18) {
                 if !focused || card.answerSummary != "讲义原文" {
-                HandbookMarkedText(source: card.answerSummary, fieldID: "summary").font(.system(size: summarySize, weight: .medium)).lineSpacing(7)
+                HandbookMarkedText(source: card.answerSummary, fieldID: "summary").font(.system(size: summarySize)).lineSpacing(6)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-summary")
                 }
                 ForEach(Array(card.blocks.enumerated()), id: \.offset) { index, block in
@@ -1151,7 +1151,7 @@ private struct HandbookCardFace: View {
 private struct HandbookMemoryGuideView: View {
     let guide: HandbookCardPackage.MemoryGuide
     let revealed: Bool
-    @ScaledMetric(relativeTo: .body) private var rowSize: CGFloat = 19
+    @ScaledMetric(relativeTo: .body) private var rowSize: CGFloat = 18
     @State private var helpExpanded = false
     #if DEBUG
     @Environment(\.handbookCardPreview) private var preview
@@ -1162,11 +1162,11 @@ private struct HandbookMemoryGuideView: View {
             ForEach(Array(guide.rows.enumerated()), id: \.offset) { index, row in
                 HStack(alignment: .top, spacing: 4) {
                     HandbookMarkedText(source: row.cue, fieldID: "guide.rows.\(index).cue", suffix: "：")
-                        .font(.system(size: rowSize, weight: .medium))
+                        .font(.system(size: rowSize, weight: .medium)).lineSpacing(5)
                         .fixedSize(horizontal: false, vertical: true)
                     if showAnswers {
                         HandbookMarkedText(source: row.answer, fieldID: "guide.rows.\(index).answer")
-                            .font(.system(size: rowSize)).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: rowSize)).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                     } else {
                         Text("已遮住").font(.subheadline).foregroundStyle(.secondary)
                             .padding(.horizontal, 12).padding(.vertical, 4)
@@ -1315,8 +1315,8 @@ private struct HandbookCardBlockView: View {
     var masked = false
     var focused = false
     @Environment(\.dynamicTypeSize) private var dynamicType
-    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 19.0
-    @ScaledMetric(relativeTo: .body) private var keySize: CGFloat = 17.0
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 18.0
+    @ScaledMetric(relativeTo: .body) private var keySize: CGFloat = 16.0
     @ScaledMetric(relativeTo: .body) private var keyWidth: CGFloat = 72.0
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -1386,6 +1386,7 @@ private struct HandbookCardBlockView: View {
             HandbookAnswerMask()
         } else {
             HandbookMarkedText(source: cell, fieldID: blockID + ".rows.\(rowIndex).\(column)").font(.system(size: column == 0 ? keySize : bodySize, weight: column == 0 ? .semibold : .regular))
+                .lineSpacing(5)
                 .foregroundStyle(column == 0 ? Color.blue : Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
