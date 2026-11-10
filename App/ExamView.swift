@@ -19,6 +19,7 @@ struct ExamView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @ScaledMetric(relativeTo: .body) private var scaledActionHeight: CGFloat = 48
     @ScaledMetric(relativeTo: .footnote) private var scaledUndoHeight: CGFloat = 34
+    @ScaledMetric(relativeTo: .body) private var questionTextSize: CGFloat = 18
 
     private var actionHeight: CGFloat { verticalSizeClass == .compact ? 48 : scaledActionHeight }
     private var undoHeight: CGFloat { verticalSizeClass == .compact ? 30 : scaledUndoHeight }
@@ -340,7 +341,8 @@ struct ExamView: View {
             VStack(alignment: .leading, spacing: 22) {
                 questionHeader(question)
                 Text(question.prompt)
-                    .font(.title3.weight(.medium))
+                    .font(.system(size: questionTextSize, weight: .regular))
+                    .lineSpacing(5)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .accessibilityAddTraits(.isHeader)
@@ -644,9 +646,10 @@ private struct ExamOptionRow: View {
                     .foregroundStyle(indicatorColor)
                     .frame(width: 24)
                     .padding(.top, 1)
-                Text(displayLabel).font(.body.weight(.semibold))
+                Text(displayLabel).font(.body.weight(.medium))
                 Text(option.text)
                     .font(.body)
+                    .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
