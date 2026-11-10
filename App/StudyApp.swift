@@ -8,7 +8,9 @@ import StudyCore
 struct StudyApp: App {
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--effective-time-preview") {
+            if ProcessInfo.processInfo.arguments.contains("--public-exam-preview") {
+                PublicExamPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--effective-time-preview") {
                 EffectiveStudyTimePreview()
             } else if ProcessInfo.processInfo.arguments.contains("--handbook-card-preview") {
                 HandbookCardPreview()
