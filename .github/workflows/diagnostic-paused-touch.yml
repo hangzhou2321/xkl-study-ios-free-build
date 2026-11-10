@@ -26,7 +26,7 @@ jobs:
           set -euo pipefail
           echo 'DIAGNOSTIC ONLY: selected model tests; the full suite and device acceptance remain separate.'
           mkdir -p build/targeted-tests
-          for suite in PublicPocketMigrationTests PublicPocketStoreIntegrationTests PublicDualStoreIntegrationTests ExamTests; do
+          for suite in StudyFlowTests EffectiveStudyTimeTests EffectiveStudyScreenTests; do
             swift test --jobs 2 --filter "$suite" 2>&1 | tee "build/targeted-tests/$suite.log"
             SUITE="$suite" python3 - <<'PY'
           import os, re
