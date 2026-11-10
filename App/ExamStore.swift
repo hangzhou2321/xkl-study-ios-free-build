@@ -40,6 +40,7 @@ final class ExamStore: ObservableObject {
     @Published private(set) var conservativeEnabled = true
     @Published private(set) var examReductionEnabled = true
     @Published private(set) var isDualFSRS = false
+    @Published private(set) var isPocketRelearning = false
     @Published private(set) var unseenQuestionCount = 0
     @Published private(set) var newIntroducedToday = 0
     @Published private(set) var planningDay = 0
@@ -51,11 +52,17 @@ final class ExamStore: ObservableObject {
     private let directory: URL
     private let dualWriter: (Data, URL) throws -> Void
     private let clock: () -> Date
+    // Allows regression tests to create and exercise the previous release's
+    // source archives. All app entry points use the default Pocket mode.
+    private let legacyDualForTesting: Bool
     private var dualDisk: PublicDualStoreDisk?
     private var dualDurableSHA256: String?
     private var dualLegacyAnchor: Data?
     private var dualVolumeBytes: [Data] = []
     private var dualDisplayPresentation: ExamPresentation?
+    private var pocketDisplayPresentation: ExamPresentation?
+    private var pocketDisk: PublicPocketStoreDisk?
+    private var pocketDurableSHA256: String?
     private var banksDirectory: URL { directory.appendingPathComponent("banks", isDirectory: true) }
     private var versionsDirectory: URL { directory.appendingPathComponent("versions", isDirectory: true) }
     private var activeURL: URL { directory.appendingPathComponent("active-bank.json") }
@@ -70,6 +77,16 @@ final class ExamStore: ObservableObject {
         var priorDualRevisionSHA256s: [String] = []
     }
     private struct PublicDualMarker: Codable {
+        let format: String
+        let bankSHA256: String
+    }
+    private struct PublicPocketStoreDisk: Codable {
+        var format = "xkl-ios-public-pocket-relearn-v1"
+        let bankSHA256: String
+        let rootLegacySHA256: String
+        var plan: PublicPocketMigrationPlan
+    }
+    private struct PublicPocketMarker: Codable {
         let format: String
         let bankSHA256: String
     }
@@ -88,6 +105,21 @@ final class ExamStore: ObservableObject {
         let versions: [ExamVersionExport]
         let dualVersions: [PublicDualExport]
     }
+    private struct PublicPocketExport: Codable {
+        let bankSHA256: String
+        let markerBytes: Data
+        let currentBytes: Data
+        let sourceDualBytes: Data
+        let volumes: [String: Data]
+    }
+    private struct PublicRecordsExportV4: Codable {
+        let format: String
+        let exportedAt: Date
+        let activeBankSHA256: String?
+        let versions: [ExamVersionExport]
+        let dualVersions: [PublicDualExport]
+        let pocketVersions: [PublicPocketExport]
+    }
     private struct LoadedVersion {
         let bank: ExamBank
         let engine: ExamLearningEngine
@@ -95,10 +127,12 @@ final class ExamStore: ObservableObject {
         let volumes: [String: Data]
     }
 
-    init(baseDirectory: URL? = nil, dualWriter: @escaping (Data, URL) throws -> Void = DurableFile.write,
+    init(baseDirectory: URL? = nil, legacyDualForTesting: Bool = false,
+         dualWriter: @escaping (Data, URL) throws -> Void = DurableFile.write,
          clock: @escaping () -> Date = Date.init) {
         self.dualWriter = dualWriter
         self.clock = clock
+        self.legacyDualForTesting = legacyDualForTesting
         directory = (baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
             .appendingPathComponent("QuestionBank", isDirectory: true)
         do {
@@ -112,7 +146,9 @@ final class ExamStore: ObservableObject {
                 let loaded = try loadVersion(active.bankSHA256)
                 bank = loaded.bank; record = loaded.engine.record; priorAttempts = loaded.priorAttempts
                 requestedConservative = loaded.engine.record.analysis.conservativeEnabled
-                if try attachExistingDual(loaded) == false { try refresh(loaded.engine) }
+                if try attachExistingPocket(loaded) == false {
+                    if try attachExistingDual(loaded) == false { try refresh(loaded.engine) }
+                }
             }
         } catch { block(error) }
     }
@@ -128,6 +164,11 @@ final class ExamStore: ObservableObject {
     private func dualMarkerURL(_ hash: String) -> URL { versionURL(hash).appendingPathComponent("dual-fsrs-enabled.json") }
     private func anchorURL(_ hash: String, _ value: String) -> URL { dualRoot(hash).appendingPathComponent("anchors", isDirectory: true).appendingPathComponent(value + ".json") }
     private func dualRevisionURL(_ hash: String, _ value: String) -> URL { dualRoot(hash).appendingPathComponent("revisions", isDirectory: true).appendingPathComponent(value + ".json") }
+    private func pocketRoot(_ hash: String) -> URL { versionURL(hash).appendingPathComponent("pocket-relearn", isDirectory: true) }
+    private func pocketURL(_ hash: String) -> URL { pocketRoot(hash).appendingPathComponent("current.json") }
+    private func pocketMarkerURL(_ hash: String) -> URL { versionURL(hash).appendingPathComponent("pocket-relearn-enabled.json") }
+    private func pocketSourceURL(_ hash: String, _ value: String) -> URL { pocketRoot(hash).appendingPathComponent("sources", isDirectory: true).appendingPathComponent(value + ".json") }
+    private func pocketVolumesURL(_ hash: String) -> URL { pocketRoot(hash).appendingPathComponent("volumes", isDirectory: true) }
     private func encoded(_ record: ExamDiskRecord) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(record)
@@ -180,6 +221,10 @@ final class ExamStore: ObservableObject {
     }
 
     private func encodedDual(_ value: PublicDualStoreDisk) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+    private func encodedPocket(_ value: PublicPocketStoreDisk) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(value)
     }
@@ -286,11 +331,154 @@ final class ExamStore: ObservableObject {
         return true
     }
 
+    private func ensurePocketMarker(_ hash: String) throws {
+        let url = pocketMarkerURL(hash)
+        if FileManager.default.fileExists(atPath: url.path) {
+            let marker = try JSONDecoder().decode(PublicPocketMarker.self, from: boundedData(url))
+            guard marker.format == "xkl-ios-public-pocket-relearn-enabled-v1", marker.bankSHA256 == hash else {
+                throw ExamError.invalid("单词式题库标记不一致，原记录已保留。")
+            }
+            return
+        }
+        try writeImmutable(JSONEncoder().encode(PublicPocketMarker(
+            format: "xkl-ios-public-pocket-relearn-enabled-v1", bankSHA256: hash)), to: url)
+    }
+
+    /// Verify the frozen dual source, migration plan, every retained Pocket
+    /// volume and the still-parked old obligations before allowing writes.
+    private func verifyPocket(_ disk: PublicPocketStoreDisk, loaded: LoadedVersion) throws ->
+        (ExamLearningEngine, PublicQuestionDualFSRS, [ExamAttempt]) {
+        let hash = loaded.engine.record.bankSHA256, plan = disk.plan
+        guard disk.format == "xkl-ios-public-pocket-relearn-v1", disk.bankSHA256 == hash,
+              plan.bankSHA256 == hash, plan.bankID == loaded.bank.id,
+              ExamContent.isHash(disk.rootLegacySHA256), ExamContent.isHash(plan.sourceDualSHA256),
+              ExamContent.isHash(plan.sourceAnchorSHA256),
+              StudySHA256.hex(try boundedData(stateURL(hash))) == disk.rootLegacySHA256 else {
+            throw ExamError.invalid("单词式题库或原档身份不一致，已暂停写入。")
+        }
+        let sourceRaw = try boundedData(dualURL(hash))
+        guard StudySHA256.hex(sourceRaw) == plan.sourceDualSHA256,
+              try boundedData(pocketSourceURL(hash, plan.sourceDualSHA256)) == sourceRaw else {
+            throw ExamError.invalid("双 FSRS 来源档案已变化，已暂停写入并保留原记录。")
+        }
+        let sourceDisk = try JSONDecoder().decode(PublicDualStoreDisk.self, from: sourceRaw)
+        let (source, anchor, volumes) = try verifyDual(sourceDisk, loaded: loaded)
+        guard StudySHA256.hex(anchor) == plan.sourceAnchorSHA256 else {
+            throw ExamError.invalid("单词式题库迁移锚点不一致，原记录已保留。")
+        }
+        let expected = try PublicPocketMigration.prepare(bank: loaded.bank, hash: hash,
+            source: source.state, sourceDualBytes: sourceRaw, anchorBytes: anchor,
+            priorVolumeBytes: volumes, now: plan.migratedAt, stream: plan.streamID)
+        guard plan.questionIDs == expected.questionIDs, plan.mappedCards == expected.mappedCards,
+              plan.initialObligations == expected.initialObligations,
+              plan.bridgeReview == nil || plan.bridgeReview == source.state.answerReview else {
+            throw ExamError.invalid("单词式题库映射或结果页不一致，原记录已保留。")
+        }
+        let originalParked = expected.parkedObligations
+        guard plan.parkedObligations.count <= originalParked.count,
+              plan.parkedObligations == Array(originalParked.suffix(plan.parkedObligations.count)) else {
+            throw ExamError.invalid("原待办顺序不一致，原记录已保留。")
+        }
+        let engine = try ExamLearningEngine(bank: loaded.bank, hash: hash, record: plan.record)
+        let snapshot = try PocketEngine(snapshot: plan.record.snapshot)
+        let parked = Set(plan.parkedObligations.map(\.word)), inert: UInt32 = (1 << 20) | (1 << 22) | 65_535
+        for item in originalParked {
+            let packed = snapshot.packedCard(at: item.word)
+            guard parked.contains(item.word) ? packed == inert : packed != inert else {
+                throw ExamError.invalid("原待办接续状态不一致，原记录已保留。")
+            }
+        }
+        var prior = source.state.legacyAttempts + source.state.events.compactMap(\.attempt)
+        for (index, reference) in plan.record.volumes.enumerated() {
+            let raw = try boundedData(pocketVolumesURL(hash).appendingPathComponent(reference.filename))
+            guard StudySHA256.hex(raw) == reference.sha256 else { throw ExamError.invalid("题库新分卷校验失败。") }
+            let archived = try JSONDecoder().decode(ExamDiskRecord.self, from: raw)
+            let old = try ExamLearningEngine(bank: loaded.bank, hash: hash, record: archived)
+            guard archived.volumes == Array(plan.record.volumes.prefix(index)),
+                  old.logBase + 1 == reference.firstSequence,
+                  try old.info.log_records == reference.lastSequence,
+                  archived.attempts.count == reference.attemptCount else {
+                throw ExamError.invalid("题库新分卷边界不一致。")
+            }
+            prior += archived.attempts
+        }
+        let all = prior + plan.record.attempts
+        guard Set(all.map(\.id)).count == all.count else { throw ExamError.invalid("题库真实作答出现重复，已暂停写入。") }
+        return (engine, source, prior)
+    }
+
+    @discardableResult private func attachExistingPocket(_ loaded: LoadedVersion) throws -> Bool {
+        let hash = loaded.engine.record.bankSHA256
+        let current = FileManager.default.fileExists(atPath: pocketURL(hash).path)
+        let marker = FileManager.default.fileExists(atPath: pocketMarkerURL(hash).path)
+        guard current else {
+            if marker { throw ExamError.invalid("单词式题库当前记录缺失，原档已保留，停止写入。") }
+            return false
+        }
+        let raw = try boundedData(pocketURL(hash))
+        let disk = try JSONDecoder().decode(PublicPocketStoreDisk.self, from: raw)
+        let (engine, _, prior) = try verifyPocket(disk, loaded: loaded)
+        try ensurePocketMarker(hash)
+        pocketDisk = disk; pocketDurableSHA256 = StudySHA256.hex(raw)
+        record = engine.record; priorAttempts = prior; isDualFSRS = false; isPocketRelearning = true
+        try refreshPocket(engine, bridgeReview: disk.plan.bridgeReview)
+        return true
+    }
+
+    /// First activation creates a separate, checked Pocket stream. Neither the
+    /// original Pocket root nor the subsequently earned dual events is edited.
+    func preparePocketRelearningIfNeeded() {
+        guard !storageBlocked, !isPocketRelearning, let hash = record?.bankSHA256 else { return }
+        var attemptedWrite = false
+        do {
+            let loaded = try loadVersion(hash)
+            if try attachExistingPocket(loaded) { return }
+            if !isDualFSRS {
+                if try attachExistingDual(loaded) == false {
+                    // A bank that never used dual FSRS keeps its original
+                    // Pocket state and policy; nothing is reconstructed.
+                    isPocketRelearning = true; try refresh(loaded.engine); return
+                }
+            }
+            guard let dualDisk, let anchor = dualLegacyAnchor, let expected = dualDurableSHA256 else {
+                throw ExamError.invalid("缺少双 FSRS 迁移来源，原记录已保留。")
+            }
+            let sourceRaw = try boundedData(dualURL(hash))
+            guard StudySHA256.hex(sourceRaw) == expected,
+                  StudySHA256.hex(try boundedData(stateURL(hash))) == dualDisk.rootLegacySHA256 else {
+                throw ExamError.invalid("题库正在变化，请重新打开核对；原记录已保留。")
+            }
+            let plan = try PublicPocketMigration.prepare(bank: loaded.bank, hash: hash, source: dualDisk.state,
+                sourceDualBytes: sourceRaw, anchorBytes: anchor, priorVolumeBytes: dualVolumeBytes, now: clock())
+            let disk = PublicPocketStoreDisk(bankSHA256: hash, rootLegacySHA256: dualDisk.rootLegacySHA256, plan: plan)
+            let raw = try encodedPocket(disk)
+            try FileManager.default.createDirectory(at: pocketRoot(hash), withIntermediateDirectories: true)
+            attemptedWrite = true
+            try writeImmutable(sourceRaw, to: pocketSourceURL(hash, plan.sourceDualSHA256))
+            guard !FileManager.default.fileExists(atPath: pocketURL(hash).path),
+                  StudySHA256.hex(try boundedData(dualURL(hash))) == expected,
+                  StudySHA256.hex(try boundedData(stateURL(hash))) == dualDisk.rootLegacySHA256 else {
+                throw ExamError.invalid("题库迁移期间发生变化，未覆盖较新的记录。")
+            }
+            try dualWriter(raw, pocketURL(hash))
+            guard try boundedData(pocketURL(hash)) == raw else { throw ExamError.invalid("单词式题库当前记录核验失败。") }
+            try ensurePocketMarker(hash)
+            let (engine, _, prior) = try verifyPocket(disk, loaded: loaded)
+            pocketDisk = disk; pocketDurableSHA256 = StudySHA256.hex(raw)
+            record = engine.record; priorAttempts = prior; isDualFSRS = false; isPocketRelearning = true
+            needsClockResume = true; try refreshPocket(engine, bridgeReview: plan.bridgeReview); error = nil
+        } catch {
+            if attemptedWrite { block(error) }
+            else { self.error = error.localizedDescription + "\n尚未切换，双 FSRS 和原记录均已保留。" }
+        }
+    }
+
     /// Called when the public question bank is opened or started. It records no
     /// new answer; the actual current question, selection and old obligations
     /// are copied into the checked dual state by the migration model.
     func prepareDualFSRSIfNeeded() {
-        guard !storageBlocked, !isDualFSRS, let hash = record?.bankSHA256 else { return }
+        guard legacyDualForTesting, !storageBlocked, !isDualFSRS, !isPocketRelearning,
+              let hash = record?.bankSHA256 else { return }
         var attemptedWrite = false
         do {
             let loaded = try loadVersion(hash)
@@ -364,6 +552,14 @@ final class ExamStore: ObservableObject {
             let loaded = try loadVersion(content.bankSHA256)
             let dualExists = FileManager.default.fileExists(atPath: dualURL(content.bankSHA256).path)
             let markerExists = FileManager.default.fileExists(atPath: dualMarkerURL(content.bankSHA256).path)
+            let pocketExists = FileManager.default.fileExists(atPath: pocketURL(content.bankSHA256).path)
+            let pocketMarkerExists = FileManager.default.fileExists(atPath: pocketMarkerURL(content.bankSHA256).path)
+            if pocketExists {
+                let disk = try JSONDecoder().decode(PublicPocketStoreDisk.self, from: boundedData(pocketURL(content.bankSHA256)))
+                _ = try verifyPocket(disk, loaded: loaded)
+            } else if pocketMarkerExists {
+                throw ExamError.invalid("单词式题库当前记录缺失，拒绝用旧题库覆盖。")
+            }
             if dualExists {
                 let disk = try JSONDecoder().decode(PublicDualStoreDisk.self, from: boundedData(dualURL(content.bankSHA256)))
                 _ = try verifyDual(disk, loaded: loaded)
@@ -371,7 +567,15 @@ final class ExamStore: ObservableObject {
                 throw ExamError.invalid("双 FSRS 当前记录缺失，拒绝用旧题库覆盖。")
             }
             // Reimport of the currently active bank is a verified no-op.
-            if isDualFSRS, record?.bankSHA256 == content.bankSHA256 {
+            if isPocketRelearning, record?.bankSHA256 == content.bankSHA256 {
+                if pocketDisk != nil {
+                    guard pocketExists, StudySHA256.hex(try boundedData(pocketURL(content.bankSHA256))) == pocketDurableSHA256 else {
+                        throw ExamError.invalid("题库记录已变化，未覆盖较新的记录。")
+                    }
+                }
+                error = nil; return
+            }
+            if legacyDualForTesting, isDualFSRS, record?.bankSHA256 == content.bankSHA256 {
                 guard dualExists, StudySHA256.hex(try boundedData(dualURL(content.bankSHA256))) == dualDurableSHA256 else {
                     throw ExamError.invalid("题库记录已变化，未覆盖较新的记录。")
                 }
@@ -380,19 +584,42 @@ final class ExamStore: ObservableObject {
             try DurableFile.write(try JSONEncoder().encode(ActiveBank(format: 2, bankSHA256: content.bankSHA256)), to: activeURL)
             bank = loaded.bank; record = loaded.engine.record; priorAttempts = loaded.priorAttempts
             needsClockResume = true
-            isDualFSRS = false; dualDisk = nil; dualDurableSHA256 = nil
+            isDualFSRS = false; isPocketRelearning = false; dualDisk = nil; dualDurableSHA256 = nil
             dualLegacyAnchor = nil; dualVolumeBytes = []; dualDisplayPresentation = nil
-            if dualExists { _ = try attachExistingDual(loaded) }
-            else { try refresh(loaded.engine) }
+            pocketDisk = nil; pocketDurableSHA256 = nil; pocketDisplayPresentation = nil
+            if pocketExists { _ = try attachExistingPocket(loaded) }
+            else if dualExists {
+                _ = try attachExistingDual(loaded)
+                if !legacyDualForTesting {
+                    preparePocketRelearningIfNeeded()
+                    guard isPocketRelearning else { return }
+                }
+            }
+            else if legacyDualForTesting { try refresh(loaded.engine); prepareDualFSRSIfNeeded() }
+            else { isPocketRelearning = true; try refresh(loaded.engine) }
             error = nil
-            if !isDualFSRS { prepareDualFSRSIfNeeded() }
         } catch { block(error) }
     }
 
     func start() {
-        if !isDualFSRS { prepareDualFSRSIfNeeded() }
-        guard isDualFSRS else { return }
-        changeDual { try $0.start(now: clock()) }
+        if legacyDualForTesting {
+            if !isDualFSRS { prepareDualFSRSIfNeeded() }
+            if isDualFSRS { changeDual { try $0.start(now: clock()) } }
+            return
+        }
+        if !isPocketRelearning { preparePocketRelearningIfNeeded() }
+        guard isPocketRelearning else { return }
+        if pocketDisk != nil {
+            changePocket { engine, plan, source in
+                guard plan.bridgeReview == nil else { return }
+                if (try engine.info).has_task == 0 && !plan.parkedObligations.isEmpty {
+                    let next = Array(plan.parkedObligations.prefix(20))
+                    try engine.admitParked(next, mappedCards: plan.mappedCards,
+                                           legacyTokens: source.legacyTokens, now: clock())
+                    plan.parkedObligations.removeFirst(next.count)
+                } else { try engine.start(day: Self.studyDay(clock()), now: clock()) }
+            }
+        } else { change { try $0.start(day: Self.studyDay(clock()), now: clock()) } }
     }
     func startRetry() {
         guard isDualFSRS, canStartRetry else { return }
@@ -400,48 +627,169 @@ final class ExamStore: ObservableObject {
     }
     func toggleOption(_ id: String, presentationID token: UUID? = nil) {
         guard let token, token == presentationID, !isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.toggle(id, token: token) } }
+        if legacyDualForTesting, isDualFSRS { changeDual { try $0.toggle(id, token: token) } }
+        else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.toggle(id) } }
+        else if isPocketRelearning { change { try $0.toggle(id) } }
     }
     func selectAndSubmit(_ id: String, presentationID token: UUID?) {
         guard let token, token == presentationID, !isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.selectAndSubmit(id, presentationID: token, now: clock()) } }
+        if legacyDualForTesting, isDualFSRS { changeDual { try $0.selectAndSubmit(id, presentationID: token, now: clock()) } }
+        else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.selectAndSubmit(id, presentationID: token, now: clock()) } }
+        else if isPocketRelearning { change { try $0.selectAndSubmit(id, presentationID: token, now: clock()) } }
     }
     func submit(presentationID token: UUID? = nil) {
         guard let token, token == presentationID, !isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.submitAutomatically(presentationID: token, now: clock()) } }
+        if legacyDualForTesting, isDualFSRS { changeDual { try $0.submitAutomatically(presentationID: token, now: clock()) } }
+        else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.submitAutomatically(presentationID: token, now: clock()) } }
+        else if isPocketRelearning { change { try $0.submitAutomatically(presentationID: token, now: clock()) } }
     }
     func nextQuestion(presentationID token: UUID? = nil) {
         guard let token, token == presentationID, isShowingResult else { return }
-        if isDualFSRS { changeDual { try $0.nextQuestion(presentationID: token, now: clock()) } }
+        if legacyDualForTesting, isDualFSRS { changeDual { try $0.nextQuestion(presentationID: token, now: clock()) } }
+        else if isPocketRelearning, pocketDisk != nil {
+            changePocket { engine, plan, _ in
+                if plan.bridgeReview?.presentation.id == token { plan.bridgeReview = nil }
+                else { try engine.nextQuestion(presentationID: token, now: clock()) }
+            }
+        } else if isPocketRelearning { change { try $0.nextQuestion(presentationID: token, now: clock()) } }
     }
-    func markFamiliar() { if isDualFSRS { changeDual { try $0.familiar(now: clock()) } } }
+    func markFamiliar() {
+        if legacyDualForTesting, isDualFSRS { changeDual { try $0.familiar(now: clock()) } }
+        else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.familiar(now: clock()) } }
+        else if isPocketRelearning { change { try $0.familiar(now: clock()) } }
+    }
     func undoFamiliar() {
-        guard isDualFSRS, let disk = dualDisk, let bank, let anchor = dualLegacyAnchor else { return }
-        do {
-            let model = try PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)
-            if model.canUndo { changeDual { try $0.undo(now: clock()) } }
-            else if model.canUndoLegacy { try rebaseLegacyUndo(disk: disk, bank: bank, anchor: anchor) }
-        } catch { self.error = error.localizedDescription }
+        if legacyDualForTesting, isDualFSRS, let disk = dualDisk, let bank, let anchor = dualLegacyAnchor {
+            do {
+                let model = try PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)
+                if model.canUndo { changeDual { try $0.undo(now: clock()) } }
+                else if model.canUndoLegacy { try rebaseLegacyUndo(disk: disk, bank: bank, anchor: anchor) }
+            } catch { self.error = error.localizedDescription }
+            return
+        }
+        if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.undo(now: clock()) } }
+        else if isPocketRelearning { change { try $0.undo(now: clock()) } }
     }
     func setPolicy(conservative enabled: Bool) {
         requestedConservative = enabled
-        // RootView may synchronize settings before opening the bank. Migrate
-        // first and never alter the original scheduler as a side effect.
-        if !isDualFSRS { prepareDualFSRSIfNeeded() }
+        if legacyDualForTesting { if !isDualFSRS { prepareDualFSRSIfNeeded() }; return }
+        guard isPocketRelearning, record?.analysis.conservativeEnabled != enabled else { return }
+        if pocketDisk != nil { changePocket { engine, _, _ in try engine.setPolicy(enabled, now: clock()) } }
+        else { change { try $0.setPolicy(enabled, now: clock()) } }
     }
     func setExamReduction(enabled: Bool) {
-        if !isDualFSRS { prepareDualFSRSIfNeeded() }
+        if legacyDualForTesting { if !isDualFSRS { prepareDualFSRSIfNeeded() }; return }
+        if !isPocketRelearning { preparePocketRelearningIfNeeded() }
+        guard isPocketRelearning, examReductionEnabled != enabled else { return }
+        if pocketDisk != nil { changePocket { engine, _, _ in engine.setExamReduction(enabled, now: clock()) } }
+        else { change { $0.setExamReduction(enabled, now: clock()) } }
     }
     func refreshStudyDate() {
         guard !storageBlocked, record != nil else { return }
-        if !isDualFSRS { prepareDualFSRSIfNeeded() }
-        guard isDualFSRS, let disk = dualDisk, let bank else { return }
-        do { try refreshDual(PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)) }
-        catch { self.error = error.localizedDescription }
+        if legacyDualForTesting {
+            if !isDualFSRS { prepareDualFSRSIfNeeded() }
+            guard isDualFSRS, let disk = dualDisk, let bank else { return }
+            do { try refreshDual(PublicQuestionDualFSRS(state: disk.state, bank: bank, hash: disk.bankSHA256)) }
+            catch { self.error = error.localizedDescription }
+            return
+        }
+        guard isPocketRelearning else { return }
+        if let disk = pocketDisk, let bank {
+            do { try refreshPocket(ExamLearningEngine(bank: bank, hash: disk.bankSHA256, record: disk.plan.record), bridgeReview: disk.plan.bridgeReview) }
+            catch { self.error = error.localizedDescription }
+        } else if let record, let bank {
+            do { try refresh(ExamLearningEngine(bank: bank, hash: record.bankSHA256, record: record)) }
+            catch { self.error = error.localizedDescription }
+        }
     }
     func displayLabel(for optionID: String) -> String {
         ExamPresentation.label(optionID,
-            in: (isDualFSRS ? dualDisplayPresentation : (record?.answerReview?.presentation ?? record?.presentation))?.optionOrder ?? [])
+            in: (isPocketRelearning ? pocketDisplayPresentation : dualDisplayPresentation)?.optionOrder ?? [])
+    }
+
+    /// Each candidate starts from the last durable independent Pocket stream.
+    /// The archived dual state and old Pocket root are checked before and after
+    /// the operation and are never replaced with an earlier snapshot.
+    private func changePocket(_ operation: (ExamLearningEngine, inout PublicPocketMigrationPlan, PublicQuestionDualState) throws -> Void) {
+        guard !storageBlocked, let disk = pocketDisk, let bank, let expected = pocketDurableSHA256 else { return }
+        var attemptedWrite = false
+        do {
+            let hash = disk.bankSHA256
+            let current = try boundedData(pocketURL(hash)), sourceRaw = try boundedData(dualURL(hash))
+            guard StudySHA256.hex(current) == expected,
+                  StudySHA256.hex(sourceRaw) == disk.plan.sourceDualSHA256,
+                  StudySHA256.hex(try boundedData(stateURL(hash))) == disk.rootLegacySHA256 else {
+                throw ExamError.invalid("题库记录已在别处变化，未覆盖较新的记录。")
+            }
+            let source = try JSONDecoder().decode(PublicDualStoreDisk.self, from: sourceRaw).state
+            let candidate = try ExamLearningEngine(bank: bank, hash: hash, record: disk.plan.record)
+            var next = disk, newlyArchived: [ExamAttempt] = []
+            let initial = try candidate.info
+            if candidate.volumeRecords >= initial.log_capacity - 64 ||
+                (candidate.record.attempts.count >= 5_000 && candidate.volumeRecords > 0) {
+                let bytes = try encoded(candidate.record), digest = StudySHA256.hex(bytes)
+                let destination = pocketVolumesURL(hash).appendingPathComponent(digest + ".json")
+                attemptedWrite = true
+                try writeImmutable(bytes, to: destination)
+                newlyArchived = candidate.record.attempts
+                try candidate.rotate(reference: ExamVolumeReference(filename: digest + ".json", sha256: digest,
+                    firstSequence: candidate.logBase + 1, lastSequence: initial.log_records,
+                    attemptCount: newlyArchived.count))
+            }
+            let today = try Self.studyDay(clock()), ready = try candidate.info
+            if ready.has_task != 0 &&
+                (needsClockResume || ready.day != today || ready.selection_day != today) {
+                try candidate.start(day: today, now: clock())
+            }
+            try operation(candidate, &next.plan, source)
+            next.plan.record = candidate.record
+            _ = try ExamLearningEngine(bank: bank, hash: hash, record: next.plan.record)
+            let initialParked = disk.plan.initialObligations.dropFirst(source.queue.count)
+            guard next.plan.parkedObligations.count <= initialParked.count,
+                  next.plan.parkedObligations == Array(initialParked.suffix(next.plan.parkedObligations.count)),
+                  next.plan.bridgeReview == nil || next.plan.bridgeReview == source.answerReview else {
+                throw ExamError.invalid("待续题目或原结果页发生异常，原记录已保留。")
+            }
+            let snapshot = try PocketEngine(snapshot: next.plan.record.snapshot)
+            let parked = Set(next.plan.parkedObligations.map(\.word)), inert: UInt32 = (1 << 20) | (1 << 22) | 65_535
+            for item in initialParked {
+                let packed = snapshot.packedCard(at: item.word)
+                guard parked.contains(item.word) ? packed == inert : packed != inert else {
+                    throw ExamError.invalid("待续题目槽位异常，原记录已保留。")
+                }
+            }
+            let bytes = try encodedPocket(next)
+            if bytes != current {
+                guard StudySHA256.hex(try boundedData(pocketURL(hash))) == expected,
+                      StudySHA256.hex(try boundedData(dualURL(hash))) == disk.plan.sourceDualSHA256,
+                      StudySHA256.hex(try boundedData(stateURL(hash))) == disk.rootLegacySHA256 else {
+                    throw ExamError.invalid("题库记录已在别处变化，未覆盖较新的记录。")
+                }
+                attemptedWrite = true
+                try dualWriter(bytes, pocketURL(hash))
+                guard try boundedData(pocketURL(hash)) == bytes else { throw ExamError.invalid("题库新记录核验失败。") }
+            }
+            pocketDisk = next; pocketDurableSHA256 = StudySHA256.hex(bytes)
+            record = candidate.record; priorAttempts += newlyArchived; needsClockResume = false
+            try refreshPocket(candidate, bridgeReview: next.plan.bridgeReview); error = nil
+        } catch {
+            if attemptedWrite { block(error) } else { self.error = error.localizedDescription }
+        }
+    }
+
+    private func refreshPocket(_ engine: ExamLearningEngine, bridgeReview: ExamAnswerReview?) throws {
+        try refresh(engine)
+        pocketDisplayPresentation = bridgeReview?.presentation ?? engine.displayPresentation
+        carryRemaining = pocketDisk?.plan.parkedObligations.count ?? 0
+        guard let review = bridgeReview,
+              let question = engine.bank.questions.first(where: { $0.id == review.presentation.questionID }) else { return }
+        currentQuestion = question; presentationID = review.presentation.id
+        selectedOptionIDs = Set(review.presentation.selectedOptionIDs)
+        let options = Dictionary(uniqueKeysWithValues: question.options.map { ($0.id, $0) })
+        shuffledOptions = review.presentation.optionOrder.compactMap { options[$0] }
+        latestAttempt = review.attempt; pendingGrade = review.attempt.isCorrect ? 0 : 1
+        isShowingResult = true; isRevealed = true; supplementVisible = false
+        sessionIsActive = true; sessionIsComplete = false; canMarkFamiliar = false; canUndo = false
     }
 
     /// A dual operation starts from the last durable, validated state. A stale
@@ -602,6 +950,7 @@ final class ExamStore: ObservableObject {
 
     private func refresh(_ engine: ExamLearningEngine) throws {
         let info = try engine.info, p = engine.displayPresentation
+        pocketDisplayPresentation = p
         carryRemaining = 0; retryAvailable = 0; retryNextAvailableAt = nil; canStartRetry = false
         if let day = try? Self.studyDay(clock()) {
             dueTodayCount = engine.dueCount(on: day)
@@ -657,7 +1006,7 @@ final class ExamStore: ObservableObject {
     func exportRecords() throws -> Data {
         let files = try FileManager.default.contentsOfDirectory(at: banksDirectory, includingPropertiesForKeys: [.isRegularFileKey])
             .filter { !$0.lastPathComponent.hasPrefix(".pending-") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        var versions: [ExamVersionExport] = [], dualVersions: [PublicDualExport] = []
+        var versions: [ExamVersionExport] = [], dualVersions: [PublicDualExport] = [], pocketVersions: [PublicPocketExport] = []
         for file in files {
             guard file.pathExtension == "xklquestions", try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
                 throw ExamError.invalid("题库目录存在无法核对的文件，未导出不完整记录。")
@@ -700,9 +1049,36 @@ final class ExamStore: ObservableObject {
                 dualVersions.append(PublicDualExport(bankSHA256: hash, legacyCurrentBytes: legacyCurrent,
                     markerBytes: marker, dualCurrentBytes: current, anchors: anchors, revisions: revisions))
             }
+            let pocketCurrent = FileManager.default.fileExists(atPath: pocketURL(hash).path)
+            let pocketMarker = FileManager.default.fileExists(atPath: pocketMarkerURL(hash).path)
+            guard pocketCurrent == pocketMarker else { throw ExamError.invalid("单词式题库记录不完整，未导出不完整档案。") }
+            if pocketCurrent {
+                let current = try boundedData(pocketURL(hash))
+                let disk = try JSONDecoder().decode(PublicPocketStoreDisk.self, from: current)
+                _ = try verifyPocket(disk, loaded: loaded)
+                let marker = try boundedData(pocketMarkerURL(hash))
+                let decodedMarker = try JSONDecoder().decode(PublicPocketMarker.self, from: marker)
+                guard decodedMarker.format == "xkl-ios-public-pocket-relearn-enabled-v1", decodedMarker.bankSHA256 == hash else {
+                    throw ExamError.invalid("单词式题库标记不一致，未导出不完整档案。")
+                }
+                let source = try boundedData(pocketSourceURL(hash, disk.plan.sourceDualSHA256))
+                var volumes: [String: Data] = [:]
+                for reference in disk.plan.record.volumes {
+                    let raw = try boundedData(pocketVolumesURL(hash).appendingPathComponent(reference.filename))
+                    guard StudySHA256.hex(raw) == reference.sha256 else { throw ExamError.invalid("题库新分卷校验失败。") }
+                    volumes[reference.filename] = raw
+                }
+                pocketVersions.append(PublicPocketExport(bankSHA256: hash, markerBytes: marker,
+                    currentBytes: current, sourceDualBytes: source, volumes: volumes))
+            }
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .millisecondsSince1970
+        if !pocketVersions.isEmpty {
+            return try encoder.encode(PublicRecordsExportV4(format: "xkl-ios-question-records-v4",
+                exportedAt: clock(), activeBankSHA256: record?.bankSHA256, versions: versions,
+                dualVersions: dualVersions, pocketVersions: pocketVersions))
+        }
         if !dualVersions.isEmpty {
             return try encoder.encode(PublicRecordsExportV3(format: "xkl-ios-question-records-v3",
                 exportedAt: clock(), activeBankSHA256: record?.bankSHA256, versions: versions, dualVersions: dualVersions))

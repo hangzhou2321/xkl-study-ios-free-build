@@ -794,6 +794,87 @@ error:
     xkl_engine_free(candidate); return false;
 }
 
+bool xkl_engine_rebase_empty_question_day(xkl_engine_t *e, uint32_t day, int64_t at) {
+    if (!live_ready(e) || !room(e, 2) || at < 0 || day < 18000 || day > 50000 ||
+        day < e->state.body.day || day < e->state.body.selection_day || e->state.body.length ||
+        e->state.revision == UINT32_MAX || !state_consistent(e) || !log_state_consistent(e)) return false;
+    if (day == e->state.body.day && day == e->state.body.selection_day) return true;
+    size_t size = xkl_engine_snapshot_size(e);
+    uint8_t *bytes = malloc(size);
+    if (!bytes) return false;
+    if (xkl_engine_snapshot(e, bytes, size) != size) { free(bytes); return false; }
+    xkl_engine_t *candidate = xkl_engine_restore(bytes, size);
+    free(bytes);
+    if (!candidate) return false;
+    if (!clock_ok(candidate, at)) {
+        pocket_word_recording_init(&candidate->recording, &candidate->log);
+        if (!pocket_word_recording_boot(&candidate->recording, &candidate->state, at)) goto day_error;
+        candidate->booted = true; candidate->last_at = at;
+    }
+    pocket_word_state_t next = candidate->state;
+    next.body.day = next.body.selection_day = day;
+    next.can_undo = 0; next.changed_word = POCKET_NO_WORD; next.changed_card = 0;
+    if (!pocket_word_recording_commit(&candidate->recording, &candidate->state, &next,
+            POCKET_EVENT_START, at, card_read, state_store, candidate) ||
+        !pocket_word_recording_present(&candidate->recording, &candidate->state, at)) goto day_error;
+    candidate->last_at = at;
+    if (!state_consistent(candidate) || !log_state_consistent(candidate)) goto day_error;
+    uint8_t *old_log_bytes = e->log_bytes;
+    *e = *candidate; e->log.io.context = e; e->recording.log = &e->log;
+    free(old_log_bytes); free(candidate); return true;
+day_error:
+    xkl_engine_free(candidate); return false;
+}
+
+bool xkl_engine_reorder_question_migration(xkl_engine_t *e,
+    const xkl_task_token_t *tokens, uint32_t count, int64_t at) {
+    if (!clock_ok(e, at) || !room(e, 2) || e->state.revision == UINT32_MAX ||
+        !state_consistent(e) || !log_state_consistent(e) ||
+        count != e->state.body.length || (count && !tokens)) return false;
+    if (!count) return true;
+    const pocket_word_body_t *old = &e->state.body;
+    pocket_token_t ordered[POCKET_QUEUE_MAX];
+    bool used[POCKET_QUEUE_MAX] = {false}, changed = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        unsigned found = count;
+        for (unsigned j = 0; j < count; ++j) {
+            const pocket_token_t t = old->queue[j];
+            const pocket_word_cached_t *a = &old->active[t.slot];
+            if (!used[j] && a->word == tokens[i].word && t.stage == tokens[i].stage &&
+                a->failed_round == tokens[i].failed_round) { found = j; break; }
+        }
+        if (found == count) return false;
+        used[found] = true; ordered[i] = old->queue[found];
+        if (found != i) changed = true;
+    }
+    if (e->recording.revealed &&
+        (ordered[0].slot != old->queue[0].slot || ordered[0].stage != old->queue[0].stage)) return false;
+    if (!changed) return true;
+    size_t size = xkl_engine_snapshot_size(e);
+    uint8_t *bytes = malloc(size);
+    if (!bytes) return false;
+    if (xkl_engine_snapshot(e, bytes, size) != size) { free(bytes); return false; }
+    xkl_engine_t *candidate = xkl_engine_restore(bytes, size);
+    free(bytes);
+    if (!candidate) return false;
+    const bool revealed = e->recording.revealed;
+    pocket_word_state_t next = candidate->state;
+    memcpy(next.body.queue, ordered, count * sizeof(*ordered));
+    if (!pocket_word_recording_commit(&candidate->recording, &candidate->state, &next,
+            POCKET_EVENT_START, at, card_read, state_store, candidate) ||
+        !pocket_word_recording_present(&candidate->recording, &candidate->state, at)) goto reorder_error;
+    candidate->last_at = at;
+    if (revealed && !xkl_engine_reveal(candidate, at)) goto reorder_error;
+    if (!state_consistent(candidate) || !log_state_consistent(candidate)) goto reorder_error;
+    uint8_t *old_log_bytes = e->log_bytes;
+    *e = *candidate;
+    e->log.io.context = e; e->recording.log = &e->log;
+    free(old_log_bytes); free(candidate);
+    return true;
+reorder_error:
+    xkl_engine_free(candidate); return false;
+}
+
 bool xkl_engine_can_postpone_professional(const xkl_engine_t *e) {
     if (!live_ready(e) || !e->state.body.length) return false;
     const pocket_word_body_t *b = &e->state.body;

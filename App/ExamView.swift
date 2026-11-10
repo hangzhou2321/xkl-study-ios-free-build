@@ -48,7 +48,7 @@ struct ExamView: View {
                     }
                 }
         }
-        .onAppear { store.prepareDualFSRSIfNeeded(); store.refreshStudyDate() }
+        .onAppear { store.preparePocketRelearningIfNeeded(); store.refreshStudyDate() }
         .task(id: store.retryNextAvailableAt) {
             guard let ready = store.retryNextAvailableAt else { return }
             let delay = max(0, ready.timeIntervalSinceNow) + 0.05
@@ -118,11 +118,11 @@ struct ExamView: View {
             }
 
             Section("学习") {
-                Text(store.isDualFSRS ? "双 FSRS 题目复习" : "每课 25 道新题").font(.headline)
-                Text(store.isDualFSRS ? "旧任务和到期题分批安排；旧任务处理完后继续学新题。" : "先复习，再学新题。到期复习不限量。")
+                Text(store.isPocketRelearning ? "单词式题目学习" : "双 FSRS 题目复习").font(.headline)
+                Text(store.isPocketRelearning ? "新题答对也会巩固；答错会在本轮重现，再按单词规则跨天复习。" : "旧任务和到期题分批安排；旧任务处理完后继续学新题。")
                     .font(.footnote).foregroundStyle(.secondary)
-                if store.isDualFSRS && store.carryRemaining > 0 {
-                    Text("旧任务尚有 \(store.carryRemaining) 题，分小批继续。")
+                if store.carryRemaining > 0 {
+                    Text("另有 \(store.carryRemaining) 道未完成的旧任务，分小批继续。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Text("新题默认进入学习；确定已经掌握的题，可点右上角“已熟悉”跳过。")
@@ -187,7 +187,7 @@ struct ExamView: View {
                         Text("关闭后，新题和答错题按七轮强化规则；已有安排保留，不再提前结束只剩同题的核对。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
-                    Text("双 FSRS 尚未启用；旧题库记录会保留。")
+                    Text("当前使用单词引擎；新题答对也会进入巩固。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -257,7 +257,7 @@ struct ExamView: View {
             }
             Text(store.isDualFSRS
                  ? "旧任务和到期题会分批安排；可以随时暂停。时间预算不代表完成用时，也不会隐藏到期题。"
-                 : "先处理到期复习，再学新题。目标包含主动标记已熟悉的题；每课仍为 25 道新题，可中途暂停。时间预算不代表完成用时，也不会隐藏到期题。")
+                 : "未完成的旧任务会分批接续，之后按单词引擎安排复习与新题。新题每课最多 25 道，可中途暂停；时间预算不代表实际用时。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -509,8 +509,8 @@ struct ExamView: View {
     }
 
     private func start() {
-        if !store.isDualFSRS { store.prepareDualFSRSIfNeeded() }
-        guard store.isDualFSRS else { return }
+        if !store.isPocketRelearning { store.preparePocketRelearningIfNeeded() }
+        guard store.isPocketRelearning else { return }
         if !store.sessionIsActive {
             store.start()
         }

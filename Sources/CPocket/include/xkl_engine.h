@@ -107,6 +107,15 @@ typedef struct {
 bool xkl_engine_capture_task(const xkl_engine_t *engine, uint32_t bank_count,
     uint32_t today, xkl_task_token_t *tokens, uint32_t token_capacity,
     xkl_task_item_t *items, uint32_t item_capacity, xkl_task_capture_info_t *info);
+/* Public-question migration only: reorder a complete permutation of the
+ * already-imported queue without creating answers or changing card states.
+ * If an answer is revealed the head must remain unchanged. Invalid input is
+ * atomic; ordinary vocabulary and existing schedulers never call this. */
+bool xkl_engine_reorder_question_migration(xkl_engine_t *engine,
+    const xkl_task_token_t *tokens, uint32_t token_count, int64_t uptime_us);
+/* Advance a completed migrated public-question task to today without
+ * picking unrelated cards before its parked obligations are admitted. */
+bool xkl_engine_rebase_empty_question_day(xkl_engine_t *engine, uint32_t day, int64_t uptime_us);
 /* Restore preserves presentation state for local atomic-save rollback.
  * On app launch, clock discontinuity, or cross-device handoff call start before
  * learning: it logs a new session and hides the old answer. */

@@ -101,6 +101,21 @@ final class ExamLearningEngine {
         try capture()
     }
 
+    /// Continue a previously archived dual-FSRS task without manufacturing a
+    /// score or discarding its remaining original stages.
+    func admitParked(_ items: [PublicPocketObligation], mappedCards: [UInt32],
+                     legacyTokens: [PublicDualLegacyToken], now: Date = Date()) throws {
+        guard record.answerReview == nil, record.presentation == nil, (try info).has_task == 0 else {
+            throw ExamError.invalid("当前题尚未结束，原待办和记录均已保留。")
+        }
+        try engine.admitPublicQuestionObligations(items, mappedCards: mappedCards, legacyTokens: legacyTokens,
+                                                  day: UInt32(try ConceptCalendar.studyDay(now)))
+        record.taskID = UUID(); record.lastUndoableAttemptID = nil
+        record.failureCounts = [:]; record.shortPlanQuestionIDs = []
+        try present(now: now)
+        try capture()
+    }
+
     func toggle(_ id: String) throws {
         guard record.answerReview == nil, var p = record.presentation, p.pending == nil, let q = currentQuestion,
               q.options.contains(where: { $0.id == id }) else { return }

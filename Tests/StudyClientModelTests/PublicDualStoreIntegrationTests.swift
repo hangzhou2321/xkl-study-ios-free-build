@@ -152,7 +152,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let f = try fixture(); defer { remove(f) }
         let oldBytes = try Data(contentsOf: f.legacyURL)
         let oldPresentation = try XCTUnwrap(f.legacy.presentation)
-        let store = ExamStore(baseDirectory: f.root)
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertFalse(store.storageBlocked); XCTAssertFalse(store.isDualFSRS)
         store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
@@ -171,7 +171,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertNil(store.error)
         XCTAssertEqual(try Data(contentsOf: f.currentURL), firstBytes)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), oldBytes)
-        let reopened = ExamStore(baseDirectory: f.root)
+        let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(reopened.isDualFSRS, reopened.error ?? "")
         XCTAssertEqual(reopened.presentationID, oldPresentation.id)
         XCTAssertEqual(reopened.selectedOptionIDs, ["A"])
@@ -186,7 +186,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
             let before = try PocketEngine(snapshot: f.legacy.snapshot).info
             let today = UInt32(try ConceptCalendar.studyDay(Date()))
             XCTAssertEqual(before.selection_day, today - 1)
-            let store = ExamStore(baseDirectory: f.root)
+            let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
             if usePolicyFirst { store.setPolicy(conservative: !f.legacy.analysis.conservativeEnabled) }
             else { store.refreshStudyDate() }
             XCTAssertTrue(store.isDualFSRS, store.error ?? "")
@@ -204,13 +204,13 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
     @MainActor func testMigrationWriteFailureKeepsLegacyAndCanRecover() async throws {
         let f = try fixture(); defer { remove(f) }
         let old = try Data(contentsOf: f.legacyURL), gate = WriteGate(); gate.mode = .beforeWrite
-        let failed = ExamStore(baseDirectory: f.root, dualWriter: gate.write)
+        let failed = ExamStore(baseDirectory: f.root, legacyDualForTesting: true, dualWriter: gate.write)
         failed.prepareDualFSRSIfNeeded()
         XCTAssertTrue(failed.storageBlocked); XCTAssertFalse(failed.isDualFSRS)
         XCTAssertNotNil(failed.error)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.currentURL.path))
-        let recovered = ExamStore(baseDirectory: f.root)
+        let recovered = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertFalse(recovered.storageBlocked)
         recovered.prepareDualFSRSIfNeeded()
         XCTAssertTrue(recovered.isDualFSRS, recovered.error ?? "")
@@ -221,7 +221,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
     @MainActor func testFailureAfterDurableAnswerRecoversResultWithoutDuplicateScore() async throws {
         let f = try fixture(.familiar); defer { remove(f) }
         let old = try Data(contentsOf: f.legacyURL), gate = WriteGate()
-        let store = ExamStore(baseDirectory: f.root, dualWriter: gate.write)
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true, dualWriter: gate.write)
         store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
         let token = try XCTUnwrap(store.presentationID)
@@ -229,14 +229,14 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         store.selectAndSubmit("A", presentationID: token)
         XCTAssertTrue(store.storageBlocked)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
-        let recovered = ExamStore(baseDirectory: f.root)
+        let recovered = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(recovered.isDualFSRS, recovered.error ?? "")
         XCTAssertTrue(recovered.isShowingResult)
         XCTAssertEqual(recovered.presentationID, token)
         let state = try disk(f).state
         XCTAssertEqual(state.events.filter { $0.kind == "answer" }.count, 1)
         XCTAssertEqual(recovered.latestAttempt?.id, state.events.last?.attempt?.id)
-        let again = ExamStore(baseDirectory: f.root)
+        let again = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(again.isShowingResult)
         XCTAssertEqual(again.latestAttempt?.id, recovered.latestAttempt?.id)
         XCTAssertEqual(try disk(f).state.events.filter { $0.kind == "answer" }.count, 1)
@@ -247,7 +247,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let old = try Data(contentsOf: f.legacyURL)
         let oldAttempt = try XCTUnwrap(f.legacy.attempts.last)
         XCTAssertEqual(oldAttempt.mode, "familiar")
-        let store = ExamStore(baseDirectory: f.root)
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
         XCTAssertTrue(store.canUndo)
@@ -269,7 +269,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(undoAnchor.attempts.last?.mode, "undo")
         XCTAssertEqual(undoAnchor.attempts.last?.undoneAttemptID, oldAttempt.id)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
-        let reopened = ExamStore(baseDirectory: f.root)
+        let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(reopened.isDualFSRS, reopened.error ?? "")
         XCTAssertEqual(reopened.currentQuestion?.id, oldAttempt.questionID)
     }
@@ -280,7 +280,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let result = try XCTUnwrap(f.legacy.answerReview)
         let originalAttempt = try XCTUnwrap(f.legacy.attempts.last)
         XCTAssertEqual(try PocketEngine(snapshot: f.legacy.snapshot).info.can_undo, 1)
-        let store = ExamStore(baseDirectory: f.root); store.prepareDualFSRSIfNeeded()
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true); store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
         XCTAssertTrue(store.isShowingResult)
         XCTAssertFalse(store.canUndo)
@@ -311,7 +311,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(rebased.attempts.last?.undoneAttemptID, originalAttempt.id)
         XCTAssertTrue(after.state.events.isEmpty)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
-        let reopened = ExamStore(baseDirectory: f.root)
+        let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertEqual(reopened.currentQuestion?.id, originalAttempt.questionID)
         XCTAssertFalse(reopened.isShowingResult)
     }
@@ -319,9 +319,9 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
     @MainActor func testNewScorePreventsRebasingOldUndoAndStaleWriterCannotOverwrite() async throws {
         let f = try fixture(.familiar); defer { remove(f) }
         let old = try Data(contentsOf: f.legacyURL)
-        let store = ExamStore(baseDirectory: f.root); store.prepareDualFSRSIfNeeded()
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true); store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
-        let before = try disk(f), stale = ExamStore(baseDirectory: f.root)
+        let before = try disk(f), stale = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         let token = try XCTUnwrap(store.presentationID)
         store.selectAndSubmit("A", presentationID: token)
         XCTAssertTrue(store.isShowingResult, store.error ?? "")
@@ -352,12 +352,12 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let old = try Data(contentsOf: f.legacyURL)
         let oldReview = try XCTUnwrap(f.legacy.answerReview)
         let nextPresentation = try XCTUnwrap(f.legacy.presentation)
-        let store = ExamStore(baseDirectory: f.root); store.prepareDualFSRSIfNeeded()
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true); store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
         XCTAssertTrue(store.isShowingResult)
         XCTAssertEqual(store.presentationID, oldReview.presentation.id)
         XCTAssertEqual(store.latestAttempt?.id, oldReview.attempt.id)
-        let restarted = ExamStore(baseDirectory: f.root)
+        let restarted = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(restarted.isShowingResult)
         XCTAssertEqual(restarted.presentationID, oldReview.presentation.id)
         XCTAssertEqual(restarted.latestAttempt?.id, oldReview.attempt.id)
@@ -369,7 +369,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertTrue(final.state.events.isEmpty)
         XCTAssertEqual(final.state.legacyAttempts, f.legacy.attempts)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
-        let reopened = ExamStore(baseDirectory: f.root)
+        let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertEqual(reopened.presentationID, nextPresentation.id)
         XCTAssertFalse(reopened.isShowingResult)
     }
@@ -377,7 +377,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
     @MainActor func testDelayedRetryKeepsCurrentAnswerAndDoesNotChangeDailyTrack() async throws {
         let f = try fixture(.familiar); defer { remove(f) }
         let old = try Data(contentsOf: f.legacyURL), clock = TestClock()
-        let store = ExamStore(baseDirectory: f.root, clock: { clock.now })
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true, clock: { clock.now })
         store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
         let wrongID = try XCTUnwrap(store.currentQuestion?.id)
@@ -436,7 +436,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertNotEqual(after.all[wrongID], shadow)
         XCTAssertEqual(after.carry, carried)
         XCTAssertEqual(try Data(contentsOf: f.legacyURL), old)
-        let reopened = ExamStore(baseDirectory: f.root, clock: { clock.now })
+        let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true, clock: { clock.now })
         XCTAssertTrue(reopened.isShowingResult, reopened.error ?? "")
         XCTAssertEqual(reopened.latestAttempt?.id, store.latestAttempt?.id)
         XCTAssertEqual(try disk(f).state.events.filter { $0.kind == "startRetry" }.count, 1)
@@ -446,7 +446,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         for scenario in ["missing-current", "corrupt-current", "deleted-directory"] {
             let f = try fixture(.familiar); defer { remove(f) }
             let old = try Data(contentsOf: f.legacyURL)
-            let original = ExamStore(baseDirectory: f.root); original.prepareDualFSRSIfNeeded()
+            let original = ExamStore(baseDirectory: f.root, legacyDualForTesting: true); original.prepareDualFSRSIfNeeded()
             XCTAssertTrue(original.isDualFSRS, original.error ?? "")
             let marker = f.legacyURL.deletingLastPathComponent().appendingPathComponent("dual-fsrs-enabled.json")
             let markerBytes = try Data(contentsOf: marker)
@@ -456,7 +456,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
             default: try FileManager.default.removeItem(at: f.dualRoot)
             }
             let broken = try? Data(contentsOf: f.currentURL)
-            let reopened = ExamStore(baseDirectory: f.root)
+            let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
             XCTAssertTrue(reopened.storageBlocked, scenario)
             XCTAssertNotNil(reopened.error, scenario)
             reopened.start(); reopened.prepareDualFSRSIfNeeded(); reopened.importContent(from: f.package)
@@ -471,12 +471,12 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
     @MainActor func testValidCurrentWithMissingMarkerCanCompleteInterruptedEnable() async throws {
         let f = try fixture(); defer { remove(f) }
         let old = try Data(contentsOf: f.legacyURL)
-        let original = ExamStore(baseDirectory: f.root); original.prepareDualFSRSIfNeeded()
+        let original = ExamStore(baseDirectory: f.root, legacyDualForTesting: true); original.prepareDualFSRSIfNeeded()
         XCTAssertTrue(original.isDualFSRS, original.error ?? "")
         let current = try Data(contentsOf: f.currentURL)
         let marker = f.legacyURL.deletingLastPathComponent().appendingPathComponent("dual-fsrs-enabled.json")
         try FileManager.default.removeItem(at: marker)
-        let recovered = ExamStore(baseDirectory: f.root)
+        let recovered = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(recovered.isDualFSRS, recovered.error ?? "")
         XCTAssertFalse(recovered.storageBlocked)
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
@@ -488,7 +488,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         let f = try fixture(.familiar); defer { remove(f) }
         let originalBytes = try Data(contentsOf: f.legacyURL)
         let originalAttempt = try XCTUnwrap(f.legacy.attempts.last)
-        let store = ExamStore(baseDirectory: f.root); store.prepareDualFSRSIfNeeded()
+        let store = ExamStore(baseDirectory: f.root, legacyDualForTesting: true); store.prepareDualFSRSIfNeeded()
         XCTAssertTrue(store.isDualFSRS, store.error ?? "")
         let priorDualBytes = try Data(contentsOf: f.currentURL)
         let priorDual = try disk(f)
@@ -525,7 +525,7 @@ final class PublicDualStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(answers.count, 1)
         XCTAssertEqual(answers.first?.attempt?.id, latest.id)
         XCTAssertNil(answers.first?.attempt?.engineSequence)
-        let reopened = ExamStore(baseDirectory: f.root)
+        let reopened = ExamStore(baseDirectory: f.root, legacyDualForTesting: true)
         XCTAssertTrue(reopened.isShowingResult, reopened.error ?? "")
         let repeated = try decoder.decode(ExportProbe.self, from: reopened.exportRecords())
         let repeatedDual = try XCTUnwrap(repeated.dualVersions.first)
