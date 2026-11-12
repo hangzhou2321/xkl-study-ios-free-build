@@ -470,10 +470,57 @@ final class ProfessionalRecallEngine {
             sourceScope: sourceScope, sourceSnapshotSHA256: StudySHA256.hex(bytes), sourceSequence: try engine.info.log_records)
     }
 
+    /// An explicit learner request, not a grade. The old packed state and
+    /// snapshot are retained at the content boundary; other cards and all
+    /// answer events remain unchanged. An unfinished task keeps its head, and
+    /// the requested card joins at the next safe task boundary if necessary.
+    @discardableResult func requeue(cardID: String, now: Date = Date()) throws -> Bool {
+        guard record.cardIDs.contains(cardID),
+              let prior = try transferState(for: cardID, sourceScope: "manual-requeue-before") else {
+            throw ExamError.invalid("找不到这张卡的原有调度状态。")
+        }
+        let wasActive = activeCardIDs.contains(cardID)
+        if wasActive && prior.stageMask != 0 { return false }
+        let day = UInt32(try ConceptCalendar.studyDay(now))
+        guard day >= (try engine.info.day) else { throw ExamError.invalid("手机日期早于上次背卡日期，原记录已保留。") }
+        let staged = try fork()
+        let originalActive = Set(staged.activeCardIDs)
+        func scope(_ active: Set<String>, _ engine: ProfessionalRecallEngine) -> RecallDeck {
+            .init(subject: engine.deck.subject, bankID: engine.deck.bankID,
+                  cards: engine.deck.cards.filter { active.contains($0.id) })
+        }
+        if wasActive {
+            try staged.reconcile(to: scope(originalActive.subtracting([cardID]), staged), now: now)
+        }
+        let wanted = originalActive.union([cardID])
+        if !wasActive && prior.stageMask != 0 {
+            try staged.reconcile(to: scope(wanted, staged), importing: [cardID: prior], now: now)
+        } else {
+            let learned = prior.packed & (1 << 20) != 0
+            let level = (prior.packed >> 16) & 15
+            let adjusted: UInt32
+            if learned {
+                // A previously "first known" item has no review level. An
+                // explicit requeue makes it a due level-1 review; it does not
+                // insert a historical success/failure event.
+                let reviewLevel = max(UInt32(1), level)
+                adjusted = day | (reviewLevel << 16) | (1 << 20)
+            } else { adjusted = 0 }
+            let request = ProfessionalRecallTransferState(cardID: cardID, subject: deck.subject,
+                packed: adjusted, stageMask: 1, failedRound: 0, presentation: nil,
+                sourceScope: "user-manual-requeue", sourceSnapshotSHA256: prior.sourceSnapshotSHA256,
+                sourceSequence: prior.sourceSequence)
+            try staged.reconcile(to: scope(wanted, staged), importing: [cardID: request], now: now)
+        }
+        engine = staged.engine; record = staged.record; deck = staged.deck; started = staged.started
+        return true
+    }
+
     /// Content boundaries preserve every ID and prior snapshot. Removed cards are
     /// parked, never graded as familiar. Incoming unfinished checks wait for a
     /// task boundary so the unchanged 25-new / 50-active limits remain valid.
-    func reconcile(to catalog: RecallDeck, importing: [String: ProfessionalRecallTransferState] = [:], now: Date = Date()) throws {
+    func reconcile(to catalog: RecallDeck, importing: [String: ProfessionalRecallTransferState] = [:],
+                   retaining: [RecallDeck.Item]? = nil, now: Date = Date()) throws {
         guard catalog.subject == deck.subject, catalog.bankID == deck.bankID,
               Set(catalog.cards.map(\.id)).count == catalog.cards.count else { throw ExamError.invalid("课程更新科目或卡片ID无效。") }
         if !catalog.cards.isEmpty { try catalog.validate() }
@@ -481,7 +528,12 @@ final class ProfessionalRecallEngine {
         let desiredByID = Dictionary(uniqueKeysWithValues: catalog.cards.map { ($0.id, $0) })
         var items = deck.cards.map { desiredByID[$0.id] ?? $0 }
         let known = Set(record.cardIDs)
-        items += catalog.cards.filter { !known.contains($0.id) }
+        let incoming = retaining ?? catalog.cards
+        guard Set(incoming.map(\.id)).count == incoming.count,
+              wanted.isSubset(of: known.union(incoming.map(\.id))) else {
+            throw ExamError.invalid("保留的课程卡片身份不完整。")
+        }
+        items += incoming.filter { !known.contains($0.id) }
         try RecallDeck(subject: deck.subject, bankID: deck.bankID, cards: items).validate()
         let updatedActive = items.map(\.id).filter { wanted.contains($0) }
         guard importing.allSatisfy({ id, value in id == value.cardID && wanted.contains(id) && value.subject == deck.subject }) else {

@@ -4,12 +4,18 @@ import UIKit
 struct HandbookHighlightContext {
     let cardID: String
     let state: HandbookHighlightState
+    var sourceRedSpans: [HandbookHighlightSpan] = []
+    var sourceYellowSpans: [HandbookHighlightSpan] = []
 
     func text(_ source: String, fieldID: String, visible: NSRange? = nil) -> Text {
         let displayed = handbookDisplayText(source)
-        return state.runs(cardID: cardID, fieldID: fieldID, text: displayed, visible: visible)
+        return state.runs(cardID: cardID, fieldID: fieldID, text: displayed, visible: visible,
+                          sourceSpans: sourceRedSpans, sourceYellowSpans: sourceYellowSpans)
             .reduce(Text("")) { result, run in
-                result + (run.red ? Text(verbatim: run.text).foregroundColor(.red) : Text(verbatim: run.text))
+                var fragment = AttributedString(run.text)
+                if run.red { fragment.foregroundColor = .red }
+                if run.yellow { fragment.backgroundColor = Color(red: 1, green: 0.93, blue: 0.20) }
+                return result + Text(fragment)
             }
     }
 

@@ -43,6 +43,19 @@ import StudyCore
             self.error = error.localizedDescription
             return
         }
+        save(candidate)
+    }
+
+    /// Explicitly clears only this subject's personal marks. It never edits
+    /// source colours, a card definition or any learning-progress file.
+    func clearAll() {
+        guard !blocked else { return }
+        var candidate = state
+        candidate.spans = []
+        save(candidate)
+    }
+
+    private func save(_ candidate: HandbookHighlightState) {
         guard candidate != state else { error = nil; return }
         do {
             try ensure(directory)

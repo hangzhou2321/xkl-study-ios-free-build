@@ -81,6 +81,31 @@ final class HandbookHighlightStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), damaged)
     }
 
+    @MainActor func testClearIsSubjectLocalAndLeavesProgressFilesUntouched() async throws {
+        let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
+        let words = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        words.importData(try JSONEncoder().encode(package(.computer)))
+        words.start(now: now)
+        let before = try XCTUnwrap(words.engine?.state)
+        let schedulerURL = root.appendingPathComponent("HandbookWordRecall/computer/current.json")
+        let schedulerBytes = try Data(contentsOf: schedulerURL)
+        let computerDoc = HandbookHighlightDocument(card: package(.computer).cards[0], guide: nil)
+        let powerDoc = HandbookHighlightDocument(card: package(.power).cards[0], guide: nil)
+        let computer = HandbookHighlightStore(subject: .computer, baseDirectory: root)
+        let power = HandbookHighlightStore(subject: .power, baseDirectory: root)
+        computer.apply(document: computerDoc, selection: try selection(computerDoc, field: "summary", text: "合"), remove: false)
+        power.apply(document: powerDoc, selection: try selection(powerDoc, field: "summary", text: "合"), remove: false)
+        computer.clearAll()
+        XCTAssertNil(computer.error); XCTAssertTrue(computer.state.spans.isEmpty)
+        XCTAssertEqual(power.state.spans.count, 1)
+        XCTAssertTrue(HandbookHighlightStore(subject: .computer, baseDirectory: root).state.spans.isEmpty)
+        XCTAssertEqual(HandbookHighlightStore(subject: .power, baseDirectory: root).state.spans.count, 1)
+        XCTAssertEqual(words.engine?.state, before)
+        XCTAssertEqual(try Data(contentsOf: schedulerURL), schedulerBytes)
+        let revisions = root.appendingPathComponent("HandbookWordRecall/computer/personal-highlights/revisions")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: revisions.path).count, 1)
+    }
+
     @MainActor func testSelectionErrorDoesNotBlockAndPostWriteFailureRequiresReopen() async throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let doc = HandbookHighlightDocument(card: package(.power).cards[0], guide: nil)

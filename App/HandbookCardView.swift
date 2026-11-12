@@ -23,6 +23,10 @@ struct HandbookCardView: View {
     @State private var recommendedStagedFile: URL?
     @State private var exporting = false
     @State private var showingOutline = false
+    @State private var outlineSearch = ""
+    @State private var outlineShowOld = false
+    @State private var actionNotice = ""
+    @State private var showingActionNotice = false
     @State private var showingSources = false
     @State private var showingAllSources = false
     @State private var showingTableIndex = false
@@ -145,6 +149,13 @@ struct HandbookCardView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if store.package != nil { Button("章节目录", systemImage: "list.bullet") { showingOutline = true } }
+                        if (subject == .computer || subject == .power), store.package != nil {
+                            Button("清除本学科个人标红", systemImage: "highlighter") {
+                                highlightStore.clearAll()
+                                actionNotice = highlightStore.error ?? "已清除本学科个人标红。原书颜色和背卡进度保留。"
+                                showingActionNotice = true
+                            }.disabled(highlightStore.blocked)
+                        }
                         if store.package != nil { Button("核对讲义原页", systemImage: "doc.text.magnifyingglass") { showingAllSources = true } }
                         if (subject == .power || subject == .mechanics), let package = store.package, handbookHasTables(package) {
                             Button(subject == .mechanics ? "讲义图表与选看" : "讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
@@ -256,6 +267,9 @@ struct HandbookCardView: View {
 
     private var practiceSheetContent: some View {
         relatedAndTableSheets
+        .alert("操作结果", isPresented: $showingActionNotice) {
+            Button("知道了", role: .cancel) { }
+        } message: { Text(actionNotice) }
         .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
@@ -516,7 +530,7 @@ struct HandbookCardView: View {
             }
             }
             HStack(alignment: .top, spacing: 4) {
-                HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power,
+                HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power || engine.package.mainCardIDs != nil,
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide,
@@ -524,7 +538,9 @@ struct HandbookCardView: View {
                                      relatedQuestionTarget = card
                                  } : nil,
                                  questionAccessibilityID: "handbook-related-questions")
-                    .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
+                    .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state,
+                        sourceRedSpans: engine.package.sourceSpans(for: card),
+                        sourceYellowSpans: engine.package.sourceYellowSpans(for: card)))
                     .id(p.id)
                 if (subject != .computer && !engine.package.questions(for: card).isEmpty) ||
                     ((subject == .power || subject == .mechanics) && handbookHasTables(card, package: engine.package)) {
@@ -674,9 +690,14 @@ struct HandbookCardView: View {
     private func outline(_ package: HandbookCardPackage) -> some View {
         NavigationStack {
             List {
+                if package.mainCardIDs != nil {
+                    Section {
+                        Toggle("显示旧卡及补充", isOn: $outlineShowOld)
+                    } footer: { Text("旧卡及其学习记录仍在，可按需重新加入队列。") }
+                }
                 ForEach(package.chapters, id: \.id) { chapter in
                     Section {
-                        ForEach(package.cards.filter { package.chapter(for: $0)?.id == chapter.id }, id: \.id) { card in
+                        ForEach(outlineCards(package, chapterID: chapter.id), id: \.id) { card in
                             NavigationLink {
                                 ScrollView {
                                     HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
@@ -685,8 +706,19 @@ struct HandbookCardView: View {
                                                      questionAction: package.questions(for: card).isEmpty ? nil : {
                                                          outlineRelatedQuestionTarget = card
                                                      })
-                                        .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state))
+                                        .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state,
+                                            sourceRedSpans: package.sourceSpans(for: card),
+                                            sourceYellowSpans: package.sourceYellowSpans(for: card)))
                                         .padding(20).frame(maxWidth: 700).frame(maxWidth: .infinity)
+                                    if store.engine?.usesDualFSRS == false {
+                                        Button("重新加入学习队列", systemImage: "arrow.uturn.backward") {
+                                            let changed = store.requeue(cardID: card.id)
+                                            actionNotice = store.error ?? (changed ? "已安排这张卡，当前任务结束后或下次开始时会出现。原有作答记录保留。" : "这张卡已经在队列里。")
+                                            store.error = nil
+                                            showingActionNotice = true
+                                        }.buttonStyle(.borderedProminent).disabled(store.blocked)
+                                            .accessibilityIdentifier("handbook-requeue-card")
+                                    }
                                     Text("目录预览不产生自评，也不改变复习日期。")
                                         .font(.footnote).foregroundStyle(.secondary).padding()
                                 }.background(Color(uiColor: .systemGroupedBackground))
@@ -710,6 +742,10 @@ struct HandbookCardView: View {
                     }
                 }
             }.navigationTitle("章节目录").navigationBarTitleDisplayMode(.inline)
+                .searchable(text: $outlineSearch, prompt: "搜索卡片")
+                .alert("操作结果", isPresented: $showingActionNotice) {
+                    Button("知道了", role: .cancel) { }
+                } message: { Text(actionNotice) }
                 .toolbar { Button("关闭") { showingOutline = false } }
         }
         .sheet(item: $outlineHighlightTarget) { target in
@@ -719,6 +755,14 @@ struct HandbookCardView: View {
             HandbookRelatedQuestionPage(card: card, questions: package.questions(for: card),
                 assetRoot: sourceRoot, store: relatedQuestionStore,
                 cardAnswerWasVisible: true)
+        }
+    }
+    private func outlineCards(_ package: HandbookCardPackage, chapterID: String) -> [HandbookCard] {
+        package.cards.filter { card in
+            guard package.chapter(for: card)?.id == chapterID else { return false }
+            if package.mainCardIDs != nil && !outlineShowOld && store.engine?.isInMainScope(card.id) != true { return false }
+            let query = outlineSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            return query.isEmpty || card.title.localizedCaseInsensitiveContains(query) || card.answerSummary.localizedCaseInsensitiveContains(query)
         }
     }
     private func sourceLabel(_ card: HandbookCard) -> String {

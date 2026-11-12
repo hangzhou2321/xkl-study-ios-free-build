@@ -635,7 +635,7 @@ enum HandbookSchedulerPreference {
         do {
             try guardCurrent(); let candidate = try current.fork()
             try action(candidate); next.state = candidate.state
-            let bytes = try encode(next); if StudySHA256.hex(bytes) == durableSHA256 { return }
+            let bytes = try encode(next); if StudySHA256.hex(bytes) == durableSHA256 { error = nil; return }
             try guardCurrent()
             do { try writer(bytes, currentURL); guard try read(currentURL) == bytes else { throw ExamError.invalid("本次背卡未完整保存。") } }
             catch { fail(error); return }
@@ -663,6 +663,11 @@ enum HandbookSchedulerPreference {
     func rate(remembered: Bool, token: UUID, now: Date = Date()) { change { try $0.rate(remembered: remembered, token: token, now: now) } }
     func markFamiliar(token: UUID, now: Date = Date()) { change { try $0.markFamiliar(token: token, now: now) } }
     func postpone(token: UUID, now: Date = Date()) { change { try $0.postpone(token: token, now: now) } }
+    @discardableResult func requeue(cardID: String, now: Date = Date()) -> Bool {
+        var changed = false
+        change { changed = try $0.requeue(cardID: cardID, now: now) }
+        return changed && !blocked && error == nil
+    }
     func importContent(_ url: URL) {
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
         do { importData(try read(url)) } catch { self.error = error.localizedDescription }

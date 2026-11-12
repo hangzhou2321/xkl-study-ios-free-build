@@ -77,13 +77,13 @@ struct HandbookHighlightState: Codable, Equatable {
         }
         return false
     }
-    private static func validCharacterRange(_ range: NSRange, in text: String) -> Bool {
+    static func validCharacterRange(_ range: NSRange, in text: String) -> Bool {
         let total = text.utf16.count
         guard range.location != NSNotFound, range.location >= 0, range.length >= 0,
               range.location <= total, range.length <= total - range.location else { return false }
         return characterBoundary(range.location, in: text) && characterBoundary(range.location + range.length, in: text)
     }
-    private static func canonical(_ input: [HandbookHighlightSpan]) -> [HandbookHighlightSpan] {
+    static func canonical(_ input: [HandbookHighlightSpan]) -> [HandbookHighlightSpan] {
         var result: [HandbookHighlightSpan] = []
         for item in input.sorted(by: before) {
             if let old = result.last, sameField(old, item), item.location <= old.location + old.length {
@@ -138,32 +138,44 @@ struct HandbookHighlightState: Codable, Equatable {
 
     static func hash(_ text: String) -> String { StudySHA256.hex(Data(text.utf8)) }
 
-    struct Run: Equatable { let text: String; let red: Bool }
+    struct Run: Equatable { let text: String; let red: Bool; var yellow = false }
     /// A caller can restrict output to a visible cue, so hidden answer text is
     /// never passed to SwiftUI or to an accessibility label on the front.
-    func runs(cardID: String, fieldID: String, text: String, visible: NSRange? = nil) -> [Run] {
+    func runs(cardID: String, fieldID: String, text: String, visible: NSRange? = nil,
+              sourceSpans: [HandbookHighlightSpan] = [],
+              sourceYellowSpans: [HandbookHighlightSpan] = []) -> [Run] {
         let whole = NSRange(location: 0, length: (text as NSString).length)
         let view = visible ?? whole
         guard view.location != NSNotFound, view.location >= 0, view.length >= 0,
               view.location <= whole.length, view.length <= whole.length - view.location,
               Self.validCharacterRange(view, in: text), Range(view, in: text) != nil else { return [] }
         let hash = Self.hash(text)
-        let matching = spans.filter { $0.cardID == cardID && $0.fieldID == fieldID && $0.textSHA256 == hash }
-        var runs: [Run] = [], position = view.location
-        func append(_ range: NSRange, _ red: Bool) {
-            guard range.length > 0, let r = Range(range, in: text) else { return }
-            runs.append(.init(text: String(text[r]), red: red))
+        // The source marks are presentation metadata, never written into the
+        // separately persisted, user-controlled highlight file.
+        func matching(_ input: [HandbookHighlightSpan]) -> [NSRange] {
+            Self.canonical(input.filter {
+                $0.cardID == cardID && $0.fieldID == fieldID && $0.textSHA256 == hash
+            }).compactMap { span in
+                let range = NSRange(location: span.location, length: span.length)
+                guard Self.validCharacterRange(range, in: text), Range(range, in: text) != nil else { return nil }
+                let clipped = NSIntersectionRange(view, range)
+                return clipped.length > 0 ? clipped : nil
+            }
         }
-        for span in matching {
-            let end = span.location + span.length
-            let spanRange = NSRange(location: span.location, length: span.length)
-            guard end <= whole.length, Self.validCharacterRange(spanRange, in: text), Range(spanRange, in: text) != nil else { continue }
-            let part = NSIntersectionRange(view, spanRange)
-            guard part.length > 0 else { continue }
-            append(NSRange(location: position, length: max(0, part.location - position)), false)
-            append(part, true); position = part.location + part.length
+        let red = matching(spans + sourceSpans), yellow = matching(sourceYellowSpans)
+        let boundaries = Set([view.location, view.location + view.length] +
+            (red + yellow).flatMap { [$0.location, $0.location + $0.length] }).sorted()
+        var runs: [Run] = []
+        for (a, b) in zip(boundaries, boundaries.dropFirst()) where b > a {
+            let range = NSRange(location: a, length: b - a)
+            guard let indexRange = Range(range, in: text) else { continue }
+            let isRed = red.contains { NSLocationInRange(a, $0) }
+            let isYellow = yellow.contains { NSLocationInRange(a, $0) }
+            let part = String(text[indexRange])
+            if let last = runs.last, last.red == isRed && last.yellow == isYellow {
+                runs[runs.count - 1] = .init(text: last.text + part, red: isRed, yellow: isYellow)
+            } else { runs.append(.init(text: part, red: isRed, yellow: isYellow)) }
         }
-        append(NSRange(location: position, length: max(0, view.location + view.length - position)), false)
         return runs
     }
 }

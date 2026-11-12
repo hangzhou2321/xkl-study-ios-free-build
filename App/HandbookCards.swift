@@ -203,6 +203,22 @@ struct HandbookCardPackage: Codable, Equatable {
         let sourcePage: Int
         let cardIDs: [String]
         var additionalSourceID: String? = nil
+        var difficultyStars: Int? = nil
+    }
+    /// A faithful source colour span in a specific immutable field version.
+    /// User highlights are stored separately and are never replaced by this.
+    struct SourceRedSpan: Codable, Equatable {
+        let cardID: String
+        let fieldID: String
+        let textSHA256: String
+        let location: Int
+        let length: Int
+        let sourcePage: Int
+        var sourceID: String? = nil
+        var span: HandbookHighlightSpan {
+            .init(cardID: cardID, fieldID: fieldID, textSHA256: textSHA256,
+                  location: location, length: length)
+        }
     }
     /// Presentation-only guidance is kept outside the immutable card definition.
     /// Each guide is explicitly assigned to an existing knowledge-point card.
@@ -236,6 +252,12 @@ struct HandbookCardPackage: Codable, Equatable {
     /// Optional package-level presentation metadata; it does not alter card definitions or scheduling.
     var topicFrequencies: [TopicFrequency]? = nil
     var memoryGuides: [MemoryGuide]? = nil
+    /// An optional presentation scope. All other card identities and their
+    /// histories remain in the package and can be explicitly added back.
+    var mainCardIDs: [String]? = nil
+    /// Only portions that are red in the source; nil remains valid for older packs.
+    var sourceRedSpans: [SourceRedSpan]? = nil
+    var sourceYellowSpans: [SourceRedSpan]? = nil
     /// Optional original questions; absent in earlier course packages.
     var relatedQuestions: [HandbookRelatedQuestion]? = nil
     /// Supplemental, source-attributed comparisons; never alter a card's identity.
@@ -258,6 +280,7 @@ struct HandbookCardPackage: Codable, Equatable {
         try Self.validateAdditionalSources(additionalSources)
         try validateTopicFrequencies()
         try validateMemoryGuides()
+        try validateSourcePresentation()
         let questions = relatedQuestions ?? []
         guard questions.count <= 20_000, Set(questions.map(\.id)).count == questions.count else {
             throw ExamError.invalid("对应原题的身份重复或数量异常。")
@@ -273,6 +296,53 @@ struct HandbookCardPackage: Codable, Equatable {
         for card in cards {
             try card.validate(pages: Set(source.includedPages), chapterIDs: Set(chapters.map(\.id)), additionalSources: additionalSources)
         }
+    }
+    private func validateSourcePresentation() throws {
+        let byID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
+        if let scope = mainCardIDs {
+            guard subject == .computer || subject == .power,
+                  !scope.isEmpty, Set(scope).count == scope.count,
+                  Set(scope).isSubset(of: Set(byID.keys)) else {
+                throw ExamError.invalid("宝典主线卡片范围无效，原记录保留。")
+            }
+        }
+        let spans = (sourceRedSpans ?? []) + (sourceYellowSpans ?? [])
+        guard spans.count <= 100_000 else {
+            throw ExamError.invalid("原书颜色标记数量或来源无效。")
+        }
+        let guides = Dictionary(uniqueKeysWithValues: (memoryGuides ?? []).map { ($0.cardID, $0) })
+        var documents: [String: HandbookHighlightDocument] = [:]
+        for item in spans {
+            guard let card = byID[item.cardID] else {
+                throw ExamError.invalid("原书颜色标记与卡片原页不一致。")
+            }
+            if let sourceID = item.sourceID {
+                guard (card.sourceReferences ?? []).contains(where: { $0.sourceID == sourceID && $0.page == item.sourcePage }),
+                      (additionalSources ?? []).contains(where: { $0.id == sourceID && $0.source.title.contains("宝典") }) else {
+                    throw ExamError.invalid("原书颜色标记与附加原页不一致。")
+                }
+            } else {
+                guard source.title.contains("宝典"), card.sourcePages.contains(item.sourcePage) else {
+                    throw ExamError.invalid("原书颜色标记与原页不一致。")
+                }
+            }
+            if documents[card.id] == nil { documents[card.id] = .init(card: card, guide: guides[card.id]) }
+            guard let field = documents[card.id]?.fields.first(where: { $0.id == item.fieldID }),
+                  HandbookHighlightState.hash(field.text) == item.textSHA256,
+                  item.location >= 0, item.length > 0,
+                  item.location <= field.text.utf16.count,
+                  item.length <= field.text.utf16.count - item.location,
+                  HandbookHighlightState.validCharacterRange(NSRange(location: item.location, length: item.length), in: field.text),
+                  Range(NSRange(location: item.location, length: item.length), in: field.text) != nil else {
+                throw ExamError.invalid("原书颜色标记与正文不一致。")
+            }
+        }
+    }
+    func sourceSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
+        (sourceRedSpans ?? []).filter { $0.cardID == card.id }.map(\.span)
+    }
+    func sourceYellowSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
+        (sourceYellowSpans ?? []).filter { $0.cardID == card.id }.map(\.span)
     }
     private func validateMemoryGuides() throws {
         guard let guides = memoryGuides else { return }
@@ -302,6 +372,7 @@ struct HandbookCardPackage: Codable, Equatable {
               Set(assigned).count == assigned.count,
               frequencies.allSatisfy({ item in
                   (1...1_000).contains(item.topicNumber) && (1...5).contains(item.stars) &&
+                  (item.difficultyStars == nil || (1...5).contains(item.difficultyStars!)) &&
                   (item.additionalSourceID == nil ? source.includedPages.contains(item.sourcePage) :
                     (additionalSources ?? []).contains { $0.id == item.additionalSourceID && $0.source.includedPages.contains(item.sourcePage) }) &&
                   item.cardIDs.count <= cards.count &&
