@@ -116,7 +116,10 @@ final class HandbookCardTests: XCTestCase {
         })
     }
     func testSharedSourceTablePreservesCardIdentityAndValidatesReferences() throws {
-        var wrongSubject = fixture(); wrongSubject.sharedTables = []
+        var computer = fixture(); computer.sharedTables = []
+        XCTAssertNoThrow(try computer.validate())
+        var wrongSubject = try changed(fixture()) { $0["subject"] = "circuit" }
+        wrongSubject.sharedTables = []
         XCTAssertThrowsError(try wrongSubject.validate())
         var original = try changed(fixture()) { $0["subject"] = "power" }
         original.additionalSources = [.init(id: "synthetic-source", source: original.source)]

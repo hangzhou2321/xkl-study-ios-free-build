@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      focused_candidate:
+        description: Build a clearly labelled candidate with focused handbook tests; full regression is separate
+        type: boolean
+        required: false
+        default: false
       preview_cases:
         description: Optional comma-separated synthetic handbook preview cases
         type: string
@@ -54,6 +59,7 @@ jobs:
       - name: Test and compile
         env:
           XKL_REUSE_VERIFIED_MODEL_TESTS: ${{ inputs.reuse_verified_model_tests }}
+          XKL_FOCUSED_CANDIDATE: ${{ inputs.focused_candidate }}
           GH_TOKEN: ${{ github.token }}
         run: bash tools/build_unsigned_ios.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -65,6 +71,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   preview:
+    if: ${{ !inputs.focused_candidate }}
     runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
@@ -104,6 +111,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
   effective-time-preview:
+    if: ${{ !inputs.focused_candidate }}
     runs-on: macos-15-intel
     timeout-minutes: 25
     steps:

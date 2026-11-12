@@ -7,6 +7,10 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 python3 tools/generate_xcode_project.py --without-personal-resources
 mkdir -p build/c-tests
+if [[ "${XKL_REUSE_VERIFIED_MODEL_TESTS:-false}" == "true" && "${XKL_FOCUSED_CANDIDATE:-false}" == "true" ]]; then
+  echo "Focused candidate and reused model tests cannot be combined." >&2
+  exit 2
+fi
 if [[ "${XKL_REUSE_VERIFIED_MODEL_TESTS:-false}" == "true" ]]; then
   python3 tools/verify_reused_model_tests.py
 else
@@ -18,7 +22,12 @@ for suite in test_engine test_exam_engine test_midnight_engine test_import test_
     Sources/CPocket/internal/pocket_log.c -o "build/c-tests/${suite}"
   "build/c-tests/${suite}"
 done
-swift test --jobs 2
+if [[ "${XKL_FOCUSED_CANDIDATE:-false}" == "true" ]]; then
+  echo "FOCUSED CANDIDATE ONLY: full regression is a separate run"
+  swift test --jobs 2 --filter 'HandbookCardTests|HandbookSourceScopeTests|HandbookHighlightStoreTests|HandbookWordTests|ProfessionalRecallEngineTests'
+else
+  swift test --jobs 2
+fi
 fi
 xcodebuild -project XKLStudy.xcodeproj -scheme XKLStudy -configuration Release \
   -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \
