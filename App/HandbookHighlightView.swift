@@ -6,14 +6,19 @@ struct HandbookHighlightContext {
     let state: HandbookHighlightState
     var sourceRedSpans: [HandbookHighlightSpan] = []
     var sourceYellowSpans: [HandbookHighlightSpan] = []
+    var sourceGreenSpans: [HandbookHighlightSpan] = []
+    var sourceBlueSpans: [HandbookHighlightSpan] = []
 
     func text(_ source: String, fieldID: String, visible: NSRange? = nil) -> Text {
         let displayed = handbookDisplayText(source)
         return state.runs(cardID: cardID, fieldID: fieldID, text: displayed, visible: visible,
-                          sourceSpans: sourceRedSpans, sourceYellowSpans: sourceYellowSpans)
+                          sourceSpans: sourceRedSpans, sourceYellowSpans: sourceYellowSpans,
+                          sourceGreenSpans: sourceGreenSpans, sourceBlueSpans: sourceBlueSpans)
             .reduce(Text("")) { result, run in
                 var fragment = AttributedString(run.text)
                 if run.red { fragment.foregroundColor = .red }
+                else if run.green { fragment.foregroundColor = Color(red: 0.31, green: 0.45, blue: 0.37) }
+                else if run.blue { fragment.foregroundColor = Color(red: 0.31, green: 0.31, blue: 0.46) }
                 if run.yellow { fragment.backgroundColor = Color(red: 1, green: 0.93, blue: 0.20) }
                 return result + Text(fragment)
             }

@@ -258,6 +258,8 @@ struct HandbookCardPackage: Codable, Equatable {
     /// Only portions that are red in the source; nil remains valid for older packs.
     var sourceRedSpans: [SourceRedSpan]? = nil
     var sourceYellowSpans: [SourceRedSpan]? = nil
+    var sourceGreenSpans: [SourceRedSpan]? = nil
+    var sourceBlueSpans: [SourceRedSpan]? = nil
     /// Optional original questions; absent in earlier course packages.
     var relatedQuestions: [HandbookRelatedQuestion]? = nil
     /// Supplemental, source-attributed comparisons; never alter a card's identity.
@@ -289,7 +291,7 @@ struct HandbookCardPackage: Codable, Equatable {
         for question in questions { try question.validate(cardIDs: cardIDs, source: source, additionalSources: additionalSources) }
         let tables = sharedTables ?? []
         guard tables.count <= 500, Set(tables.map(\.id)).count == tables.count,
-              sharedTables == nil || subject == .power || subject == .mechanics else {
+              sharedTables == nil || subject == .computer || subject == .power || subject == .mechanics else {
             throw ExamError.invalid("讲义对照表的身份重复或数量异常。")
         }
         for table in tables { try table.validate(cardIDs: cardIDs, sources: additionalSources, allowDirectoryOnly: subject == .mechanics) }
@@ -306,7 +308,7 @@ struct HandbookCardPackage: Codable, Equatable {
                 throw ExamError.invalid("宝典主线卡片范围无效，原记录保留。")
             }
         }
-        let spans = (sourceRedSpans ?? []) + (sourceYellowSpans ?? [])
+        let spans = (sourceRedSpans ?? []) + (sourceYellowSpans ?? []) + (sourceGreenSpans ?? []) + (sourceBlueSpans ?? [])
         guard spans.count <= 100_000 else {
             throw ExamError.invalid("原书颜色标记数量或来源无效。")
         }
@@ -343,6 +345,12 @@ struct HandbookCardPackage: Codable, Equatable {
     }
     func sourceYellowSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
         (sourceYellowSpans ?? []).filter { $0.cardID == card.id }.map(\.span)
+    }
+    func sourceGreenSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
+        (sourceGreenSpans ?? []).filter { $0.cardID == card.id }.map(\.span)
+    }
+    func sourceBlueSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
+        (sourceBlueSpans ?? []).filter { $0.cardID == card.id }.map(\.span)
     }
     private func validateMemoryGuides() throws {
         guard let guides = memoryGuides else { return }
@@ -385,6 +393,7 @@ struct HandbookCardPackage: Codable, Equatable {
     func frequencyLabel(for card: HandbookCard) -> String? {
         guard let frequencies = topicFrequencies else { return nil }
         guard let item = frequencies.first(where: { $0.cardIDs.contains(card.id) }) else {
+            if mainCardIDs?.contains(card.id) == true { return nil }
             return "宝典未单独标注"
         }
         return "宝典考点频率 " + String(repeating: "★", count: item.stars) +

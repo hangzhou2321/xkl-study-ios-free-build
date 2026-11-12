@@ -416,7 +416,7 @@ enum HandbookSchedulerPreference {
         let tables = saved.format == "xkl-handbook-word-store-v3-pocket-tables"
         guard ((old || tables) && saved.state.dualFSRS == nil && saved.cutoverV1SHA256 == nil && saved.reenabledFromLegacyMarkerSHA256 == nil &&
                (!old || saved.state.package.sharedTables == nil) &&
-               (!tables || (saved.subject == .power && saved.state.package.sharedTables != nil))) ||
+               (!tables || ((saved.subject == .computer || saved.subject == .power) && saved.state.package.sharedTables != nil))) ||
               (dual && saved.state.dualFSRS != nil &&
                (!dualWithoutTables || saved.state.package.sharedTables == nil) &&
                (!dualWithTables || (saved.subject == .mechanics && saved.state.package.sharedTables != nil))) else {
@@ -697,7 +697,7 @@ enum HandbookSchedulerPreference {
                 try immutable(raw, directory.appendingPathComponent("imports/\(hash).xklflashcards"))
                 if !next.rawImports.contains(hash) { next.rawImports.append(hash) };next.state = candidate.state
                 if candidate.package.sharedTables != nil {
-                    if subject == .power && !candidate.usesDualFSRS {
+                    if (subject == .computer || subject == .power) && !candidate.usesDualFSRS {
                         next.format = "xkl-handbook-word-store-v3-pocket-tables"
                     } else if subject == .mechanics && candidate.usesDualFSRS {
                         next.format = "xkl-handbook-word-store-v4-dual-tables"

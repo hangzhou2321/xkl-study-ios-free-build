@@ -138,12 +138,13 @@ struct HandbookHighlightState: Codable, Equatable {
 
     static func hash(_ text: String) -> String { StudySHA256.hex(Data(text.utf8)) }
 
-    struct Run: Equatable { let text: String; let red: Bool; var yellow = false }
+    struct Run: Equatable { let text: String; let red: Bool; var yellow = false; var green = false; var blue = false }
     /// A caller can restrict output to a visible cue, so hidden answer text is
     /// never passed to SwiftUI or to an accessibility label on the front.
     func runs(cardID: String, fieldID: String, text: String, visible: NSRange? = nil,
               sourceSpans: [HandbookHighlightSpan] = [],
-              sourceYellowSpans: [HandbookHighlightSpan] = []) -> [Run] {
+              sourceYellowSpans: [HandbookHighlightSpan] = [], sourceGreenSpans: [HandbookHighlightSpan] = [],
+              sourceBlueSpans: [HandbookHighlightSpan] = []) -> [Run] {
         let whole = NSRange(location: 0, length: (text as NSString).length)
         let view = visible ?? whole
         guard view.location != NSNotFound, view.location >= 0, view.length >= 0,
@@ -163,18 +164,21 @@ struct HandbookHighlightState: Codable, Equatable {
             }
         }
         let red = matching(spans + sourceSpans), yellow = matching(sourceYellowSpans)
+        let green = matching(sourceGreenSpans), blue = matching(sourceBlueSpans)
         let boundaries = Set([view.location, view.location + view.length] +
-            (red + yellow).flatMap { [$0.location, $0.location + $0.length] }).sorted()
+            (red + yellow + green + blue).flatMap { [$0.location, $0.location + $0.length] }).sorted()
         var runs: [Run] = []
         for (a, b) in zip(boundaries, boundaries.dropFirst()) where b > a {
             let range = NSRange(location: a, length: b - a)
             guard let indexRange = Range(range, in: text) else { continue }
             let isRed = red.contains { NSLocationInRange(a, $0) }
             let isYellow = yellow.contains { NSLocationInRange(a, $0) }
+            let isGreen = green.contains { NSLocationInRange(a, $0) }
+            let isBlue = blue.contains { NSLocationInRange(a, $0) }
             let part = String(text[indexRange])
-            if let last = runs.last, last.red == isRed && last.yellow == isYellow {
-                runs[runs.count - 1] = .init(text: last.text + part, red: isRed, yellow: isYellow)
-            } else { runs.append(.init(text: part, red: isRed, yellow: isYellow)) }
+            if let last = runs.last, last.red == isRed && last.yellow == isYellow && last.green == isGreen && last.blue == isBlue {
+                runs[runs.count - 1] = .init(text: last.text + part, red: isRed, yellow: isYellow, green: isGreen, blue: isBlue)
+            } else { runs.append(.init(text: part, red: isRed, yellow: isYellow, green: isGreen, blue: isBlue)) }
         }
         return runs
     }

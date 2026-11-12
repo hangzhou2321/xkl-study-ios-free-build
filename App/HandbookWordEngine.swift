@@ -181,6 +181,25 @@ struct HandbookWordState: Codable, Equatable {
         if dualFSRS != nil { return true }
         return activeOriginalIDs.contains(cardID)
     }
+    var otherScopeHistory: (cards: Int, assessments: Int, familiarMarks: Int) {
+        guard dualFSRS == nil else { return (0, 0, 0) }
+        let active = Set(core.activeCardIDs)
+        let attempts = record.attempts.filter { !active.contains($0.cardID) }
+        let familiar = ((try? core.allEvents()) ?? []).filter {
+            $0.kind == 7 && Int($0.word) < record.cardIDs.count && !active.contains(record.cardIDs[Int($0.word)])
+        }.map { record.cardIDs[Int($0.word)] }
+        return (Set(attempts.map(\.cardID) + familiar).count, attempts.count, familiar.count)
+    }
+    func historyLabel(for cardID: String) -> String? {
+        guard dualFSRS == nil, let index = originalIDs.firstIndex(of: cardID), index < record.cardIDs.count else { return nil }
+        let alias = record.cardIDs[index]
+        let attempts = record.attempts.filter { $0.cardID == alias }
+        let familiar = ((try? core.allEvents()) ?? []).contains { $0.kind == 7 && Int($0.word) == index }
+        guard !attempts.isEmpty || familiar else { return nil }
+        let remembered = attempts.filter(\.remembered).count
+        let forgotten = attempts.count - remembered
+        return "已有自评：记住\(remembered)次，没记住\(forgotten)次" + (familiar ? "；曾标为熟记" : "")
+    }
     private func packedValues() -> [UInt32] {
         let raw = core.record.snapshot
         guard let pointer = raw.withUnsafeBytes({ xkl_engine_restore($0.bindMemory(to: UInt8.self).baseAddress, $0.count) }) else { return [] }

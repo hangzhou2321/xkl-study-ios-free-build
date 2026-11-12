@@ -5,8 +5,8 @@ import XCTest
 final class HandbookSourceScopeTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_793_000_000)
 
-    private func package() -> HandbookCardPackage {
-        .init(id: "synthetic-source-scope", subject: .power, title: "Synthetic", revision: "1.0",
+    private func package(subject: ConceptSubject = .power) -> HandbookCardPackage {
+        .init(id: "synthetic-source-scope", subject: subject, title: "Synthetic", revision: "1.0",
               source: .init(title: "Synthetic 宝典", fileName: "synthetic.pdf", sha256: String(repeating: "a", count: 64),
                             pdfPageCount: 2, includedPages: [1]),
               chapters: [.init(id: "chapter", title: "Synthetic")], cards: (0..<3).map {
@@ -79,6 +79,35 @@ final class HandbookSourceScopeTests: XCTestCase {
         _ = try HandbookWordEngine(state: restored.state)
     }
 
+    @MainActor func testComputerSourceTableImportRetainsProgressAfterReopen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-source-table-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = package(subject: .computer)
+        let store = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        store.importData(try JSONEncoder().encode(original))
+        store.start(now: now)
+        let shown = try XCTUnwrap(store.engine?.presentation)
+        store.reveal(token: shown.id, now: now)
+        store.rate(remembered: true, token: shown.id, now: now)
+        let before = try XCTUnwrap(store.engine?.record.attempts)
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as! [String: Any]
+        object["revision"] = "1.1"
+        object["additionalSources"] = [["id": "extra", "source": object["source"]!]]
+        object["sharedTables"] = [["id":"synthetic-table", "title":"Synthetic table", "cardIDs":["old-0"],
+            "columns":["A","B"], "rows":[["x","y"]], "sourceID":"extra", "sourcePages":[1]]]
+        let bytes = try JSONSerialization.data(withJSONObject: object)
+        store.importData(bytes)
+        XCTAssertNil(store.error); XCTAssertFalse(store.blocked)
+        XCTAssertEqual(store.engine?.record.attempts, before)
+        let after = try XCTUnwrap(store.engine?.state)
+        store.importData(bytes)
+        XCTAssertEqual(store.engine?.state, after)
+        let reopened = HandbookWordStore(subject: .computer, baseDirectory: root, documentsDirectory: root, now: now)
+        XCTAssertFalse(reopened.blocked); XCTAssertNil(reopened.error)
+        XCTAssertEqual(reopened.engine?.state, after)
+    }
+
     func testSourceColourOverlapsPersonalColourAndHonoursMask() {
         let text = "甲乙丙丁", hash = HandbookHighlightState.hash(text)
         func span(_ location: Int, _ length: Int) -> HandbookHighlightSpan {
@@ -93,5 +122,18 @@ final class HandbookSourceScopeTests: XCTestCase {
                                  sourceSpans: [span(2, 1)], sourceYellowSpans: [span(1, 2)])
         XCTAssertEqual(visible.map(\.text).joined(), "甲乙")
         XCTAssertEqual(state.spans, [span(1, 1)])
+        let additional = state.runs(cardID: "card", fieldID: "field", text: text,
+            sourceGreenSpans: [span(3, 1)], sourceBlueSpans: [span(0, 1)])
+        XCTAssertEqual(additional, [.init(text: "甲", red: false, blue: true), .init(text: "乙", red: true),
+                                   .init(text: "丙", red: false), .init(text: "丁", red: false, green: true)])
+    }
+
+    func testUnratedMainCardDoesNotInheritAnUnrelatedBookFrequency() throws {
+        var value = package()
+        value.mainCardIDs = ["old-1"]
+        value.topicFrequencies = [.init(topicNumber: 1, stars: 3, sourcePage: 1, cardIDs: ["old-0"])]
+        try value.validate()
+        XCTAssertNil(value.frequencyLabel(for: value.cards[1]))
+        XCTAssertNotNil(value.frequencyLabel(for: value.cards[0]))
     }
 }
