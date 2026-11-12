@@ -268,12 +268,11 @@ struct HandbookCardView: View {
 
     private var practiceSheetContent: some View {
         relatedAndTableSheets
-        .alert("操作结果", isPresented: $showingActionNotice) {
-            Button("知道了", role: .cancel) { }
-        } message: { Text(actionNotice) }
-        .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
-            Button("知道了", role: .cancel) { store.error = nil }
-        } message: { Text(store.error ?? "") }
+        .alert(store.error == nil ? "操作结果" : "操作未完成",
+               isPresented: Binding(get: { store.error != nil || showingActionNotice },
+                                    set: { if !$0 { store.error = nil; showingActionNotice = false } })) {
+            Button("知道了", role: .cancel) { store.error = nil; showingActionNotice = false }
+        } message: { Text(store.error ?? actionNotice) }
     }
 
     private var startupContent: some View {

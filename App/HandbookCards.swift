@@ -260,6 +260,9 @@ struct HandbookCardPackage: Codable, Equatable {
     var sourceYellowSpans: [SourceRedSpan]? = nil
     var sourceGreenSpans: [SourceRedSpan]? = nil
     var sourceBlueSpans: [SourceRedSpan]? = nil
+    /// A source edition may only replace the exact content it was prepared
+    /// against. Learning progress is stored separately and is not hashed here.
+    var requiredBasePackageHash: String? = nil
     /// Optional original questions; absent in earlier course packages.
     var relatedQuestions: [HandbookRelatedQuestion]? = nil
     /// Supplemental, source-attributed comparisons; never alter a card's identity.
@@ -272,7 +275,10 @@ struct HandbookCardPackage: Codable, Equatable {
         try value.validate(); return value
     }
     func validate() throws {
-        guard format == "xkl-handbook-cards-v1", handbookText(id, 200), handbookText(title, 600), handbookText(revision, 100),
+        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source"].contains(format),
+              (requiredBasePackageHash == nil || ExamContent.isHash(requiredBasePackageHash!)),
+              (format != "xkl-handbook-cards-v2-source" || (requiredBasePackageHash != nil && mainCardIDs != nil)),
+              handbookText(id, 200), handbookText(title, 600), handbookText(revision, 100),
               (1...100).contains(chapters.count), Set(chapters.map(\.id)).count == chapters.count,
               chapters.allSatisfy({ handbookText($0.id, 100) && handbookText($0.title, 300) }),
               (1...5_000).contains(cards.count), Set(cards.map(\.id)).count == cards.count else {
@@ -520,6 +526,9 @@ struct HandbookRecallEngine {
         try next.validate()
         guard next.id == package.id, next.subject == package.subject else { throw ExamError.invalid("宝典卡包科目或ID不同，原记录保留。") }
         if next == package { return }
+        if let expected = next.requiredBasePackageHash, expected != package.hash {
+            throw ExamError.invalid("已有课程内容已变化，新卡包不适用；原课程和学习记录保留。")
+        }
         guard next.revision.compare(package.revision, options: .numeric) == .orderedDescending,
               !record.contentVersions.contains(where: { $0.packageSHA256 == next.hash }),
               Set(record.cardOrder).isSubset(of: Set(next.cards.map(\.id))) else {

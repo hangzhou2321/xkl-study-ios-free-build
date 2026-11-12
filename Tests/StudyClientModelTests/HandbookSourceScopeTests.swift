@@ -136,4 +136,24 @@ final class HandbookSourceScopeTests: XCTestCase {
         XCTAssertNil(value.frequencyLabel(for: value.cards[1]))
         XCTAssertNotNil(value.frequencyLabel(for: value.cards[0]))
     }
+
+    @MainActor func testSourceEditionRefusesAStaleContentBaseButAllowsIdenticalReimport() async throws {
+        let engine = try HandbookWordEngine(package: package(), now: now)
+        try engine.start(now: now)
+        let shown = try XCTUnwrap(engine.presentation)
+        try engine.reveal(token: shown.id, now: now)
+        try engine.rate(remembered: true, token: shown.id, now: now)
+        let before = engine.state
+        var update = try scopePackage()
+        update.format = "xkl-handbook-cards-v2-source"
+        update.requiredBasePackageHash = String(repeating: "0", count: 64)
+        XCTAssertThrowsError(try engine.updatePackage(update, now: now))
+        XCTAssertEqual(engine.state, before)
+        update.requiredBasePackageHash = package().hash
+        try engine.updatePackage(update, now: now)
+        let after = engine.state
+        try engine.updatePackage(update, now: now)
+        XCTAssertEqual(engine.state, after)
+        XCTAssertEqual(Array(after.word.attempts.prefix(before.word.attempts.count)), before.word.attempts)
+    }
 }

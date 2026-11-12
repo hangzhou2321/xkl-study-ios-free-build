@@ -150,6 +150,10 @@ struct HandbookWordState: Codable, Equatable {
         guard incoming.id == package.id, incoming.subject == package.subject,
               incoming.revision.compare(package.revision, options: .numeric) != .orderedAscending,
               Set(originalIDs).isSubset(of: Set(incoming.cards.map(\.id))) else { throw ExamError.invalid("旧版本或删卡包不能覆盖已有宝典记录。") }
+        if incoming == package { return }
+        if let expected = incoming.requiredBasePackageHash, expected != package.hash {
+            throw ExamError.invalid("已有课程内容已变化，新卡包不适用；原课程和学习记录保留。")
+        }
         let known = Set(originalIDs), next = originalIDs + incoming.cards.map(\.id).filter { !known.contains($0) }
         if let dualFSRS {
             guard incoming.mainCardIDs == nil else { throw ExamError.invalid("当前调度不能自动切换新的主线范围，原记录保留。") }

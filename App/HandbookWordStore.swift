@@ -739,6 +739,8 @@ enum HandbookSchedulerPreference {
         let top = eligible.filter { $0.package.revision.compare(highest.package.revision, options: .numeric) == .orderedSame }
         guard top.allSatisfy({ $0.package == highest.package }) else { return nil }
         if let current = engine, !Set(current.state.originalCardIDs).isSubset(of: Set(highest.package.cards.map(\.id))) { return nil }
+        if let current = package, let required = highest.package.requiredBasePackageHash,
+           current != highest.package && current.hash != required { return nil }
         return top.first?.url
     }
     func exportRecords() throws -> Data {
