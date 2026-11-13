@@ -145,6 +145,46 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "C8F9C9000BD6A3F488A5FF9E";
 		};
+		"9B30F718E75A07065F7CDE1F" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "EffectiveStudyScreen.swift";
+			"sourceTree" = "<group>";
+		};
+		"E4A1876BA8666FC856D485A5" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "9B30F718E75A07065F7CDE1F";
+		};
+		"E8885B26E6EB89FE51E2DEC3" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "EffectiveStudyTime.swift";
+			"sourceTree" = "<group>";
+		};
+		"E3268E09E046F3C50B71CCD3" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "E8885B26E6EB89FE51E2DEC3";
+		};
+		"3081CF70A5567392515B6125" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "EffectiveStudyTimePreview.swift";
+			"sourceTree" = "<group>";
+		};
+		"FEA5D85D373A1F72398BEBC7" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "3081CF70A5567392515B6125";
+		};
+		"24B0BC83F8F63D28FFF8472B" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "EffectiveStudyTimeView.swift";
+			"sourceTree" = "<group>";
+		};
+		"7864B8A3EF063DA6C48C0CF3" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "24B0BC83F8F63D28FFF8472B";
+		};
 		"806EBE350576284DCD8F29E4" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -625,6 +665,36 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "CE5CE25F6E72AAE53E6FEC46";
 		};
+		"2D745D5579DE80D06CB162B2" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "PublicDualLegacyCapture.swift";
+			"sourceTree" = "<group>";
+		};
+		"F27DCE40D7E9DFB6EC7FF2D6" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "2D745D5579DE80D06CB162B2";
+		};
+		"E0C13C0DF91BCA2EC0EF7166" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "PublicPocketMigration.swift";
+			"sourceTree" = "<group>";
+		};
+		"6492976BB4C789A603C5B5F2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "E0C13C0DF91BCA2EC0EF7166";
+		};
+		"C7D6967D1C896501F232E000" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "PublicQuestionDualFSRS.swift";
+			"sourceTree" = "<group>";
+		};
+		"D37B37B28F1738660B2C29AE" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "C7D6967D1C896501F232E000";
+		};
 		"CBAB490ACD2FB51EC569F2D8" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -654,6 +724,16 @@
 		"15D42ABF864B74CD76A6EF46" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "F7D0F73E261C6E31875BDB36";
+		};
+		"F597F6807A5234990C63A306" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "StudyActivityObserver.swift";
+			"sourceTree" = "<group>";
+		};
+		"F21BE86D7B653916A0DFAD20" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F597F6807A5234990C63A306";
 		};
 		"D941DDF5A019A58D7DE5354C" = {
 			"isa" = "PBXFileReference";
@@ -704,6 +784,36 @@
 		"9F08B90C0BFF8E353297A66C" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "45113DF768BC6AE6CE8430A7";
+		};
+		"44167248C848F7C4B821B035" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "StudyNovel.swift";
+			"sourceTree" = "<group>";
+		};
+		"97C4A274D4235814373DEDEE" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "44167248C848F7C4B821B035";
+		};
+		"34FC18AE191430211C571C1E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "StudyNovelStore.swift";
+			"sourceTree" = "<group>";
+		};
+		"B0E8BC4C1901565CD1CE6A5C" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "34FC18AE191430211C571C1E";
+		};
+		"70CB512E59D9FE47DC93DA5B" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "StudyNovelView.swift";
+			"sourceTree" = "<group>";
+		};
+		"42EDDB67BF43FBD770D3FE0A" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "70CB512E59D9FE47DC93DA5B";
 		};
 		"0C18EDB227FD2CB30D00AB00" = {
 			"isa" = "PBXFileReference";
@@ -758,6 +868,10 @@
 				"E3D7191319E6A8B1FA8626B6",
 				"C22D1EB81C5C85EE28B7CEBB",
 				"C8F9C9000BD6A3F488A5FF9E",
+				"9B30F718E75A07065F7CDE1F",
+				"E8885B26E6EB89FE51E2DEC3",
+				"3081CF70A5567392515B6125",
+				"24B0BC83F8F63D28FFF8472B",
 				"806EBE350576284DCD8F29E4",
 				"E9CA27F6C12908F0A9843229",
 				"B20540FCAAF5055A2A79786E",
@@ -806,14 +920,21 @@
 				"AB0938548DA130D76C5BBE2F",
 				"A15F359F10D27B0738AAC3D4",
 				"CE5CE25F6E72AAE53E6FEC46",
+				"2D745D5579DE80D06CB162B2",
+				"E0C13C0DF91BCA2EC0EF7166",
+				"C7D6967D1C896501F232E000",
 				"CBAB490ACD2FB51EC569F2D8",
 				"DC3E3B738B052ECE867E0529",
 				"F7D0F73E261C6E31875BDB36",
+				"F597F6807A5234990C63A306",
 				"D941DDF5A019A58D7DE5354C",
 				"885E60C83A48496A472083A7",
 				"C988D901382C7F92CE38D228",
 				"D6C4A746097B447B17D466D0",
 				"45113DF768BC6AE6CE8430A7",
+				"44167248C848F7C4B821B035",
+				"34FC18AE191430211C571C1E",
+				"70CB512E59D9FE47DC93DA5B",
 				"0C18EDB227FD2CB30D00AB00",
 				"06271BAF49532C879AA3C58B",
 				"8BF729FFE074CAEE622C0292",
@@ -893,6 +1014,10 @@
 				"F21507D6FB220F2BAA6A458E",
 				"D6A99BAF4B0BD5AB64ECA7D3",
 				"655008C699DE48C8FE7EC930",
+				"E4A1876BA8666FC856D485A5",
+				"E3268E09E046F3C50B71CCD3",
+				"FEA5D85D373A1F72398BEBC7",
+				"7864B8A3EF063DA6C48C0CF3",
 				"CD9D8F0E55354630F40ED55D",
 				"D929FC79FA9F2AC6CF009DEB",
 				"3EF540BE18D80EC3AB2D9A91",
@@ -941,14 +1066,21 @@
 				"549D329F3F83A3F47A8999A4",
 				"E4E098C0D5D79BE6B698AB13",
 				"760AE13AA3401A8221AA26D0",
+				"F27DCE40D7E9DFB6EC7FF2D6",
+				"6492976BB4C789A603C5B5F2",
+				"D37B37B28F1738660B2C29AE",
 				"E43EFD2D6E0E9CEC28BCAB0D",
 				"31C34CD967FA67016EE8A98E",
 				"15D42ABF864B74CD76A6EF46",
+				"F21BE86D7B653916A0DFAD20",
 				"BC565064308C9498AF0C880C",
 				"FFE23E61EBB962D0564D1A90",
 				"3BE5C389F2E653B0E8A2AD95",
 				"1E6F506619EFF6080D2ED13A",
 				"9F08B90C0BFF8E353297A66C",
+				"97C4A274D4235814373DEDEE",
+				"B0E8BC4C1901565CD1CE6A5C",
+				"42EDDB67BF43FBD770D3FE0A",
 				"9C13DFC679F86E6883A111D6",
 			);
 			"runOnlyForDeploymentPostprocessing" = 0;

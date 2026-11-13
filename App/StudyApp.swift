@@ -73,6 +73,7 @@ struct RootView: View {
     @StateObject private var handbookPower = HandbookWordStore(subject: .power)
     @StateObject private var handbookCircuit = HandbookWordStore(subject: .circuit)
     @StateObject private var handbookMechanics = HandbookWordStore(subject: .mechanics)
+    @StateObject private var studyNovel = StudyNovelStore()
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @StateObject private var effectiveTime = EffectiveStudyTimeStore()
@@ -81,6 +82,8 @@ struct RootView: View {
     @State private var examPracticing = false
     @State private var professionalPracticing = false
     @State private var professionalRecalling = false
+    @State private var showingStudyNovel = false
+    @State private var studyNovelFirstChapter: Int?
     @AppStorage("handbookFullScreenEnabled") private var handbookFullScreenEnabled = true
     @State private var examOverlay = false
     @State private var professionalOverlay = false
@@ -146,7 +149,12 @@ struct RootView: View {
                                     handbookMechanics: handbookMechanics,
                                     contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling),
                                     segmentBar: AnyView(segmentBar),
-                                    fullScreenEnabled: handbookFullScreenBinding)
+                                    fullScreenEnabled: handbookFullScreenBinding,
+                                    novelStore: studyNovel,
+                                    onOpenNovel: { readNow in
+                                        studyNovelFirstChapter = readNow ? studyNovel.active?.nextUnread : nil
+                                        showingStudyNovel = true
+                                    })
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
@@ -170,6 +178,13 @@ struct RootView: View {
 
     private var decoratedTabs: some View {
         tabs
+        .sheet(isPresented: $showingStudyNovel) {
+            StudyNovelShelfView(store: studyNovel, records: { novelRecords }, firstChapter: studyNovelFirstChapter)
+                .onAppear { studyNovel.sync(novelRecords) }
+        }
+        .onChange(of: showingStudyNovel) { _, _ in trackStudyVisibility() }
+        .onChange(of: handbookComputer.engine?.record.attempts.last?.id) { _, _ in studyNovel.sync(novelRecords) }
+        .onChange(of: handbookPower.engine?.record.attempts.last?.id) { _, _ in studyNovel.sync(novelRecords) }
         .background(StudyActivityObserver {
             if acceptsEffectiveTouch { effectiveTime.noteActivity() }
         })
@@ -181,7 +196,19 @@ struct RootView: View {
             refreshCalendars(force: true)
             trackStudyVisibility()
             syncExamPolicy()
+            studyNovel.sync(novelRecords)
         }
+    }
+
+    private var novelRecords: [String: [ProfessionalRecallAttempt]] {
+        var result: [String: [ProfessionalRecallAttempt]] = [:]
+        if let engine = handbookComputer.engine, !engine.usesDualFSRS, !handbookComputer.blocked {
+            result["computer"] = engine.record.attempts
+        }
+        if let engine = handbookPower.engine, !engine.usesDualFSRS, !handbookPower.blocked {
+            result["power"] = engine.record.attempts
+        }
+        return result
     }
 
     private var tabVisibilityContent: some View {
@@ -290,7 +317,7 @@ struct RootView: View {
                 selectedTab = 5
             }
         }
-        let overlay = importing || (selectedTab == 3 && examOverlay) || (selectedTab == 4 && professionalOverlay)
+        let overlay = importing || showingStudyNovel || (selectedTab == 3 && examOverlay) || (selectedTab == 4 && professionalOverlay)
         let visible = scenePhase == .active && !overlay && currentPracticeArea == flow.state.activeArea
             && currentPracticeArea != nil
         flow.setVisible(visible)
@@ -304,7 +331,7 @@ struct RootView: View {
     private var effectiveScreen: EffectiveStudyScreen {
         var screen = EffectiveStudyScreen()
         screen.foreground = scenePhase == .active
-        screen.globalBlocked = importing || flow.state.needsBreak
+        screen.globalBlocked = importing || showingStudyNovel || flow.state.needsBreak
         switch selectedTab {
         case 0: screen.tab = .vocabulary
         case 2: screen.tab = .records

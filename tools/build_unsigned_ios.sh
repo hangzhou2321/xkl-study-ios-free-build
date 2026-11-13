@@ -24,7 +24,7 @@ for suite in test_engine test_exam_engine test_midnight_engine test_import test_
 done
 if [[ "${XKL_FOCUSED_CANDIDATE:-false}" == "true" ]]; then
   echo "FOCUSED CANDIDATE ONLY: full regression is a separate run"
-  swift test --jobs 2 --filter 'HandbookCardTests|HandbookSourceScopeTests|HandbookHighlightStoreTests|HandbookWordTests|ProfessionalRecallEngineTests'
+  swift test --jobs 2 --filter 'HandbookCardTests|HandbookSourceScopeTests|HandbookHighlightStoreTests|HandbookWordTests|ProfessionalRecallEngineTests|StudyNovelTests'
 else
   swift test --jobs 2
 fi

@@ -6,11 +6,13 @@ var modelSources = ["PocketEngine.swift", "StudyModels.swift", "StudyHistory.swi
     "ConceptGuidance.swift", "ConceptGuidanceStore.swift", "ConceptDiagram.swift", "ConceptSyllabus.swift", "RecallStudy.swift", "MathPractice.swift", "MathExperience.swift", "MathGuide.swift", "ProfessionalStudyPlan.swift", "ProfessionalQuestionPresentation.swift", "ProfessionalSourceSections.swift", "ProfessionalCardPriority.swift", "ProfessionalCardLesson.swift", "ProfessionalRecallCatalog.swift", "ProfessionalRecallEngine.swift", "KnowledgeCourse.swift", "KnowledgeLearning.swift", "KnowledgeSyntheticFixture.swift", "ProfessionalQuestionStudy.swift"]
 modelSources += ["HandbookCards.swift", "HandbookRecallCue.swift", "HandbookWordEngine.swift", "HandbookDualFSRS.swift", "HandbookHighlights.swift"]
 modelSources += ["PublicQuestionDualFSRS.swift", "PublicDualLegacyCapture.swift", "PublicPocketMigration.swift"]
+modelSources += ["StudyNovel.swift"]
 var modelExcludes = ["StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
     "Info.plist", "Assets.xcassets", "ExamStore.swift", "ExamView.swift", "ConceptStore.swift", "ConceptView.swift",
     "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift", "MathExperienceStore.swift", "MathExperienceView.swift", "MathRichTextView.swift", "MathRenderer", "ProfessionalStudyPlanView.swift", "ProfessionalRecallStore.swift", "ProfessionalRecallView.swift", "KnowledgeLearningStore.swift", "KnowledgeLearningView.swift"]
 modelExcludes += ["HandbookWordStore.swift", "HandbookCardStore.swift", "HandbookHighlightStore.swift", "HandbookHighlightView.swift", "HandbookCardView.swift", "HandbookCardPreview.swift", "KnowledgeExposureLedger.swift", "ProfessionalQuestionStore.swift", "ProfessionalQuestionView.swift", "ProfessionalQuestionPreview.swift"]
 modelExcludes += ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift", "EffectiveStudyTimeView.swift", "EffectiveStudyTimePreview.swift", "StudyActivityObserver.swift"]
+modelExcludes += ["StudyNovelStore.swift", "StudyNovelView.swift"]
 #if os(macOS)
 // Exercise real import/persistence against temporary directories on the build host.
 modelSources += ["HandbookCardStore.swift", "HandbookWordStore.swift", "HandbookHighlightStore.swift"]
@@ -21,6 +23,8 @@ modelSources += ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift"]
 modelExcludes.removeAll { ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift"].contains($0) }
 modelSources += ["ExamStore.swift"]
 modelExcludes.removeAll { ["ExamStore.swift"].contains($0) }
+modelSources += ["StudyNovelStore.swift"]
+modelExcludes.removeAll { $0 == "StudyNovelStore.swift" }
 #endif
 
 let package = Package(

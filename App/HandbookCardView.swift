@@ -13,6 +13,8 @@ struct HandbookCardView: View {
     private let onOverlayChanged: (Bool) -> Void
     private let onEffectiveOverlayChanged: (Bool, Bool) -> Void
     private let startInStudy: Bool
+    private let novelStore: StudyNovelStore?
+    private let onOpenNovel: (Bool) -> Void
     @Binding private var externalStudying: Bool
     @Binding private var fullScreenEnabled: Bool
     @StateObject private var store: HandbookWordStore
@@ -54,12 +56,14 @@ struct HandbookCardView: View {
          studying: Binding<Bool> = .constant(false), startInStudy: Bool = false,
          fullScreenEnabled: Binding<Bool> = .constant(false),
          onStart: @escaping () -> Void = {}, onOverlayChanged: @escaping (Bool) -> Void = { _ in },
-         onEffectiveOverlayChanged: @escaping (Bool, Bool) -> Void = { _, _ in }) {
+         onEffectiveOverlayChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
+         novelStore: StudyNovelStore? = nil, onOpenNovel: @escaping (Bool) -> Void = { _ in }) {
         self.subject = subject; self.baseDirectory = baseDirectory
         self.originalQuestionStore = originalQuestionStore; self.legacyStore = legacyStore
         self.onStart = onStart; self.onOverlayChanged = onOverlayChanged
         self.onEffectiveOverlayChanged = onEffectiveOverlayChanged
         self.startInStudy = startInStudy
+        self.novelStore = novelStore; self.onOpenNovel = onOpenNovel
         _externalStudying = studying
         _fullScreenEnabled = fullScreenEnabled
         _studying = State(initialValue: startInStudy || studying.wrappedValue)
@@ -137,6 +141,11 @@ struct HandbookCardView: View {
                     if studying {
                         Button("全屏", systemImage: "arrow.up.left.and.arrow.down.right") { fullScreenEnabled = true }
                             .accessibilityIdentifier("handbook-enter-fullscreen")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if studying, let novelStore {
+                        StudyNovelEntry(store: novelStore, compact: true, open: onOpenNovel)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -398,6 +407,9 @@ struct HandbookCardView: View {
                     .font(.footnote).frame(minHeight: 44)
             }.accessibilityIdentifier("handbook-exit-fullscreen")
             Spacer()
+            if let novelStore {
+                StudyNovelEntry(store: novelStore, compact: true, open: onOpenNovel)
+            }
             if let engine = store.engine, let presentation = engine.presentation,
                presentation.revealed, let card = engine.currentCard {
                 Button { highlightTarget = .init(card: card, guide: engine.currentMemoryGuide) } label: {
@@ -486,6 +498,9 @@ struct HandbookCardView: View {
                     }.accessibilityIdentifier("handbook-retry-optional").disabled(store.blocked)
                 }
             }.padding(22).background(.background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            if let novelStore {
+                StudyNovelEntry(store: novelStore, compact: false, open: onOpenNovel)
+            }
             if engine.package.mainCardIDs != nil, engine.otherScopeHistory.cards > 0 {
                 let old = engine.otherScopeHistory
                 Button {
@@ -621,6 +636,9 @@ struct HandbookCardView: View {
                     .background(.background, in: RoundedRectangle(cornerRadius: 20))
             }
             Button("返回卡片首页") { studying = false }.buttonStyle(.borderedProminent).controlSize(.large)
+            if let novelStore {
+                StudyNovelEntry(store: novelStore, compact: false, open: onOpenNovel)
+            }
             scheduleNote
         }.padding(.top, 34)
     }

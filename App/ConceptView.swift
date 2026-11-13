@@ -21,6 +21,8 @@ struct ProfessionalCoursesView: View {
     var contentDisabled = false
     var segmentBar: AnyView? = nil
     var fullScreenEnabled: Binding<Bool> = .constant(false)
+    var novelStore: StudyNovelStore? = nil
+    var onOpenNovel: (Bool) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,7 +51,9 @@ struct ProfessionalCoursesView: View {
                              legacyStore: selectedLegacy, studying: $recalling,
                              fullScreenEnabled: fullScreenEnabled,
                              onStart: onStart, onOverlayChanged: onOverlayChanged,
-                             onEffectiveOverlayChanged: onEffectiveOverlayChanged)
+                             onEffectiveOverlayChanged: onEffectiveOverlayChanged,
+                             novelStore: subject == .computer || subject == .power ? novelStore : nil,
+                             onOpenNovel: onOpenNovel)
                 #if DEBUG
                 .modifier(HandbookStudyEnabledProbe())
                 #endif
