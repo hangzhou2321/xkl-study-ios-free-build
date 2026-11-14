@@ -539,6 +539,7 @@ struct HandbookCardView: View {
     private func studyCard(_ engine: HandbookWordEngine, _ card: HandbookCard, _ p: HandbookCardPresentation) -> some View {
         let stats = engine.stats(on: displayDate)
         let index = engine.activePosition(of: card.id)
+        let powerMainline = powerMainlineMembership(card, in: engine.package)
         return VStack(alignment: .leading, spacing: 18) {
             if !fullScreenActive { HStack {
                 Text(verbatim: engine.package.mainCardIDs?.contains(card.id) == true ?
@@ -564,6 +565,8 @@ struct HandbookCardView: View {
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide,
+                                 useFullRecallQuestion: powerMainline == true,
+                                 isArchivedReference: powerMainline == false,
                                  questionAction: subject == .computer && !engine.package.questions(for: card).isEmpty ? {
                                      relatedQuestionTarget = card
                                  } : nil,
@@ -771,11 +774,19 @@ struct HandbookCardView: View {
                 cardAnswerWasVisible: true)
         }
     }
+    private func powerMainlineMembership(_ card: HandbookCard, in package: HandbookCardPackage) -> Bool? {
+        guard package.subject == .power else { return nil }
+        return package.mainCardIDs?.contains(card.id)
+    }
+
     private func outlineRow(_ package: HandbookCardPackage, card: HandbookCard) -> some View {
-        NavigationLink {
+        let archivedReference = powerMainlineMembership(card, in: package) == false
+        return NavigationLink {
             ScrollView {
                 HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
                                  frequencyLabel: package.frequencyLabel(for: card), memoryGuide: package.memoryGuide(for: card),
+                                 useFullRecallQuestion: powerMainlineMembership(card, in: package) == true,
+                                 isArchivedReference: archivedReference,
                                  questionAction: package.questions(for: card).isEmpty ? nil : { outlineRelatedQuestionTarget = card })
                     .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state,
                         sourceRedSpans: package.sourceSpans(for: card), sourceYellowSpans: package.sourceYellowSpans(for: card),
@@ -804,6 +815,9 @@ struct HandbookCardView: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(verbatim: handbookDisplayText(card.title))
+                if archivedReference {
+                    Text("旧卡或补充 · 参考").font(.caption).foregroundStyle(.secondary)
+                }
                 if let label = package.frequencyLabel(for: card) {
                     Text(verbatim: label).font(.caption).foregroundStyle(.secondary)
                 }
@@ -1125,6 +1139,8 @@ private struct HandbookCardFace: View {
     var primarySourceTitle: String? = nil
     var frequencyLabel: String? = nil
     var memoryGuide: HandbookCardPackage.MemoryGuide? = nil
+    var useFullRecallQuestion = false
+    var isArchivedReference = false
     /// Compact top-right entry preserves the full card width on small screens.
     var questionAction: (() -> Void)? = nil
     var questionAccessibilityID = "handbook-outline-related-questions"
@@ -1157,11 +1173,20 @@ private struct HandbookCardFace: View {
                         .foregroundStyle(.blue.opacity(0.7))
                 }
             } }
+            if isArchivedReference {
+                Text("旧卡或补充 · 参考").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("handbook-archived-reference")
+            }
             HandbookMarkedText(source: card.title, fieldID: "title").font(.system(size: titleSize, weight: .semibold, design: .default))
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("handbook-card-title")
             if let label = frequencyLabel {
                 Text(verbatim: label).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
                     .accessibilityIdentifier("handbook-topic-frequency")
+            }
+            if useFullRecallQuestion && card.prompt != card.title && card.prompt != card.title + "？" {
+                HandbookMarkedText(source: card.prompt, fieldID: "prompt").font(.system(size: promptSize)).lineSpacing(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("handbook-card-prompt")
             }
             if let guide = memoryGuide {
                 HandbookMemoryGuideView(guide: guide, revealed: revealed)
@@ -1172,12 +1197,14 @@ private struct HandbookCardFace: View {
                         fullAnswer.padding(.top, 12)
                     }.font(.headline).accessibilityIdentifier("handbook-guide-full-answer")
                 }
-            } else if !revealed && showRecallCues {
-                if !focused {
+            } else if !revealed && (showRecallCues || useFullRecallQuestion) {
+                if !focused && !useFullRecallQuestion {
                     Text("冒号前作提示，后面遮住；翻一次核对整张。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                if card.answerSummary != "讲义原文" {
+                if useFullRecallQuestion {
+                    HandbookAnswerMask()
+                } else if card.answerSummary != "讲义原文" {
                     HandbookCueTextView(source: card.answerSummary, fontSize: summarySize, fieldID: "summary")
                 }
                 ForEach(Array(card.blocks.enumerated()), id: \.offset) { index, block in
