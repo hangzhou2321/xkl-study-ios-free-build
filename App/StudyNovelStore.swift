@@ -54,7 +54,7 @@ import StudyCore
         }
     }
 
-    func importText(_ url: URL, records: [String: [ProfessionalRecallAttempt]]) {
+    func importText(_ url: URL, records: StudyNovelProgress.Records) {
         guard !blocked else { return }
         #if os(iOS) || os(macOS)
         let access = url.startAccessingSecurityScopedResource()
@@ -88,7 +88,7 @@ import StudyCore
         } catch { self.error = error.localizedDescription }
     }
 
-    func select(_ id: String, records: [String: [ProfessionalRecallAttempt]]) {
+    func select(_ id: String, records: StudyNovelProgress.Records) {
         guard !blocked, let index = shelf.books.firstIndex(where: { $0.id == id }) else { return }
         do {
             var next = try updatedShelf(records: records)
@@ -101,7 +101,7 @@ import StudyCore
         } catch { self.error = error.localizedDescription }
     }
 
-    func sync(_ records: [String: [ProfessionalRecallAttempt]]) {
+    func sync(_ records: StudyNovelProgress.Records) {
         guard !blocked, active != nil else { return }
         do { try save(updatedShelf(records: records)) }
         catch { self.error = error.localizedDescription }
@@ -119,7 +119,7 @@ import StudyCore
         catch { self.error = error.localizedDescription }
     }
 
-    private func updatedShelf(records: [String: [ProfessionalRecallAttempt]]) throws -> Shelf {
+    private func updatedShelf(records: StudyNovelProgress.Records) throws -> Shelf {
         var next = shelf
         if let index = next.books.firstIndex(where: { $0.id == next.activeID }) {
             let count = next.books[index].chapterCount

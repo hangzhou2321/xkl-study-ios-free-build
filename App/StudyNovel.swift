@@ -10,7 +10,7 @@ enum StudyNovelError: LocalizedError {
         case .unreadableText: return "无法读取小说。请选择 UTF-8、UTF-16 或 GB18030 编码的 TXT。"
         case .noChapters: return "没找到章节。请让“第1章 标题”这样的章节名单独占一行。"
         case .invalidFile: return "小说或阅读进度文件无法核对。"
-        case .inconsistentAttempts: return "背卡记录已变化，请重新打开 App 核对追更进度。"
+        case .inconsistentAttempts: return "学习记录已变化，请重新打开 App 核对追更进度。"
         }
     }
 }
@@ -89,14 +89,44 @@ struct StudyNovel: Equatable, Identifiable {
     }
 }
 
+/// The identity and date of a saved learning action, without copying its grade.
+struct StudyNovelActivity {
+    let id: UUID
+    let itemID: String
+    let at: Date
+    private let recordedDay: UInt32?
+
+    var day: UInt32? {
+        recordedDay ?? (try? ConceptCalendar.studyDay(at)).map(UInt32.init)
+    }
+
+    init(_ rating: ProfessionalRecallAttempt, subject: String) {
+        id = rating.id
+        itemID = subject + ":" + rating.cardID
+        at = rating.at
+        recordedDay = rating.day
+    }
+
+    init?(publicAnswer: ExamAttempt) {
+        guard publicAnswer.mode == "answer", !publicAnswer.selectedOptions.isEmpty,
+              publicAnswer.grade != nil, let gradedAt = publicAnswer.gradedAt else { return nil }
+        id = publicAnswer.id
+        itemID = "publicQuestions:" + publicAnswer.bankID + ":" + publicAnswer.questionID
+        at = gradedAt
+        recordedDay = nil
+    }
+}
+
 struct StudyNovelProgress: Codable, Equatable {
+    typealias Records = [String: [StudyNovelActivity]]
+
     static let cardsPerChapter = 25
 
     struct Cursor: Codable, Equatable {
         let count: Int
         let lastAttempt: UUID?
 
-        init(_ attempts: [ProfessionalRecallAttempt]) {
+        init(_ attempts: [StudyNovelActivity]) {
             count = attempts.count
             lastAttempt = attempts.last?.id
         }
@@ -111,39 +141,39 @@ struct StudyNovelProgress: Codable, Equatable {
     private(set) var lastOpened: Int?
     private(set) var readingPositions: [Int: Int] = [:]
 
-    mutating func startFrom(_ records: [String: [ProfessionalRecallAttempt]]) {
+    mutating func startFrom(_ records: Records) {
         cursors = records.mapValues(Cursor.init)
     }
 
-    mutating func consume(_ records: [String: [ProfessionalRecallAttempt]], chapterCount: Int) throws {
+    mutating func consume(_ records: Records, chapterCount: Int) throws {
         guard unlocked < chapterCount else { return }
-        var pending: [(subject: String, attempt: ProfessionalRecallAttempt)] = []
+        var pending: [(source: String, index: Int, activity: StudyNovelActivity)] = []
         var updated = cursors
-        for (subject, attempts) in records {
-            updated[subject] = Cursor(attempts)
-            guard let cursor = cursors[subject] else { continue }
+        for (source, attempts) in records {
+            updated[source] = Cursor(attempts)
+            guard let cursor = cursors[source] else { continue }
             guard cursor.count >= 0, cursor.count <= attempts.count,
                   (cursor.count == 0 ? nil : attempts[cursor.count - 1].id) == cursor.lastAttempt else {
                 throw StudyNovelError.inconsistentAttempts
             }
-            pending += attempts.dropFirst(cursor.count).map { (subject, $0) }
+            pending += (cursor.count..<attempts.count).map { (source, $0, attempts[$0]) }
         }
 
         pending.sort {
-            if $0.attempt.at != $1.attempt.at { return $0.attempt.at < $1.attempt.at }
-            if $0.subject != $1.subject { return $0.subject < $1.subject }
-            return $0.attempt.engineSequence < $1.attempt.engineSequence
+            if $0.activity.at != $1.activity.at { return $0.activity.at < $1.activity.at }
+            if $0.source != $1.source { return $0.source < $1.source }
+            return $0.index < $1.index
         }
         cursors = updated
-        for (subject, attempt) in pending {
-            if let studyDay, attempt.day < studyDay { continue }
-            if studyDay != attempt.day {
-                studyDay = attempt.day
+        for (_, _, attempt) in pending {
+            guard let day = attempt.day else { continue }
+            if let studyDay, day < studyDay { continue }
+            if studyDay != day {
+                studyDay = day
                 countedToday.removeAll(keepingCapacity: true)
             }
-            let card = subject + ":" + attempt.cardID
-            guard countedToday.insert(card).inserted else { continue }
-            cardsInChapter.insert(card)
+            guard countedToday.insert(attempt.itemID).inserted else { continue }
+            cardsInChapter.insert(attempt.itemID)
             if cardsInChapter.count == Self.cardsPerChapter {
                 unlocked += 1
                 cardsInChapter.removeAll(keepingCapacity: true)

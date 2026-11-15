@@ -45,6 +45,22 @@ final class ExamStore: ObservableObject {
     @Published private(set) var newIntroducedToday = 0
     @Published private(set) var planningDay = 0
 
+    var novelAnswerSource: String? {
+        guard !storageBlocked, !isDualFSRS, let record else { return nil }
+        // Different versions of the bank have separate append-only histories.
+        return "publicQuestions:" + record.bankSHA256
+    }
+
+    var novelAnswerHead: UUID? {
+        guard novelAnswerSource != nil else { return nil }
+        return record?.attempts.last?.id ?? priorAttempts.last?.id
+    }
+
+    var novelAnswerHistory: [StudyNovelActivity] {
+        guard novelAnswerSource != nil, let record else { return [] }
+        return (priorAttempts + record.attempts).compactMap(StudyNovelActivity.init(publicAnswer:))
+    }
+
     private var record: ExamDiskRecord?
     private var priorAttempts: [ExamAttempt] = []
     private var needsClockResume = true

@@ -30,7 +30,7 @@ import UniformTypeIdentifiers
             .buttonStyle(.plain)
             .accessibilityLabel(compact ? "追更小说，" + status(book) : "追更小说，" + book.title + "，" + status(book))
         } else if !compact {
-            Button { open(false) } label: { Label("导入小说 · 背完一组读一章", systemImage: "book.closed") }
+            Button { open(false) } label: { Label("导入小说", systemImage: "book.closed") }
                 .buttonStyle(.bordered)
         }
     }
@@ -42,18 +42,18 @@ import UniformTypeIdentifiers
     private func status(_ book: StudyNovelStore.Book) -> String {
         if let next = book.nextUnread { return "第 \(next + 1) 章可读" }
         if book.progress.unlocked == book.chapterCount { return "全书已解锁" }
-        return progress(book) + " 张 · 解锁下一章"
+        return progress(book) + " · 解锁下一章"
     }
 }
 
 @MainActor struct StudyNovelShelfView: View {
     @ObservedObject var store: StudyNovelStore
-    let records: () -> [String: [ProfessionalRecallAttempt]]
+    let records: () -> StudyNovelProgress.Records
     @Environment(\.dismiss) private var dismiss
     @State private var importing = false
     @State private var path: [Int]
 
-    init(store: StudyNovelStore, records: @escaping () -> [String: [ProfessionalRecallAttempt]], firstChapter: Int?) {
+    init(store: StudyNovelStore, records: @escaping () -> StudyNovelProgress.Records, firstChapter: Int?) {
         self.store = store
         self.records = records
         _path = State(initialValue: firstChapter.map { [$0] } ?? [])
@@ -74,7 +74,7 @@ import UniformTypeIdentifiers
                         if book.progress.unlocked < book.chapterCount {
                             ProgressView(value: Double(book.progress.cardsInChapter.count),
                                          total: Double(StudyNovelProgress.cardsPerChapter)) {
-                                Text("下一章还差 \(StudyNovelProgress.cardsPerChapter - book.progress.cardsInChapter.count) 张")
+                                Text("下一章还差 \(StudyNovelProgress.cardsPerChapter - book.progress.cardsInChapter.count)")
                             }
                         }
                     } header: {
@@ -93,11 +93,11 @@ import UniformTypeIdentifiers
                 } else {
                     Section {
                         Text("选择一本想追的小说").font(.headline)
-                        Text("每完成 25 张卡的自评，解锁一整章。新卡和复习卡都算，同一张卡当天只计一次。")
+                        Text("计算机、电力系统的背卡自评和国网公共题库的作答合计 25 次，解锁一章。同一卡或题当天只计一次。")
                             .foregroundStyle(.secondary)
                         Button { importing = true } label: { Label("导入 TXT 小说", systemImage: "square.and.arrow.down") }
                     } footer: {
-                        Text("章节标题应单独占一行，例如「第一章 初入青云宗」。导入后从下一张卡开始累计。")
+                        Text("章节标题应单独占一行，例如「第一章 初入青云宗」。导入后从下一次自评或作答开始累计。")
                     }
                 }
                 if store.books.count > 1 {

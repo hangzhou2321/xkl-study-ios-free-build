@@ -11,6 +11,8 @@ struct ExamView: View {
     @Binding var showingPractice: Bool
     var onStart: () -> Void = {}
     var onOverlayChanged: (Bool) -> Void = { _ in }
+    var novelStore: StudyNovelStore? = nil
+    var onOpenNovel: (Bool) -> Void = { _ in }
     @State private var actionLocked = false
     @State private var exportDocument: ExamRecordsDocument?
     @AppStorage("studyHapticsEnabled") private var hapticsEnabled = true
@@ -136,6 +138,12 @@ struct ExamView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Text("返回题库不会丢失当前题目和已选选项。")
                     .font(.footnote).foregroundStyle(.secondary)
+            }
+
+            if let novelStore {
+                Section("追更") {
+                    StudyNovelEntry(store: novelStore, compact: false, open: onOpenNovel)
+                }
             }
 
             examPlanSection(bank)
@@ -364,6 +372,9 @@ struct ExamView: View {
 
                 if store.isRevealed {
                     answerResult(question)
+                    if let novelStore {
+                        StudyNovelEntry(store: novelStore, compact: true, open: onOpenNovel)
+                    }
                 }
                 Text(sourcePageLabel(question))
                     .font(.footnote).foregroundStyle(.secondary)

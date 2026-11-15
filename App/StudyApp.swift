@@ -128,7 +128,8 @@ struct RootView: View {
 
     private var examTab: some View {
             ExamView(store: exams, showingPractice: $examPracticing, onStart: { began(.publicQuestions) },
-                     onOverlayChanged: { examOverlay = $0; trackStudyVisibility() })
+                     onOverlayChanged: { examOverlay = $0; trackStudyVisibility() },
+                     novelStore: studyNovel, onOpenNovel: openNovel)
                 .disabled(flow.state.activeArea == .publicQuestions && flow.state.isPaused && examPracticing)
                 .tabItem { Label("题库", systemImage: "list.bullet.clipboard") }
                 .tag(3)
@@ -150,11 +151,7 @@ struct RootView: View {
                                     contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling),
                                     segmentBar: AnyView(segmentBar),
                                     fullScreenEnabled: handbookFullScreenBinding,
-                                    novelStore: studyNovel,
-                                    onOpenNovel: { readNow in
-                                        studyNovelFirstChapter = readNow ? studyNovel.active?.nextUnread : nil
-                                        showingStudyNovel = true
-                                    })
+                                    novelStore: studyNovel, onOpenNovel: openNovel)
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
@@ -180,11 +177,13 @@ struct RootView: View {
         tabs
         .sheet(isPresented: $showingStudyNovel) {
             StudyNovelShelfView(store: studyNovel, records: { novelRecords }, firstChapter: studyNovelFirstChapter)
-                .onAppear { studyNovel.sync(novelRecords) }
+                .onAppear { syncNovel() }
         }
         .onChange(of: showingStudyNovel) { _, _ in trackStudyVisibility() }
-        .onChange(of: handbookComputer.engine?.record.attempts.last?.id) { _, _ in studyNovel.sync(novelRecords) }
-        .onChange(of: handbookPower.engine?.record.attempts.last?.id) { _, _ in studyNovel.sync(novelRecords) }
+        .onChange(of: handbookComputer.engine?.record.attempts.last?.id) { _, _ in syncNovel() }
+        .onChange(of: handbookPower.engine?.record.attempts.last?.id) { _, _ in syncNovel() }
+        .onChange(of: exams.novelAnswerSource) { _, _ in syncNovel() }
+        .onChange(of: exams.novelAnswerHead) { _, _ in syncNovel() }
         .background(StudyActivityObserver {
             if acceptsEffectiveTouch { effectiveTime.noteActivity() }
         })
@@ -196,17 +195,30 @@ struct RootView: View {
             refreshCalendars(force: true)
             trackStudyVisibility()
             syncExamPolicy()
-            studyNovel.sync(novelRecords)
+            syncNovel()
         }
     }
 
-    private var novelRecords: [String: [ProfessionalRecallAttempt]] {
-        var result: [String: [ProfessionalRecallAttempt]] = [:]
+    private func syncNovel() {
+        if studyNovel.active != nil { studyNovel.sync(novelRecords) }
+    }
+
+    private func openNovel(_ readNow: Bool) {
+        syncNovel()
+        studyNovelFirstChapter = readNow ? studyNovel.active?.nextUnread : nil
+        showingStudyNovel = true
+    }
+
+    private var novelRecords: StudyNovelProgress.Records {
+        var result: StudyNovelProgress.Records = [:]
+        if let source = exams.novelAnswerSource {
+            result[source] = exams.novelAnswerHistory
+        }
         if let engine = handbookComputer.engine, !engine.usesDualFSRS, !handbookComputer.blocked {
-            result["computer"] = engine.record.attempts
+            result["computer"] = engine.record.attempts.map { StudyNovelActivity($0, subject: "computer") }
         }
         if let engine = handbookPower.engine, !engine.usesDualFSRS, !handbookPower.blocked {
-            result["power"] = engine.record.attempts
+            result["power"] = engine.record.attempts.map { StudyNovelActivity($0, subject: "power") }
         }
         return result
     }
