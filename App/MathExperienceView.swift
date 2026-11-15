@@ -7,7 +7,7 @@ private struct MathCardSelection: Identifiable {
     let presentationID: UUID?
     let recall: Bool
     var recallSessionID: UUID? = nil
-    var practiceQuestionID: String? = nil
+    var standalone = false
 }
 
 struct MathExperienceView: View {
@@ -115,18 +115,18 @@ struct MathExperienceView: View {
                     if store.engine?.current != nil { inCourse = false }
                 }.buttonStyle(.borderedProminent).disabled(store.blocked)
                 if let guide = store.guide, let groups = guide.reviewGroups {
-                    DisclosureGroup("宝典公式卡（\(groups.flatMap(\.entries).count)）") {
+                    DisclosureGroup("宝典公式卡（\(groups.flatMap(\.cardIDs).count)）") {
                         ForEach(groups) { group in
                             DisclosureGroup(group.title) {
-                                ForEach(group.entries) { entry in
-                                    if let item = guide.cards.first(where: { $0.id == entry.cardID }) {
+                                ForEach(group.cardIDs, id: \.self) { id in
+                                    if let item = guide.cards.first(where: { $0.id == id }) {
                                         Button(item.title) {
                                             let questionSession = store.engine?.current?.id
                                             if store.startCardRecall(item.id, questionSessionID: questionSession, standalone: true),
                                                let recall = store.engine?.currentCard {
                                                 card = MathCardSelection(id: item.id, presentationID: questionSession,
                                                     recall: true, recallSessionID: recall.id,
-                                                    practiceQuestionID: entry.questionID)
+                                                    standalone: true)
                                             }
                                         }.disabled(store.blocked)
                                     }
@@ -347,21 +347,11 @@ struct MathExperienceView: View {
     @ViewBuilder private func cardSheet(_ selection: MathCardSelection) -> some View {
         if let c = store.guide?.cards.first(where: { $0.id == selection.id }) {
             MathExperienceCardSheet(card: c, fontSize: fontSize, recall: selection.recall, revealed: store.engine?.currentCard?.id == selection.recallSessionID && store.engine?.currentCard?.answerShown == true, reveal: {
-                guard let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return }; store.revealCard(sessionID: id, standalone: selection.practiceQuestionID != nil)
+                guard let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return }; store.revealCard(sessionID: id, standalone: selection.standalone)
             }, rendered: { if previewCase == "card" { reportPreview() } }, close: { card = nil }, queue: {
                 guard selection.presentationID == store.engine?.current?.id else { return }; store.queueCard(c.id)
             }, grade: { remembered in
-                guard selection.recall, selection.presentationID == store.engine?.current?.id, let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return false }; return store.gradeCard(c.id, remembered: remembered, sessionID: id, standalone: selection.practiceQuestionID != nil)
-            }, practice: selection.practiceQuestionID.map { questionID in
-                {
-                    guard selection.presentationID == store.engine?.current?.id else { return }
-                    if store.engine?.current?.questionID == questionID { resumeCurrent() }
-                    else { store.spotCheck(questionID) }
-                    if store.engine?.current?.questionID == questionID {
-                        card = nil
-                        inCourse = false
-                    }
-                }
+                guard selection.recall, selection.presentationID == store.engine?.current?.id, let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return false }; return store.gradeCard(c.id, remembered: remembered, sessionID: id, standalone: selection.standalone)
             })
         }
     }
@@ -370,7 +360,6 @@ struct MathExperienceView: View {
 private struct MathExperienceCardSheet: View {
     let card: MathGuideCard; let fontSize: Double; let recall: Bool; let revealed: Bool; let reveal: () -> Void; let rendered: () -> Void
     let close: () -> Void; let queue: () -> Void; let grade: (Bool) -> Bool
-    var practice: (() -> Void)? = nil
     @State private var graded = false
     @State private var ready = Set<String>()
     @State private var failure: String?
@@ -389,9 +378,6 @@ private struct MathExperienceCardSheet: View {
                         else if !revealed { Button("揭晓卡片", action: reveal).disabled(failure != nil || !ready.contains("prompt")) }
                         else { HStack { Button("没记住") { if allReady { graded = grade(false) } }; Button("记住了") { if allReady { graded = grade(true) } } }.buttonStyle(.bordered).disabled(!allReady) }
                     } else { Button("加入独立卡片复习", action: queue).buttonStyle(.bordered) }
-                    if graded, let practice {
-                        Button("做对应原题", action: practice).buttonStyle(.borderedProminent)
-                    }
                     if let failure { Text("公式排版失败，暂停卡片评分：\(failure)").foregroundStyle(.red) }
                 }.padding(20)
             }.navigationTitle(card.title).toolbar { Button("关闭", action: close) }
