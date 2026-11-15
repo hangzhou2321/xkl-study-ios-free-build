@@ -2,7 +2,32 @@ import Foundation
 import StudyCore
 struct MathRichBlock: Codable { enum Kind: String, Codable { case text, math }; var kind: Kind; var value: String }
 struct MathGuideOption: Codable { var label: String; var blocks: [MathRichBlock] }
-struct MathGuideCard: Codable, Identifiable { var id: String; var title: String; var prompt: [MathRichBlock]; var answer: [MathRichBlock]; var detail: [MathRichBlock]; var syllabusIDs: [Int]; var sourceMethodIDs: [String] }
+struct MathGuideCard: Codable, Identifiable {
+    struct ReviewFace: Codable {
+        var title: String
+        var prompt: [MathRichBlock]
+        var answer: [MathRichBlock]
+        var detail: [MathRichBlock]
+    }
+    var id: String
+    var title: String
+    var prompt: [MathRichBlock]
+    var answer: [MathRichBlock]
+    var detail: [MathRichBlock]
+    var syllabusIDs: [Int]
+    var sourceMethodIDs: [String]
+    var reviewFace: ReviewFace? = nil
+
+    var forFormulaReview: Self {
+        guard let reviewFace else { return self }
+        var card = self
+        card.title = reviewFace.title
+        card.prompt = reviewFace.prompt
+        card.answer = reviewFace.answer
+        card.detail = reviewFace.detail
+        return card
+    }
+}
 struct MathGuideQuestion: Codable { var questionID: String; var sourceTextSHA256: String; var stem: [MathRichBlock]; var options: [MathGuideOption]; var answer: [MathRichBlock]; var keyStep: [MathRichBlock]; var details: [MathRichBlock]; var hint: [MathRichBlock]; var cardIDs: [String]; var requiresDiagram: Bool; var diagramVisuals: [MathVisual]; var notes: [String]; var practiceBlockedReason: String? = nil
     var practiceAllowed: Bool { practiceBlockedReason?.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty != false }
 }
@@ -23,6 +48,14 @@ struct MathGuide: Codable {
               Set(cards.map(\.id)).count == cards.count, Set(questions.map(\.questionID)).count == questions.count else { throw MathFailure.invalid("导学包课程或基线摘要不匹配。") }
         let cardIDs=Set(cards.map(\.id)), assets=Set(content.assets.map(\.id)), syllabus=Set(content.syllabus.map(\.id))
         for c in cards { guard !c.id.isEmpty, !c.title.isEmpty, !c.prompt.isEmpty, !c.answer.isEmpty, Set(c.syllabusIDs).isSubset(of:syllabus) else { throw MathFailure.invalid("知识卡引用无效。") }; try Self.blocks(c.prompt+c.answer+c.detail) }
+        for card in cards {
+            if let face = card.reviewFace {
+                guard Self.identifier(face.title), !face.prompt.isEmpty, !face.answer.isEmpty else {
+                    throw MathFailure.invalid("宝典公式卡的正面或答案无效。")
+                }
+                try Self.blocks(face.prompt + face.answer + face.detail)
+            }
+        }
         for g in questions {
             guard let q=content.questions.first(where: { $0.id == g.questionID }), g.sourceTextSHA256 == Self.sourceDigest(q), (g.practiceBlockedReason?.utf8.count ?? 0) <= 4096, !g.stem.isEmpty, !g.answer.isEmpty, Set(g.options.map(\.label)).count == g.options.count, Set(g.cardIDs).isSubset(of:cardIDs), !g.requiresDiagram || !g.diagramVisuals.isEmpty else { throw MathFailure.invalid("导学题源文本或知识卡引用不匹配。") }
             try Self.blocks(g.stem+g.options.flatMap(\.blocks)+g.answer+g.keyStep+g.details+g.hint)

@@ -120,7 +120,7 @@ struct MathExperienceView: View {
                             DisclosureGroup(group.title) {
                                 ForEach(group.cardIDs, id: \.self) { id in
                                     if let item = guide.cards.first(where: { $0.id == id }) {
-                                        Button(item.title) {
+                                        Button(item.reviewFace?.title ?? item.title) {
                                             let questionSession = store.engine?.current?.id
                                             if store.startCardRecall(item.id, questionSessionID: questionSession, standalone: true),
                                                let recall = store.engine?.currentCard {
@@ -345,7 +345,8 @@ struct MathExperienceView: View {
     private func current(_ id: UUID) -> Bool { store.engine?.current?.id == id && !store.blocked }
     private func act(_ id: UUID, _ action: () -> Void) { guard current(id), isVisible, !inCourse, scenePhase == .active, renderFailure == nil, questionReady, store.currentPracticeBlockedReason == nil else { return }; action() }
     @ViewBuilder private func cardSheet(_ selection: MathCardSelection) -> some View {
-        if let c = store.guide?.cards.first(where: { $0.id == selection.id }) {
+        if let original = store.guide?.cards.first(where: { $0.id == selection.id }) {
+            let c = selection.standalone ? original.forFormulaReview : original
             MathExperienceCardSheet(card: c, fontSize: fontSize, recall: selection.recall, revealed: store.engine?.currentCard?.id == selection.recallSessionID && store.engine?.currentCard?.answerShown == true, reveal: {
                 guard let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return }; store.revealCard(sessionID: id, standalone: selection.standalone)
             }, rendered: { if previewCase == "card" { reportPreview() } }, close: { card = nil }, queue: {
