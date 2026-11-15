@@ -215,6 +215,55 @@ final class MathExperienceTests: XCTestCase {
 }
 #if os(macOS)
 @MainActor final class MathExperiencePersistenceTests: XCTestCase {
+    func testFormulaReviewIsIndependentOfTheSuspendedQuestion() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacy = root.appendingPathComponent("MathPractice")
+        let destination = root.appendingPathComponent("MathExperience")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let baseline = try experienceBaseline()
+        let content = try JSONEncoder().encode(baseline.content)
+        let hash = StudySHA256.hex(content)
+        try content.write(to: legacy.appendingPathComponent(hash + ".xklmath"))
+        let archive = try JSONSerialization.data(withJSONObject: [
+            "format": "xkl-math-disk-v1", "contentSHA256": hash, "importedPackageSHA256": syntheticPackageHash,
+            "events": JSONSerialization.jsonObject(with: JSONEncoder().encode(baseline.events))
+        ])
+        try archive.write(to: legacy.appendingPathComponent("archive.json"))
+        var guide = experienceGuide(baseline.content)
+        let prompt = [MathRichBlock(kind: .text, value: "Synthetic question")]
+        let answer = [MathRichBlock(kind: .math, value: "1")]
+        guide.cards = [.init(id: "formula", title: "Original", prompt: prompt, answer: answer,
+                             detail: [], syllabusIDs: [22], sourceMethodIDs: [],
+                             reviewFace: .init(title: "Formula review", prompt: prompt, answer: answer, detail: []))]
+        guide.reviewGroups = [.init(id: "quick", title: "Formula cards", cardIDs: ["formula"])]
+        try guide.validate(content: baseline.content, packageSHA256: syntheticPackageHash)
+        var invalid = guide
+        invalid.reviewGroups?[0].cardIDs.append("unknown")
+        XCTAssertThrowsError(try invalid.validate(content: baseline.content, packageSHA256: syntheticPackageHash))
+        try JSONEncoder().encode(guide).write(to: destination.appendingPathComponent("guide.json"))
+        let now = Date(timeIntervalSince1970: 1791000000)
+        let store = MathExperienceStore(directory: destination, legacyDirectory: legacy, clock: { now })
+        store.spotCheck("stable-1")
+        let current = try XCTUnwrap(store.engine?.current)
+        let questionMemory = store.engine?.all
+        XCTAssertTrue(store.startCardRecall("formula", questionSessionID: current.id, standalone: true))
+        XCTAssertNil(store.engine?.current)
+        let cardID = try XCTUnwrap(store.engine?.currentCard?.id)
+        XCTAssertTrue(store.revealCard(sessionID: cardID))
+        XCTAssertTrue(store.gradeCard("formula", remembered: true, sessionID: cardID))
+        XCTAssertNotNil(store.engine?.cardMemories["formula"])
+        XCTAssertEqual(store.engine?.all, questionMemory)
+        store.start()
+        XCTAssertEqual(store.engine?.current?.id, current.id)
+        XCTAssertEqual(store.engine?.current?.assisted, false)
+        XCTAssertFalse(store.engine?.events.contains(where: { $0.kind == "grade" }) ?? true)
+        XCTAssertEqual(store.guide?.cards[0].title, "Original")
+        XCTAssertEqual(store.guide?.cards[0].forFormulaReview.title, "Formula review")
+        XCTAssertEqual(try Data(contentsOf: legacy.appendingPathComponent("archive.json")), archive)
+    }
+
     func testFortyEightMiBCanonicalBaselineValidationPerformance() throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at:root) }

@@ -124,7 +124,7 @@ struct MathExperienceView: View {
                                             let questionSession = store.engine?.current?.id
                                             if store.startCardRecall(item.id, questionSessionID: questionSession, standalone: true),
                                                let recall = store.engine?.currentCard {
-                                                card = MathCardSelection(id: item.id, presentationID: questionSession,
+                                                card = MathCardSelection(id: item.id, presentationID: store.engine?.current?.id,
                                                     recall: true, recallSessionID: recall.id,
                                                     standalone: true)
                                             }
@@ -348,11 +348,11 @@ struct MathExperienceView: View {
         if let original = store.guide?.cards.first(where: { $0.id == selection.id }) {
             let c = selection.standalone ? original.forFormulaReview : original
             MathExperienceCardSheet(card: c, fontSize: fontSize, recall: selection.recall, revealed: store.engine?.currentCard?.id == selection.recallSessionID && store.engine?.currentCard?.answerShown == true, reveal: {
-                guard let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return }; store.revealCard(sessionID: id, standalone: selection.standalone)
+                guard selection.presentationID == store.engine?.current?.id, let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return }; store.revealCard(sessionID: id)
             }, rendered: { if previewCase == "card" { reportPreview() } }, close: { card = nil }, queue: {
                 guard selection.presentationID == store.engine?.current?.id else { return }; store.queueCard(c.id)
             }, grade: { remembered in
-                guard selection.recall, selection.presentationID == store.engine?.current?.id, let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return false }; return store.gradeCard(c.id, remembered: remembered, sessionID: id, standalone: selection.standalone)
+                guard selection.recall, selection.presentationID == store.engine?.current?.id, let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return false }; return store.gradeCard(c.id, remembered: remembered, sessionID: id)
             })
         }
     }
