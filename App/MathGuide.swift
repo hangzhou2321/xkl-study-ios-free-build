@@ -6,9 +6,20 @@ struct MathGuideCard: Codable, Identifiable { var id: String; var title: String;
 struct MathGuideQuestion: Codable { var questionID: String; var sourceTextSHA256: String; var stem: [MathRichBlock]; var options: [MathGuideOption]; var answer: [MathRichBlock]; var keyStep: [MathRichBlock]; var details: [MathRichBlock]; var hint: [MathRichBlock]; var cardIDs: [String]; var requiresDiagram: Bool; var diagramVisuals: [MathVisual]; var notes: [String]; var practiceBlockedReason: String? = nil
     var practiceAllowed: Bool { practiceBlockedReason?.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty != false }
 }
+struct MathGuideReviewGroup: Codable, Identifiable {
+    struct Entry: Codable, Identifiable {
+        var cardID: String
+        var questionID: String
+        var id: String { cardID }
+    }
+    var id: String
+    var title: String
+    var entries: [Entry]
+}
 struct MathGuide: Codable {
     var format: String; var id: String; var version: String; var baseCourseID: String; var basePackageSHA256: String
     var cards: [MathGuideCard]; var questions: [MathGuideQuestion]
+    var reviewGroups: [MathGuideReviewGroup]? = nil
     static func sourceDigest(_ q: MathQuestion) -> String { StudySHA256.hex(Data(((q.questionText ?? "")+"\u{001f}"+(q.answerText ?? "")+"\u{001f}"+(q.solutionNote ?? "")).utf8)) }
     func validate(content: MathContent, packageSHA256: String) throws {
         guard format == "xkl-math-guide-v1", Self.identifier(id), Self.identifier(version),
@@ -21,6 +32,19 @@ struct MathGuide: Codable {
             guard let q=content.questions.first(where: { $0.id == g.questionID }), g.sourceTextSHA256 == Self.sourceDigest(q), (g.practiceBlockedReason?.utf8.count ?? 0) <= 4096, !g.stem.isEmpty, !g.answer.isEmpty, Set(g.options.map(\.label)).count == g.options.count, Set(g.cardIDs).isSubset(of:cardIDs), !g.requiresDiagram || !g.diagramVisuals.isEmpty else { throw MathFailure.invalid("导学题源文本或知识卡引用不匹配。") }
             try Self.blocks(g.stem+g.options.flatMap(\.blocks)+g.answer+g.keyStep+g.details+g.hint)
             for visual in g.diagramVisuals { let c=visual.normalizedCrop; guard assets.contains(visual.assetID), c.count == 4, c.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }), c[2] > 0, c[3] > 0, c[0]+c[2] <= 1.000001, c[1]+c[3] <= 1.000001 else { throw MathFailure.invalid("导学图裁区无效。") } }
+        }
+        if let reviewGroups {
+            let byQuestion = Dictionary(uniqueKeysWithValues: questions.map { ($0.questionID, $0) })
+            let eligible = Set(content.questions.filter(\.eligible).map(\.id))
+            let entries = reviewGroups.flatMap(\.entries)
+            guard (1...20).contains(reviewGroups.count),
+                  Set(reviewGroups.map(\.id)).count == reviewGroups.count,
+                  Set(entries.map(\.id)).count == entries.count,
+                  reviewGroups.allSatisfy({ Self.identifier($0.id) && Self.identifier($0.title) && !$0.entries.isEmpty }),
+                  entries.allSatisfy({ entry in
+                      guard let question = byQuestion[entry.questionID] else { return false }
+                      return eligible.contains(entry.questionID) && question.practiceAllowed && question.cardIDs.contains(entry.cardID)
+                  }) else { throw MathFailure.invalid("宝典公式卡或对应原题的引用无效。") }
         }
     }
     private static func identifier(_ value: String) -> Bool {

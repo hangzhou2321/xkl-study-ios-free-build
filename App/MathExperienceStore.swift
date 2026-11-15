@@ -111,15 +111,15 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
     func pause(sessionID: UUID) { sessionChange(sessionID) { try $0.pause(now:clock()) } }
     func resume(sessionID: UUID) { sessionChange(sessionID) { try $0.resume(now:clock()) } }
     func queueCard(_ id: String) { guard guide?.cards.contains(where: { $0.id == id }) == true else { error="未知知识卡。"; return }; change { try $0.queueCard(id,now:clock()) } }
-    @discardableResult func startCardRecall(_ id: String, questionSessionID: UUID?) -> Bool {
+    @discardableResult func startCardRecall(_ id: String, questionSessionID: UUID?, standalone: Bool = false) -> Bool {
         guard engine?.current?.id == questionSessionID else { error="题目会话已改变。"; return false }
         return change {
-            if $0.current != nil { try $0.openCard(id,now:clock()) }
+            if !standalone, $0.current != nil { try $0.openCard(id,now:clock()) }
             if $0.currentCard?.cardID != id { if let previous=$0.currentCard { try $0.closeCard(sessionID:previous.id,now:clock()) }; try $0.startCardRecall(id,now:clock()) }
         }
     }
-    @discardableResult func revealCard(sessionID: UUID) -> Bool { change { if let c=$0.currentCard, $0.current != nil { try $0.openCard(c.cardID,now:clock()) }; try $0.revealCard(sessionID:sessionID,now:clock()) } }
-    @discardableResult func gradeCard(_ id: String, remembered: Bool, sessionID: UUID) -> Bool { change { if $0.current != nil { try $0.openCard(id,now:clock()) }; try $0.gradeCard(id,remembered:remembered,sessionID:sessionID,now:clock()) } }
+    @discardableResult func revealCard(sessionID: UUID, standalone: Bool = false) -> Bool { change { if !standalone, let c=$0.currentCard, $0.current != nil { try $0.openCard(c.cardID,now:clock()) }; try $0.revealCard(sessionID:sessionID,now:clock()) } }
+    @discardableResult func gradeCard(_ id: String, remembered: Bool, sessionID: UUID, standalone: Bool = false) -> Bool { change { if !standalone, $0.current != nil { try $0.openCard(id,now:clock()) }; try $0.gradeCard(id,remembered:remembered,sessionID:sessionID,now:clock()) } }
     func exportCardRecords() throws -> URL {
         let url=directory.appendingPathComponent("card-records-export.json")
         guard let engine else { throw MathFailure.invalid("没有可导出的知识卡记录。") }
