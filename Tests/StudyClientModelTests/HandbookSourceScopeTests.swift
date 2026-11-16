@@ -48,6 +48,45 @@ final class HandbookSourceScopeTests: XCTestCase {
         XCTAssertEqual(restored.stats(on: now).total, 2)
     }
 
+    @MainActor func testFamiliarListReadsArchivedMarksAndDropsRequeuedCards() async throws {
+        let engine = try HandbookWordEngine(package: package(), now: now)
+        try engine.start(now: now)
+        let first = try XCTUnwrap(engine.presentation)
+        try engine.reveal(token: first.id, now: now)
+        try engine.rate(remembered: true, token: first.id, now: now)
+        XCTAssertTrue(engine.familiarCardIDs.isEmpty)
+
+        let next = try XCTUnwrap(engine.presentation)
+        XCTAssertEqual(next.cardID, "old-1")
+        try engine.markFamiliar(token: next.id, now: now)
+        XCTAssertEqual(engine.familiarCardIDs, [next.cardID])
+        try engine.updatePackage(scopePackage(), now: now)
+        XCTAssertFalse(engine.isInMainScope(next.cardID))
+
+        let restored = try HandbookWordEngine(state: engine.state)
+        let before = restored.state
+        XCTAssertEqual(restored.familiarCardIDs, [next.cardID])
+        XCTAssertEqual(restored.state, before)
+        XCTAssertTrue(try restored.requeue(cardID: next.cardID, now: now))
+        XCTAssertEqual(restored.record.attempts, before.word.attempts)
+        XCTAssertTrue(try HandbookWordEngine(state: restored.state).familiarCardIDs.isEmpty)
+    }
+
+    @MainActor func testFamiliarListReadsMigratedAndNewDualFSRSMarks() async throws {
+        let engine = try HandbookWordEngine(package: package(subject: .circuit), now: now)
+        try engine.start(now: now)
+        let first = try XCTUnwrap(engine.presentation)
+        try engine.markFamiliar(token: first.id, now: now)
+        try engine.enableDualFSRS(now: now.addingTimeInterval(1))
+        XCTAssertEqual(engine.familiarCardIDs, [first.cardID])
+
+        let second = try XCTUnwrap(engine.presentation)
+        try engine.markFamiliar(token: second.id, now: now.addingTimeInterval(2))
+        let restored = try HandbookWordEngine(state: engine.state)
+        XCTAssertEqual(restored.familiarCardIDs, [first.cardID, second.cardID])
+        XCTAssertTrue(restored.record.attempts.isEmpty)
+    }
+
     @MainActor func testManualRequeueDoesNotInventAnswersAndSurvivesRestart() async throws {
         let engine = try HandbookWordEngine(package: package(), now: now)
         try engine.start(now: now)

@@ -33,6 +33,10 @@ struct HandbookWordState: Codable, Equatable {
                                        frozenCard: frozenCard, frozenToken: frozenToken, frozenGuide: frozenGuide,
                                        dualFSRS: dualFSRS?.state) }
     var usesDualFSRS: Bool { dualFSRS != nil }
+    var familiarCardIDs: Set<String> {
+        if let dualFSRS { return Set(dualFSRS.state.familiar) }
+        return Set(core.familiarCardIndices.map { originalIDs[$0] })
+    }
     var currentCard: HandbookCard? { dualFSRS?.currentCard ?? (dualFSRS == nil && core.record.presentation != nil ? frozenCard : nil) }
     var currentMemoryGuide: HandbookCardPackage.MemoryGuide? { dualFSRS?.currentMemoryGuide ?? (dualFSRS == nil && core.record.presentation != nil ? frozenGuide : nil) }
     func activePosition(of cardID: String) -> Int? {

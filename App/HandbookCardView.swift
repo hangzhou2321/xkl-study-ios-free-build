@@ -27,6 +27,7 @@ struct HandbookCardView: View {
     @State private var showingOutline = false
     @State private var outlineSearch = ""
     @State private var outlineShowOld = false
+    @State private var outlineFamiliarOnly = false
     @State private var actionNotice = ""
     @State private var showingActionNotice = false
     @State private var showingSources = false
@@ -158,7 +159,7 @@ struct HandbookCardView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        if store.package != nil { Button("章节目录", systemImage: "list.bullet") { showingOutline = true } }
+                        if store.package != nil { Button("章节目录", systemImage: "list.bullet") { openOutline() } }
                         if (subject == .computer || subject == .power), store.package != nil {
                             Button("清除本学科个人标红", systemImage: "highlighter") {
                                 highlightStore.clearAll()
@@ -418,7 +419,7 @@ struct HandbookCardView: View {
             }
             Menu {
                 Button("返回卡片首页", systemImage: "rectangle.on.rectangle") { studying = false }
-                Button("章节目录", systemImage: "list.bullet") { showingOutline = true }
+                Button("章节目录", systemImage: "list.bullet") { openOutline() }
                 Button("核对本卡原页", systemImage: "doc.text.magnifyingglass") { showingSources = true }
                 if (subject == .computer || subject == .power || subject == .mechanics), let package = store.package, handbookHasTables(package) {
                     Button(subject == .mechanics ? "讲义图表与选看" : "讲义表格目录", systemImage: "tablecells") { showingTableIndex = true }
@@ -492,6 +493,16 @@ struct HandbookCardView: View {
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.blocked)
                     .accessibilityIdentifier("handbook-continue")
+                Button { openOutline(familiarOnly: true) } label: {
+                    HStack {
+                        Label("已熟记", systemImage: "checkmark.circle")
+                        Spacer()
+                        Text("\(engine.familiarCardIDs.count)").foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+                }.accessibilityIdentifier("handbook-familiar-list")
                 if engine.presentation == nil && engine.retryCount(on: displayDate) > 0 {
                     Button { store.startRetry(); if store.error == nil, store.engine?.presentation != nil { studying = true; onStart() } } label: {
                         Label("可选补练没记住的卡（\(engine.retryCount(on: displayDate))）", systemImage: "arrow.clockwise")
@@ -504,7 +515,7 @@ struct HandbookCardView: View {
             if engine.package.mainCardIDs != nil, engine.otherScopeHistory.cards > 0 {
                 let old = engine.otherScopeHistory
                 Button {
-                    outlineShowOld = true; showingOutline = true
+                    openOutline(showOld: true)
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("旧卡记录已保留").font(.subheadline.weight(.semibold))
@@ -514,7 +525,7 @@ struct HandbookCardView: View {
                 }.buttonStyle(.plain).background(.background, in: RoundedRectangle(cornerRadius: 18))
                     .accessibilityIdentifier("handbook-retained-old-history")
             }
-            Button { showingOutline = true } label: {
+            Button { openOutline() } label: {
                 HStack { Label("按章节查看卡片", systemImage: "list.bullet.rectangle"); Spacer(); Image(systemName: "chevron.right") }
                     .font(.headline).padding(18).frame(maxWidth: .infinity)
             }.buttonStyle(.plain).background(.background, in: RoundedRectangle(cornerRadius: 18))
@@ -728,37 +739,12 @@ struct HandbookCardView: View {
     private func outline(_ package: HandbookCardPackage) -> some View {
         NavigationStack {
             List {
-                if package.mainCardIDs != nil {
-                    Section {
-                        Toggle("显示旧卡及补充", isOn: $outlineShowOld)
-                    } footer: { Text("旧卡及其学习记录仍在，可按需重新加入队列。") }
-                }
-                if let main = package.mainCardIDs {
-                    let cards = package.cards.filter { main.contains($0.id) && outlineMatches($0) }
-                    ForEach(Array(Set(cards.map(\.topicNumber))).sorted(), id: \.self) { number in
-                        Section("上分宝典 · 第\(number)条") {
-                            ForEach(cards.filter { $0.topicNumber == number }, id: \.id) { card in
-                                outlineRow(package, card: card)
-                            }
-                        }
-                    }
-                    if outlineShowOld {
-                        Section("旧卡与补充") {
-                            ForEach(package.cards.filter { !main.contains($0.id) && outlineMatches($0) }, id: \.id) { card in
-                                outlineRow(package, card: card)
-                            }
-                        }
-                    }
+                if outlineFamiliarOnly {
+                    familiarOutline(package)
                 } else {
-                    ForEach(package.chapters, id: \.id) { chapter in
-                        Section {
-                            ForEach(outlineCards(package, chapterID: chapter.id), id: \.id) { card in
-                                outlineRow(package, card: card)
-                            }
-                        } header: { Text(verbatim: handbookDisplayText(chapter.title)) }
-                    }
+                    chapterOutline(package)
                 }
-            }.navigationTitle("章节目录").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(outlineFamiliarOnly ? "已熟记" : "章节目录").navigationBarTitleDisplayMode(.inline)
                 .searchable(text: $outlineSearch, prompt: "搜索卡片")
                 .alert("操作结果", isPresented: $showingActionNotice) {
                     Button("知道了", role: .cancel) { }
@@ -774,6 +760,61 @@ struct HandbookCardView: View {
                 cardAnswerWasVisible: true)
         }
     }
+    private func openOutline(familiarOnly: Bool = false, showOld: Bool = false) {
+        outlineSearch = ""
+        outlineFamiliarOnly = familiarOnly
+        if showOld { outlineShowOld = true }
+        showingOutline = true
+    }
+
+    @ViewBuilder private func familiarOutline(_ package: HandbookCardPackage) -> some View {
+        let familiar = store.engine?.familiarCardIDs ?? []
+        let cards = package.cards.filter { familiar.contains($0.id) && outlineMatches($0) }
+        if familiar.isEmpty {
+            ContentUnavailableView("还没有熟记的卡片", systemImage: "checkmark.circle",
+                                   description: Text("背卡时点「熟记」，就能在这里查看。"))
+        } else if cards.isEmpty {
+            ContentUnavailableView.search(text: outlineSearch)
+        } else {
+            ForEach(cards, id: \.id) { card in
+                outlineRow(package, card: card)
+            }
+        }
+    }
+
+    @ViewBuilder private func chapterOutline(_ package: HandbookCardPackage) -> some View {
+        if package.mainCardIDs != nil {
+            Section {
+                Toggle("显示旧卡及补充", isOn: $outlineShowOld)
+            } footer: { Text("旧卡及其学习记录仍在，可按需重新加入队列。") }
+        }
+        if let main = package.mainCardIDs {
+            let cards = package.cards.filter { main.contains($0.id) && outlineMatches($0) }
+            ForEach(Array(Set(cards.map(\.topicNumber))).sorted(), id: \.self) { number in
+                Section("上分宝典 · 第\(number)条") {
+                    ForEach(cards.filter { $0.topicNumber == number }, id: \.id) { card in
+                        outlineRow(package, card: card)
+                    }
+                }
+            }
+            if outlineShowOld {
+                Section("旧卡与补充") {
+                    ForEach(package.cards.filter { !main.contains($0.id) && outlineMatches($0) }, id: \.id) { card in
+                        outlineRow(package, card: card)
+                    }
+                }
+            }
+        } else {
+            ForEach(package.chapters, id: \.id) { chapter in
+                Section {
+                    ForEach(outlineCards(package, chapterID: chapter.id), id: \.id) { card in
+                        outlineRow(package, card: card)
+                    }
+                } header: { Text(verbatim: handbookDisplayText(chapter.title)) }
+            }
+        }
+    }
+
     private func powerMainlineMembership(_ card: HandbookCard, in package: HandbookCardPackage) -> Bool? {
         guard package.subject == .power else { return nil }
         return package.mainCardIDs?.contains(card.id)

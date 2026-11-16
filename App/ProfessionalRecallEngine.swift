@@ -590,6 +590,17 @@ final class ProfessionalRecallEngine {
         }
     }
 
+    var familiarCardIndices: [Int] {
+        let active = Set(activeCardIDs)
+        return record.cardIDs.indices.filter { index in
+            let id = record.cardIDs[index]
+            let packed = record.deferredCards?[id]?.packed ?? (active.contains(id)
+                ? engine.packedCard(at: UInt32(index))
+                : record.parkedCards?[id]?.packed ?? 0)
+            return packed & (1 << 21) != 0
+        }
+    }
+
     func packedCard(id: String) throws -> UInt32? {
         guard let index = record.cardIDs.firstIndex(of: id) else { return nil }
         if let deferred = record.deferredCards?[id] { return deferred.packed }
