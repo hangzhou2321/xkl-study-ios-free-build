@@ -43,6 +43,7 @@ struct HandbookCardView: View {
     @State private var document = HandbookCardRecordDocument(data: Data())
     @State private var displayDate = Date()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     #if DEBUG
     @Environment(\.handbookCardPreview) private var preview
@@ -106,9 +107,6 @@ struct HandbookCardView: View {
                 .frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity)
             }
             .onChange(of: store.engine?.presentation?.id) { _, _ in
-                scroll.scrollTo("handbook-top", anchor: .top)
-            }
-            .onChange(of: store.engine?.presentation?.revealed) { _, _ in
                 scroll.scrollTo("handbook-top", anchor: .top)
             }
             #if DEBUG
@@ -412,11 +410,10 @@ struct HandbookCardView: View {
                 Label("退出全屏", systemImage: "arrow.down.right.and.arrow.up.left")
                     .font(.footnote).frame(minHeight: 44)
             }.accessibilityIdentifier("handbook-exit-fullscreen")
-            Spacer()
             if let presentation = store.engine?.presentation {
                 familiarButton(presentation)
-                Spacer()
             }
+            Spacer(minLength: 0)
             if let novelStore {
                 StudyNovelEntry(store: novelStore, compact: true, open: onOpenNovel)
             }
@@ -571,28 +568,29 @@ struct HandbookCardView: View {
     }
 
     private func studyCard(_ engine: HandbookWordEngine, _ card: HandbookCard, _ p: HandbookCardPresentation) -> some View {
-        let stats = engine.stats(on: displayDate)
-        let index = engine.activePosition(of: card.id)
         let powerMainline = powerMainlineMembership(card, in: engine.package)
         return VStack(alignment: .leading, spacing: 18) {
-            if !fullScreenActive { HStack {
-                Text(verbatim: engine.package.mainCardIDs?.contains(card.id) == true ?
-                    "上分宝典 · 第\(card.topicNumber)条" : handbookDisplayText(engine.package.chapter(for: card)?.title ?? "宝典知识点"))
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Text(index.map { "\($0) / \(stats.total)" } ?? "复习中")
-                    .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-            }.foregroundStyle(.secondary)
-            if engine.usesDualFSRS {
+            if !fullScreenActive {
+                let stats = engine.stats(on: displayDate)
+                let index = engine.activePosition(of: card.id)
                 HStack {
-                    Text("本轮还剩 \(stats.remainingToday) 张")
+                    Text(verbatim: engine.package.mainCardIDs?.contains(card.id) == true ?
+                        "上分宝典 · 第\(card.topicNumber)条" : handbookDisplayText(engine.package.chapter(for: card)?.title ?? "宝典知识点"))
+                        .font(.subheadline.weight(.medium))
                     Spacer()
-                    Text("今日自评 \(stats.ratedToday) 次")
-                }.font(.footnote).foregroundStyle(.secondary)
-            } else {
-                ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
-                    .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
-            }
+                    Text(index.map { "\($0) / \(stats.total)" } ?? "复习中")
+                        .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                }.foregroundStyle(.secondary)
+                if engine.usesDualFSRS {
+                    HStack {
+                        Text("本轮还剩 \(stats.remainingToday) 张")
+                        Spacer()
+                        Text("今日自评 \(stats.ratedToday) 次")
+                    }.font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
+                        .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
+                }
             }
             HStack(alignment: .top, spacing: 4) {
                 HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power || engine.package.mainCardIDs != nil,
@@ -610,6 +608,7 @@ struct HandbookCardView: View {
                         sourceYellowSpans: engine.package.sourceYellowSpans(for: card),
                         sourceGreenSpans: engine.package.sourceGreenSpans(for: card),
                         sourceBlueSpans: engine.package.sourceBlueSpans(for: card)))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: p.revealed)
                     .id(p.id)
                 if (subject != .computer && !engine.package.questions(for: card).isEmpty) ||
                     ((subject == .computer || subject == .power || subject == .mechanics) && handbookHasTables(card, package: engine.package)) {

@@ -1,6 +1,9 @@
 import Foundation
 import Combine
 import StudyCore
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 private struct HandbookWordDisk: Codable {
     var format = "xkl-handbook-word-store-v1"
@@ -611,8 +614,16 @@ enum HandbookSchedulerPreference {
             error = nil
         } catch { fail(error) }
     }
+    private static func recordHash(_ data: Data) -> String {
+        #if canImport(CryptoKit)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        #else
+        return StudySHA256.hex(data)
+        #endif
+    }
+
     private func guardCurrent() throws {
-        guard try StudySHA256.hex(read(currentURL)) == durableSHA256 else { throw ExamError.invalid("另一页面已保存更新记录，请重新打开，不会覆盖。") }
+        guard try Self.recordHash(read(currentURL)) == durableSHA256 else { throw ExamError.invalid("另一页面已保存更新记录，请重新打开，不会覆盖。") }
         if let marker = durableMarkerSHA256 {
             guard try StudySHA256.hex(read(legacyMarkerURL)) == marker,
                   let witness = durableWitnessSHA256,
@@ -635,11 +646,13 @@ enum HandbookSchedulerPreference {
         do {
             try guardCurrent(); let candidate = try current.fork()
             try action(candidate); next.state = candidate.state
-            let bytes = try encode(next); if StudySHA256.hex(bytes) == durableSHA256 { error = nil; return }
+            let bytes = try encode(next)
+            let fingerprint = Self.recordHash(bytes)
+            if fingerprint == durableSHA256 { error = nil; return }
             try guardCurrent()
             do { try writer(bytes, currentURL); guard try read(currentURL) == bytes else { throw ExamError.invalid("本次背卡未完整保存。") } }
             catch { fail(error); return }
-            engine = candidate; disk = next; durableSHA256 = StudySHA256.hex(bytes)
+            engine = candidate; disk = next; durableSHA256 = fingerprint
             if next.state.dualFSRS?.events.isEmpty == false { rollbackEligible = false }
             error = nil
         } catch { self.error = error.localizedDescription }

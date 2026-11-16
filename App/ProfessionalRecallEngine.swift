@@ -129,12 +129,17 @@ final class ProfessionalRecallEngine {
     var activeCardIDs: [String] { record.activeCardIDs ?? record.cardIDs }
     private static let inert: UInt32 = 0x50ffff
 
-    /// An in-process transaction copy retains the monotonic-clock session.
-    /// Restoring from disk still uses init and rebases at the first start.
+    /// The live record and its history have already passed validation. A
+    /// transaction needs its own C engine, while disk loads use the full validator.
+    private init(copying source: ProfessionalRecallEngine) throws {
+        deck = source.deck
+        record = source.record
+        engine = try PocketEngine(snapshot: record.snapshot)
+        started = source.started
+    }
+
     func fork() throws -> ProfessionalRecallEngine {
-        let copy = try ProfessionalRecallEngine(deck: deck, record: record)
-        copy.started = started
-        return copy
+        try ProfessionalRecallEngine(copying: self)
     }
 
     static func restore(record: ProfessionalRecallRecord, fallback: RecallDeck) throws -> ProfessionalRecallEngine {
