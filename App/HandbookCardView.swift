@@ -600,6 +600,7 @@ struct HandbookCardView: View {
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide,
+                                 showsFullAnswer: engine.package.showsFullAnswerInStudy,
                                  useFullRecallQuestion: mainline == true && !engine.package.usesFocusedOutline,
                                  isArchivedReference: mainline == false,
                                  questionAction: subject == .computer && !engine.package.questions(for: card).isEmpty ? {
@@ -1219,6 +1220,7 @@ private struct HandbookCardFace: View {
     var primarySourceTitle: String? = nil
     var frequencyLabel: String? = nil
     var memoryGuide: HandbookCardPackage.MemoryGuide? = nil
+    var showsFullAnswer = true
     var useFullRecallQuestion = false
     var isArchivedReference = false
     /// Compact top-right entry preserves the full card width on small screens.
@@ -1270,7 +1272,7 @@ private struct HandbookCardFace: View {
             }
             if let guide = memoryGuide {
                 HandbookMemoryGuideView(guide: guide, revealed: revealed)
-                if revealed {
+                if revealed && showsFullAnswer {
                     Text("按本卡核心自评；完整内容与做题表现另行核对。")
                         .font(.footnote).foregroundStyle(.secondary)
                     DisclosureGroup("查看完整讲义内容") {

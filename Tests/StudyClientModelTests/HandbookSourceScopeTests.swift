@@ -208,6 +208,29 @@ final class HandbookSourceScopeTests: XCTestCase {
         XCTAssertNoThrow(try HandbookWordEngine(state: resumed.state))
     }
 
+    func testOnlySplitPowerEditionsHideTheStudyDisclosure() throws {
+        var original = package()
+        original.format = "xkl-handbook-cards-v3-exam"
+        let bytes = try JSONEncoder().encode(original)
+        let data = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+
+        func showsFullAnswer(_ revision: String, format: String? = nil, subject: String? = nil) throws -> Bool {
+            var object = data
+            object["revision"] = revision
+            if let format { object["format"] = format }
+            if let subject { object["subject"] = subject }
+            let course = try JSONDecoder().decode(HandbookCardPackage.self, from: JSONSerialization.data(withJSONObject: object))
+            return course.showsFullAnswerInStudy
+        }
+
+        XCTAssertTrue(try showsFullAnswer("1.35.8"))
+        XCTAssertTrue(try showsFullAnswer("1.35.9"))
+        XCTAssertFalse(try showsFullAnswer("1.35.9.1"))
+        XCTAssertFalse(try showsFullAnswer("1.35.10"))
+        XCTAssertTrue(try showsFullAnswer("1.36.0", format: "xkl-handbook-cards-v4-mechanics-sprint", subject: "mechanics"))
+        XCTAssertTrue(try showsFullAnswer("1.36.0", format: "xkl-handbook-cards-v2-source", subject: "computer"))
+    }
+
     func testExamRedNeedsTestedAnswerAndMatchesOnlyItsField() throws {
         var exam = package()
         exam.format = "xkl-handbook-cards-v3-exam"

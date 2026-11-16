@@ -265,6 +265,11 @@ struct HandbookCardPackage: Codable, Equatable {
     var usesExamRecall: Bool { format == "xkl-handbook-cards-v3-exam" }
     var usesMechanicsSprint: Bool { format == "xkl-handbook-cards-v4-mechanics-sprint" }
     var usesFocusedOutline: Bool { usesExamRecall || usesMechanicsSprint }
+    var showsFullAnswerInStudy: Bool {
+        // From 1.35.9.1, the power course schedules each part of its long recall cards.
+        guard subject == .power && usesExamRecall else { return true }
+        return revision.compare("1.35.9.1", options: .numeric) == .orderedAscending
+    }
     var sourceYellowSpans: [SourceRedSpan]? = nil
     var sourceGreenSpans: [SourceRedSpan]? = nil
     var sourceBlueSpans: [SourceRedSpan]? = nil
