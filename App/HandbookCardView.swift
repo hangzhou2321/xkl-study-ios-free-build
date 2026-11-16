@@ -574,7 +574,7 @@ struct HandbookCardView: View {
                 let stats = engine.stats(on: displayDate)
                 let index = engine.activePosition(of: card.id)
                 HStack {
-                    Text(verbatim: engine.package.mainCardIDs?.contains(card.id) == true ?
+                    Text(verbatim: !engine.package.usesExamRecall && engine.package.mainCardIDs?.contains(card.id) == true ?
                         "上分宝典 · 第\(card.topicNumber)条" : handbookDisplayText(engine.package.chapter(for: card)?.title ?? "宝典知识点"))
                         .font(.subheadline.weight(.medium))
                     Spacer()
@@ -597,7 +597,7 @@ struct HandbookCardView: View {
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide,
-                                 useFullRecallQuestion: powerMainline == true,
+                                 useFullRecallQuestion: powerMainline == true && !engine.package.usesExamRecall,
                                  isArchivedReference: powerMainline == false,
                                  questionAction: subject == .computer && !engine.package.questions(for: card).isEmpty ? {
                                      relatedQuestionTarget = card
@@ -805,10 +805,23 @@ struct HandbookCardView: View {
         }
         if let main = package.mainCardIDs {
             let cards = package.cards.filter { main.contains($0.id) && outlineMatches($0) }
-            ForEach(Array(Set(cards.map(\.topicNumber))).sorted(), id: \.self) { number in
-                Section("上分宝典 · 第\(number)条") {
-                    ForEach(cards.filter { $0.topicNumber == number }, id: \.id) { card in
-                        outlineRow(package, card: card)
+            if package.usesExamRecall {
+                ForEach(package.chapters, id: \.id) { chapter in
+                    let matching = cards.filter { $0.chapterID == chapter.id }
+                    if !matching.isEmpty {
+                        Section(handbookDisplayText(chapter.title)) {
+                            ForEach(matching, id: \.id) { card in
+                                outlineRow(package, card: card)
+                            }
+                        }
+                    }
+                }
+            } else {
+                ForEach(Array(Set(cards.map(\.topicNumber))).sorted(), id: \.self) { number in
+                    Section("上分宝典 · 第\(number)条") {
+                        ForEach(cards.filter { $0.topicNumber == number }, id: \.id) { card in
+                            outlineRow(package, card: card)
+                        }
                     }
                 }
             }
@@ -841,7 +854,7 @@ struct HandbookCardView: View {
             ScrollView {
                 HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
                                  frequencyLabel: package.frequencyLabel(for: card), memoryGuide: package.memoryGuide(for: card),
-                                 useFullRecallQuestion: powerMainlineMembership(card, in: package) == true,
+                                 useFullRecallQuestion: powerMainlineMembership(card, in: package) == true && !package.usesExamRecall,
                                  isArchivedReference: archivedReference,
                                  questionAction: package.questions(for: card).isEmpty ? nil : { outlineRelatedQuestionTarget = card })
                     .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state,

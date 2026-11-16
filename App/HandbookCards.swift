@@ -220,6 +220,10 @@ struct HandbookCardPackage: Codable, Equatable {
                   location: location, length: length)
         }
     }
+    struct ExamRedSpan: Codable, Equatable {
+        let span: HandbookHighlightSpan
+        let questionIDs: [String]
+    }
     /// Presentation-only guidance is kept outside the immutable card definition.
     /// Each guide is explicitly assigned to an existing knowledge-point card.
     struct MemoryGuide: Codable, Equatable {
@@ -257,6 +261,8 @@ struct HandbookCardPackage: Codable, Equatable {
     var mainCardIDs: [String]? = nil
     /// Only portions that are red in the source; nil remains valid for older packs.
     var sourceRedSpans: [SourceRedSpan]? = nil
+    var examRedSpans: [ExamRedSpan]? = nil
+    var usesExamRecall: Bool { format == "xkl-handbook-cards-v3-exam" }
     var sourceYellowSpans: [SourceRedSpan]? = nil
     var sourceGreenSpans: [SourceRedSpan]? = nil
     var sourceBlueSpans: [SourceRedSpan]? = nil
@@ -275,9 +281,9 @@ struct HandbookCardPackage: Codable, Equatable {
         try value.validate(); return value
     }
     func validate() throws {
-        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source"].contains(format),
+        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source", "xkl-handbook-cards-v3-exam"].contains(format),
               (requiredBasePackageHash == nil || ExamContent.isHash(requiredBasePackageHash!)),
-              (format != "xkl-handbook-cards-v2-source" || (requiredBasePackageHash != nil && mainCardIDs != nil)),
+              (format == "xkl-handbook-cards-v1" || (requiredBasePackageHash != nil && mainCardIDs != nil)),
               handbookText(id, 200), handbookText(title, 600), handbookText(revision, 100),
               (1...100).contains(chapters.count), Set(chapters.map(\.id)).count == chapters.count,
               chapters.allSatisfy({ handbookText($0.id, 100) && handbookText($0.title, 300) }),
@@ -320,6 +326,34 @@ struct HandbookCardPackage: Codable, Equatable {
         }
         let guides = Dictionary(uniqueKeysWithValues: (memoryGuides ?? []).map { ($0.cardID, $0) })
         var documents: [String: HandbookHighlightDocument] = [:]
+        func validRange(_ span: HandbookHighlightSpan) -> Bool {
+            guard let card = byID[span.cardID] else { return false }
+            if documents[card.id] == nil { documents[card.id] = .init(card: card, guide: guides[card.id]) }
+            guard let field = documents[card.id]?.fields.first(where: { $0.id == span.fieldID }),
+                  HandbookHighlightState.hash(field.text) == span.textSHA256,
+                  span.location >= 0, span.length > 0, span.location <= field.text.utf16.count,
+                  span.length <= field.text.utf16.count - span.location else { return false }
+            let range = NSRange(location: span.location, length: span.length)
+            return HandbookHighlightState.validCharacterRange(range, in: field.text) && Range(range, in: field.text) != nil
+        }
+        let tested = examRedSpans ?? []
+        if usesExamRecall {
+            let main = Set(mainCardIDs ?? [])
+            guard subject == .power, !tested.isEmpty, tested.count <= 100_000,
+                  Set(tested.map { $0.span.cardID }) == main,
+                  tested.allSatisfy({ item in
+                      let field = item.span.fieldID
+                      return field.hasPrefix("guide.rows.") && field.hasSuffix(".answer")
+                          && (1...1_000).contains(item.questionIDs.count)
+                          && Set(item.questionIDs).count == item.questionIDs.count
+                          && item.questionIDs.allSatisfy { handbookText($0, 200) }
+                          && validRange(item.span)
+                  }) else {
+                throw ExamError.invalid("题库考点标红的文字或题号不完整。")
+            }
+        } else if !tested.isEmpty {
+            throw ExamError.invalid("此课程格式不支持题库考点标红。")
+        }
         for item in spans {
             guard let card = byID[item.cardID] else {
                 throw ExamError.invalid("原书颜色标记与卡片原页不一致。")
@@ -334,20 +368,14 @@ struct HandbookCardPackage: Codable, Equatable {
                     throw ExamError.invalid("原书颜色标记与原页不一致。")
                 }
             }
-            if documents[card.id] == nil { documents[card.id] = .init(card: card, guide: guides[card.id]) }
-            guard let field = documents[card.id]?.fields.first(where: { $0.id == item.fieldID }),
-                  HandbookHighlightState.hash(field.text) == item.textSHA256,
-                  item.location >= 0, item.length > 0,
-                  item.location <= field.text.utf16.count,
-                  item.length <= field.text.utf16.count - item.location,
-                  HandbookHighlightState.validCharacterRange(NSRange(location: item.location, length: item.length), in: field.text),
-                  Range(NSRange(location: item.location, length: item.length), in: field.text) != nil else {
+            guard validRange(item.span) else {
                 throw ExamError.invalid("原书颜色标记与正文不一致。")
             }
         }
     }
     func sourceSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
-        (sourceRedSpans ?? []).filter { $0.cardID == card.id }.map(\.span)
+        (sourceRedSpans ?? []).filter { $0.cardID == card.id }.map(\.span) +
+        (examRedSpans ?? []).filter { $0.span.cardID == card.id }.map(\.span)
     }
     func sourceYellowSpans(for card: HandbookCard) -> [HandbookHighlightSpan] {
         (sourceYellowSpans ?? []).filter { $0.cardID == card.id }.map(\.span)

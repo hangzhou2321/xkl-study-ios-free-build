@@ -147,6 +147,32 @@ final class HandbookSourceScopeTests: XCTestCase {
         XCTAssertEqual(reopened.engine?.state, after)
     }
 
+    func testExamRedNeedsTestedAnswerAndMatchesOnlyItsField() throws {
+        var exam = package()
+        exam.format = "xkl-handbook-cards-v3-exam"
+        exam.mainCardIDs = ["old-0"]
+        exam.requiredBasePackageHash = String(repeating: "c", count: 64)
+        let answer = "甲乙丙"
+        exam.memoryGuides = [.init(cardID: "old-0", explanation: nil,
+                                  rows: [.init(cue: "Synthetic recall", answer: answer)], mnemonic: nil)]
+        let span = HandbookHighlightSpan(cardID: "old-0", fieldID: "guide.rows.0.answer",
+                                         textSHA256: HandbookHighlightState.hash(answer), location: 1, length: 1)
+        exam.examRedSpans = [.init(span: span, questionIDs: ["synthetic-power-question"])]
+        let reopened = try HandbookCardPackage.load(JSONEncoder().encode(exam))
+        let card = try XCTUnwrap(reopened.cards.first)
+        let highlight = HandbookHighlightState(subject: .power)
+        let runs = highlight.runs(cardID: card.id, fieldID: span.fieldID, text: answer,
+                                  sourceSpans: reopened.sourceSpans(for: card))
+        XCTAssertEqual(runs.filter(\.red).map(\.text), ["乙"])
+        XCTAssertTrue(highlight.runs(cardID: card.id, fieldID: "guide.rows.0.cue", text: answer,
+                                     sourceSpans: reopened.sourceSpans(for: card)).allSatisfy { !$0.red })
+        exam.examRedSpans = [.init(span: span, questionIDs: [])]
+        XCTAssertThrowsError(try exam.validate())
+        exam.examRedSpans = [.init(span: span, questionIDs: ["synthetic-power-question"])]
+        exam.mainCardIDs = ["old-0", "old-1"]
+        XCTAssertThrowsError(try exam.validate())
+    }
+
     func testSourceColourOverlapsPersonalColourAndHonoursMask() {
         let text = "甲乙丙丁", hash = HandbookHighlightState.hash(text)
         func span(_ location: Int, _ length: Int) -> HandbookHighlightSpan {
