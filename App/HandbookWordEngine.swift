@@ -41,8 +41,7 @@ struct HandbookWordState: Codable, Equatable {
     var currentMemoryGuide: HandbookCardPackage.MemoryGuide? { dualFSRS?.currentMemoryGuide ?? (dualFSRS == nil && core.record.presentation != nil ? frozenGuide : nil) }
     func activePosition(of cardID: String) -> Int? {
         if let dualFSRS {
-            let value = dualFSRS.state, legacy = Set(value.legacyIDs), active = Set(value.legacyActiveIDs)
-            return value.ids.filter { !legacy.contains($0) || active.contains($0) }.firstIndex(of: cardID).map { $0 + 1 }
+            return dualFSRS.scheduledIDs.firstIndex(of: cardID).map { $0 + 1 }
         }
         return activeOriginalIDs.firstIndex(of: cardID).map { $0 + 1 }
     }
@@ -160,7 +159,7 @@ struct HandbookWordState: Codable, Equatable {
         }
         let known = Set(originalIDs), next = originalIDs + incoming.cards.map(\.id).filter { !known.contains($0) }
         if let dualFSRS {
-            guard incoming.mainCardIDs == nil else { throw ExamError.invalid("当前调度不能自动切换新的主线范围，原记录保留。") }
+            guard incoming.mainCardIDs == nil || incoming.usesMechanicsSprint else { throw ExamError.invalid("当前调度不能自动切换新的主线范围，原记录保留。") }
             try dualFSRS.updatePackage(incoming, ids: next, now: now)
         } else if let main = incoming.mainCardIDs {
             // First cutover applies the supplied mainline. Later updates retain
@@ -186,7 +185,7 @@ struct HandbookWordState: Codable, Equatable {
         }
     }
     func isInMainScope(_ cardID: String) -> Bool {
-        if dualFSRS != nil { return true }
+        if let dualFSRS { return dualFSRS.scheduledIDs.contains(cardID) }
         return activeOriginalIDs.contains(cardID)
     }
     var otherScopeHistory: (cards: Int, assessments: Int, familiarMarks: Int) {

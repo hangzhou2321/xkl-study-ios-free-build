@@ -204,7 +204,7 @@ struct HandbookDualFSRSState: Codable, Equatable {
             initialQueue: shown.map { [$0.presentation.cardID] } ?? [], migratedAt: now, migratedDay: today, ids: ids)
         var derived = try Self.replay(initial)
         if let id = shown?.presentation.cardID {
-            initial.initialQueue = Self.select(ids: Self.activeIDs(initial), daily: derived.daily, packed: packed,
+            initial.initialQueue = Self.select(ids: legacy.package.mainCardIDs ?? Self.originalScope(initial), daily: derived.daily, packed: packed,
                 familiar: derived.familiar, now: now, today: today, retainedHead: id)
             derived = try Self.replay(initial)
         }
@@ -221,6 +221,15 @@ struct HandbookDualFSRSState: Codable, Equatable {
               state.legacyActiveIDs == state.legacyIDs.filter({ Set(state.legacyActiveIDs).contains($0) }),
               state.legacyAnchorSHA256.count == 64, state.legacyAnchorSHA256.allSatisfy(\.isHexDigit) else {
             throw ExamError.invalid("双FSRS卡片身份与原档案不一致，原记录保留。")
+        }
+        let recordedScope = state.events.last { $0.kind == "scope" }?.round
+        if let main = package.mainCardIDs {
+            guard package.usesMechanicsSprint,
+                  recordedScope.map({ $0 == main }) ?? (Set(main) == Set(state.legacyActiveIDs)) else {
+                throw ExamError.invalid("力学冲刺范围与双FSRS记录不一致。")
+            }
+        } else if recordedScope != nil {
+            throw ExamError.invalid("力学冲刺范围丢失。")
         }
         let derived = try Self.replay(state)
         guard derived.daily == state.daily, derived.all == state.all,
@@ -302,7 +311,8 @@ struct HandbookDualFSRSState: Codable, Equatable {
               Set(state.legacyRatings.map(\.sourceSequence)).count == state.legacyRatings.count else {
             throw ExamError.invalid("双FSRS迁移凭据无效，原档保留。")
         }
-        let ids = Set(state.ids), active = Set(activeIDs(state))
+        let ids = Set(state.ids)
+        var active = Set(Self.originalScope(state))
         var d = Derived(), previous: Date?, previousDay: UInt32?, previousSequence: UInt32 = 0
         d.seen = Set(state.legacySeen)
         for (id, value) in state.legacyPacked where value & (1 << 21) != 0 { d.familiar.insert(id) }
@@ -361,13 +371,26 @@ struct HandbookDualFSRSState: Codable, Equatable {
                   previousDay == nil || event.day >= previousDay! else { throw ExamError.invalid("双FSRS事件时间或顺序异常。") }
             previous = event.at; previousDay = event.day
             switch event.kind {
+            case "scope":
+                guard state.subject == .mechanics, let scope = event.round,
+                      !scope.isEmpty, Set(scope).count == scope.count, Set(scope).isSubset(of: ids),
+                      event.cardID == nil, event.presentationID == nil, event.remembered == nil,
+                      event.next == nil else { throw ExamError.invalid("力学冲刺范围变更记录无效。") }
+                active = Set(scope)
+                if let head = d.queue.first, active.contains(head) {
+                    d.queue = d.queue.filter { active.contains($0) }
+                } else {
+                    // An out-of-scope frozen card stays in the historical replay.
+                    // The learner starts the new queue explicitly, with no synthetic view or rating.
+                    d.queue = []; d.roundKind = nil; d.shown = nil
+                }
             case "start", "retry":
                 guard d.queue.isEmpty, d.shown == nil, let round = event.round,
                       !round.isEmpty, round.count <= 20, Set(round).count == round.count,
                       Set(round).isSubset(of: active), Set(round).isDisjoint(with: d.familiar),
                       event.cardID == nil, event.presentationID == nil, event.remembered == nil else { throw ExamError.invalid("双FSRS新轮无效。") }
                 if event.kind == "retry" {
-                    let eligible = Set(retryCandidates(ids: activeIDs(state), lastRating: d.lastRating,
+                    let eligible = Set(retryCandidates(ids: Array(active), lastRating: d.lastRating,
                         familiar: d.familiar, queued: Set(d.queue), now: event.at, day: event.day))
                     guard Set(round).isSubset(of: eligible) else { throw ExamError.invalid("补练包含未满等待时间或不符合条件的卡。") }
                 } else {
@@ -428,7 +451,7 @@ struct HandbookDualFSRSState: Codable, Equatable {
         let due = p & 65_535
         return due == 0 || due == 65_535 ? nil : due
     }
-    private static func activeIDs(_ state: HandbookDualFSRSState) -> [String] {
+    private static func originalScope(_ state: HandbookDualFSRSState) -> [String] {
         let legacy = Set(state.legacyIDs), active = Set(state.legacyActiveIDs)
         return state.ids.filter { !legacy.contains($0) || active.contains($0) }
     }
@@ -505,10 +528,12 @@ struct HandbookDualFSRSState: Codable, Equatable {
         var candidate = state; candidate.events.append(event)
         let result = try Self.replay(candidate); Self.assign(result, to: &candidate); state = candidate
     }
+    var scheduledIDs: [String] { package.mainCardIDs ?? Self.originalScope(state) }
+
     func start(now: Date = Date()) throws {
         let today = try ensureTime(now)
         guard state.queue.isEmpty else { return }
-        let selected = Self.select(ids: Self.activeIDs(state), daily: state.daily, packed: state.legacyPacked,
+        let selected = Self.select(ids: scheduledIDs, daily: state.daily, packed: state.legacyPacked,
                                    familiar: Set(state.familiar), now: now, today: today)
         guard let head = selected.first else { return }
         try commit(event("start", now: now, day: today, round: selected, next: frozen(head, now: now)))
@@ -517,13 +542,13 @@ struct HandbookDualFSRSState: Codable, Equatable {
     /// rounds. A partially completed normal or retry round is never displaced.
     func retryCount(on now: Date = Date()) -> Int {
         guard let today = try? ensureTime(now) else { return 0 }
-        return Self.retryCandidates(ids: Self.activeIDs(state), lastRating: state.lastRating, familiar: Set(state.familiar),
+        return Self.retryCandidates(ids: scheduledIDs, lastRating: state.lastRating, familiar: Set(state.familiar),
                                     queued: Set(state.queue), now: now, day: today).count
     }
     func startRetry(now: Date = Date()) throws {
         let today = try ensureTime(now)
         guard state.queue.isEmpty else { return }
-        let selected = Array(Self.retryCandidates(ids: Self.activeIDs(state), lastRating: state.lastRating,
+        let selected = Array(Self.retryCandidates(ids: scheduledIDs, lastRating: state.lastRating,
             familiar: Set(state.familiar), queued: Set(state.queue), now: now, day: today).prefix(20))
         guard let head = selected.first else { return }
         try commit(event("retry", now: now, day: today, round: selected, next: frozen(head, now: now)))
@@ -556,12 +581,18 @@ struct HandbookDualFSRSState: Codable, Equatable {
         return true
     }
     func updatePackage(_ incoming: HandbookCardPackage, ids: [String], now: Date = Date()) throws {
-        _ = try ensureTime(now); try incoming.validate()
+        let day = try ensureTime(now); try incoming.validate()
         guard incoming.id == package.id, incoming.subject == package.subject,
               incoming.revision.compare(package.revision, options: .numeric) != .orderedAscending,
               Array(ids.prefix(state.ids.count)) == state.ids, Set(ids).count == ids.count,
               Set(ids) == Set(incoming.cards.map(\.id)) else { throw ExamError.invalid("旧版本、删卡或重排槽位不能覆盖已有记录。") }
+        guard incoming.mainCardIDs != nil || package.mainCardIDs == nil else {
+            throw ExamError.invalid("新卡包缺少已有力学冲刺范围。")
+        }
         var candidate = state; candidate.ids = ids
+        if let scope = incoming.mainCardIDs, scope != package.mainCardIDs {
+            candidate.events.append(event("scope", now: now, day: day, round: scope))
+        }
         let derived = try Self.replay(candidate); Self.assign(derived, to: &candidate)
         package = incoming; state = candidate
     }
@@ -569,7 +600,7 @@ struct HandbookDualFSRSState: Codable, Equatable {
         let familiar = Set(state.familiar)
         var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
         var local = Calendar(identifier: .gregorian); local.timeZone = .current
-        return Self.activeIDs(state).compactMap { id -> Date? in
+        return scheduledIDs.compactMap { id -> Date? in
             guard !familiar.contains(id), let day = Self.dueDay(id: id, daily: state.daily, packed: state.legacyPacked) else { return nil }
             let parts = utc.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: Double(day) * 86_400))
             guard let calendarDue = local.date(from: parts) else { return nil }
@@ -580,7 +611,7 @@ struct HandbookDualFSRSState: Codable, Equatable {
     }
     func stats(on now: Date = Date()) -> HandbookCardStats {
         let day = (try? Self.day(now)) ?? 0, familiar = Set(state.familiar)
-        let active = Self.activeIDs(state), allowed = Set(active)
+        let active = scheduledIDs, allowed = Set(active)
         let seen = state.seen.filter { allowed.contains($0) }.count
         let old = state.legacyRatings.filter { !$0.retracted && allowed.contains($0.cardID) }
         let recent = state.events.filter { $0.kind == "grade" && $0.cardID.map { allowed.contains($0) } == true }

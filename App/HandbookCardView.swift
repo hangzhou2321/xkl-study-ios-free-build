@@ -223,7 +223,10 @@ struct HandbookCardView: View {
         }
         .sheet(isPresented: $showingSources) {
             if let package = store.package, let card = store.engine?.currentCard {
-                HandbookSourcePagesView(groups: handbookSourceGroups(package, card: card), assetRoot: sourceRoot, title: "原文出处")
+                let groups = handbookSourceGroups(package, card: card)
+                let sources = package.usesMechanicsSprint ?
+                    groups.filter { $0.title.contains("冲刺") } : groups
+                HandbookSourcePagesView(groups: sources.isEmpty ? groups : sources, assetRoot: sourceRoot, title: "原文出处")
             }
         }
     }
@@ -568,13 +571,13 @@ struct HandbookCardView: View {
     }
 
     private func studyCard(_ engine: HandbookWordEngine, _ card: HandbookCard, _ p: HandbookCardPresentation) -> some View {
-        let powerMainline = powerMainlineMembership(card, in: engine.package)
+        let mainline = mainlineMembership(card, in: engine.package)
         return VStack(alignment: .leading, spacing: 18) {
             if !fullScreenActive {
                 let stats = engine.stats(on: displayDate)
                 let index = engine.activePosition(of: card.id)
                 HStack {
-                    Text(verbatim: !engine.package.usesExamRecall && engine.package.mainCardIDs?.contains(card.id) == true ?
+                    Text(verbatim: !engine.package.usesFocusedOutline && engine.package.mainCardIDs?.contains(card.id) == true ?
                         "上分宝典 · 第\(card.topicNumber)条" : handbookDisplayText(engine.package.chapter(for: card)?.title ?? "宝典知识点"))
                         .font(.subheadline.weight(.medium))
                     Spacer()
@@ -597,8 +600,8 @@ struct HandbookCardView: View {
                                  focused: fullScreenActive, primarySourceTitle: engine.package.source.title,
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide,
-                                 useFullRecallQuestion: powerMainline == true && !engine.package.usesExamRecall,
-                                 isArchivedReference: powerMainline == false,
+                                 useFullRecallQuestion: mainline == true && !engine.package.usesFocusedOutline,
+                                 isArchivedReference: mainline == false,
                                  questionAction: subject == .computer && !engine.package.questions(for: card).isEmpty ? {
                                      relatedQuestionTarget = card
                                  } : nil,
@@ -610,9 +613,14 @@ struct HandbookCardView: View {
                         sourceBlueSpans: engine.package.sourceBlueSpans(for: card)))
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: p.revealed)
                     .id(p.id)
-                if (subject != .computer && !engine.package.questions(for: card).isEmpty) ||
+                if engine.package.usesMechanicsSprint || (subject != .computer && !engine.package.questions(for: card).isEmpty) ||
                     ((subject == .computer || subject == .power || subject == .mechanics) && handbookHasTables(card, package: engine.package)) {
                     VStack(spacing: 10) {
+                        if engine.package.usesMechanicsSprint {
+                            Button { showingSources = true } label: {
+                                HandbookSideLink(symbol: "doc.text.magnifyingglass", title: "原页")
+                            }.buttonStyle(.plain).accessibilityLabel("查看冲刺讲义原页与例题")
+                        }
                         if subject != .computer && !engine.package.questions(for: card).isEmpty {
                             Button { relatedQuestionTarget = card } label: {
                                 HandbookSideLink(symbol: "doc.text", title: "原题")
@@ -631,7 +639,7 @@ struct HandbookCardView: View {
                     }.padding(.top, 20)
                 }
             }
-            if p.revealed {
+            if p.revealed && !engine.package.usesMechanicsSprint {
                 Button { showingSources = true } label: {
                     Label { Text(verbatim: sourceLabel(card)).multilineTextAlignment(.leading) }
                         icon: { Image(systemName: "doc.text.magnifyingglass") }
@@ -801,11 +809,14 @@ struct HandbookCardView: View {
         if package.mainCardIDs != nil {
             Section {
                 Toggle("显示旧卡及补充", isOn: $outlineShowOld)
-            } footer: { Text("旧卡及其学习记录仍在，可按需重新加入队列。") }
+            } footer: {
+                Text(package.usesMechanicsSprint ? "旧卡仍可查阅。" : "旧卡及其学习记录仍在，可按需重新加入队列。")
+            }
         }
         if let main = package.mainCardIDs {
-            let cards = package.cards.filter { main.contains($0.id) && outlineMatches($0) }
-            if package.usesExamRecall {
+            let byID = Dictionary(uniqueKeysWithValues: package.cards.map { ($0.id, $0) })
+            let cards = main.compactMap { byID[$0] }.filter { outlineMatches($0) }
+            if package.usesFocusedOutline {
                 ForEach(package.chapters, id: \.id) { chapter in
                     let matching = cards.filter { $0.chapterID == chapter.id }
                     if !matching.isEmpty {
@@ -843,18 +854,18 @@ struct HandbookCardView: View {
         }
     }
 
-    private func powerMainlineMembership(_ card: HandbookCard, in package: HandbookCardPackage) -> Bool? {
-        guard package.subject == .power else { return nil }
+    private func mainlineMembership(_ card: HandbookCard, in package: HandbookCardPackage) -> Bool? {
+        guard package.subject == .power || package.usesMechanicsSprint else { return nil }
         return package.mainCardIDs?.contains(card.id)
     }
 
     private func outlineRow(_ package: HandbookCardPackage, card: HandbookCard) -> some View {
-        let archivedReference = powerMainlineMembership(card, in: package) == false
+        let archivedReference = mainlineMembership(card, in: package) == false
         return NavigationLink {
             ScrollView {
                 HandbookCardFace(card: card, revealed: true, primarySourceTitle: package.source.title,
                                  frequencyLabel: package.frequencyLabel(for: card), memoryGuide: package.memoryGuide(for: card),
-                                 useFullRecallQuestion: powerMainlineMembership(card, in: package) == true && !package.usesExamRecall,
+                                 useFullRecallQuestion: mainlineMembership(card, in: package) == true && !package.usesFocusedOutline,
                                  isArchivedReference: archivedReference,
                                  questionAction: package.questions(for: card).isEmpty ? nil : { outlineRelatedQuestionTarget = card })
                     .environment(\.handbookHighlightContext, .init(cardID: card.id, state: highlightStore.state,

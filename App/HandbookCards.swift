@@ -263,6 +263,8 @@ struct HandbookCardPackage: Codable, Equatable {
     var sourceRedSpans: [SourceRedSpan]? = nil
     var examRedSpans: [ExamRedSpan]? = nil
     var usesExamRecall: Bool { format == "xkl-handbook-cards-v3-exam" }
+    var usesMechanicsSprint: Bool { format == "xkl-handbook-cards-v4-mechanics-sprint" }
+    var usesFocusedOutline: Bool { usesExamRecall || usesMechanicsSprint }
     var sourceYellowSpans: [SourceRedSpan]? = nil
     var sourceGreenSpans: [SourceRedSpan]? = nil
     var sourceBlueSpans: [SourceRedSpan]? = nil
@@ -281,7 +283,8 @@ struct HandbookCardPackage: Codable, Equatable {
         try value.validate(); return value
     }
     func validate() throws {
-        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source", "xkl-handbook-cards-v3-exam"].contains(format),
+        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source", "xkl-handbook-cards-v3-exam"].contains(format) || usesMechanicsSprint,
+              !usesMechanicsSprint || subject == .mechanics,
               (requiredBasePackageHash == nil || ExamContent.isHash(requiredBasePackageHash!)),
               (format == "xkl-handbook-cards-v1" || (requiredBasePackageHash != nil && mainCardIDs != nil)),
               handbookText(id, 200), handbookText(title, 600), handbookText(revision, 100),
@@ -314,7 +317,7 @@ struct HandbookCardPackage: Codable, Equatable {
     private func validateSourcePresentation() throws {
         let byID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
         if let scope = mainCardIDs {
-            guard subject == .computer || subject == .power,
+            guard subject == .computer || subject == .power || usesMechanicsSprint,
                   !scope.isEmpty, Set(scope).count == scope.count,
                   Set(scope).isSubset(of: Set(byID.keys)) else {
                 throw ExamError.invalid("宝典主线卡片范围无效，原记录保留。")
@@ -326,6 +329,13 @@ struct HandbookCardPackage: Codable, Equatable {
         }
         let guides = Dictionary(uniqueKeysWithValues: (memoryGuides ?? []).map { ($0.cardID, $0) })
         var documents: [String: HandbookHighlightDocument] = [:]
+        if usesMechanicsSprint {
+            guard (mainCardIDs ?? []).allSatisfy({ id in
+                guides[id] != nil && (byID[id]?.sourceReferences ?? []).contains { reference in
+                    (additionalSources ?? []).contains { $0.id == reference.sourceID && $0.source.title.contains("冲刺") }
+                }
+            }) else { throw ExamError.invalid("力学冲刺主线缺少回忆字段或讲义出处。") }
+        }
         func validRange(_ span: HandbookHighlightSpan) -> Bool {
             guard let card = byID[span.cardID] else { return false }
             if documents[card.id] == nil { documents[card.id] = .init(card: card, guide: guides[card.id]) }

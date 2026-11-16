@@ -147,6 +147,67 @@ final class HandbookSourceScopeTests: XCTestCase {
         XCTAssertEqual(reopened.engine?.state, after)
     }
 
+    @MainActor func testMechanicsSprintScopePreservesDualHistoryAndFiltersFutureRounds() async throws {
+        let old = package(subject: .mechanics)
+        let engine = try HandbookWordEngine(package: old, now: now)
+        try engine.enableDualFSRS(now: now)
+        try engine.start(now: now)
+        let first = try XCTUnwrap(engine.presentation)
+        try engine.reveal(token: first.id, now: now)
+        try engine.rate(remembered: true, token: first.id, now: now)
+        let frozen = try XCTUnwrap(engine.presentation)
+        let before = engine.state
+        let prior = try XCTUnwrap(before.dualFSRS)
+
+        var sprint = old
+        sprint.format = "xkl-handbook-cards-v4-mechanics-sprint"
+        sprint.requiredBasePackageHash = old.hash
+        sprint.mainCardIDs = [frozen.cardID]
+        let source = HandbookCardPackage.Source(title: "Synthetic 冲刺宝典", fileName: "sprint.pdf",
+            sha256: String(repeating: "b", count: 64), pdfPageCount: 1, includedPages: [1])
+        sprint.additionalSources = [.init(id: "sprint", source: source)]
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(sprint)) as! [String: Any]
+        object["revision"] = "2.0"
+        var cards = object["cards"] as! [[String: Any]]
+        let kept = try XCTUnwrap(cards.firstIndex { $0["id"] as? String == frozen.cardID })
+        cards[kept]["sourceReferences"] = [["sourceID": "sprint", "page": 1]]
+        var added = cards[kept]
+        added["id"] = "sprint-new"
+        cards.append(added)
+        object["cards"] = cards
+        object["mainCardIDs"] = ["sprint-new", frozen.cardID]
+        object["memoryGuides"] = ["sprint-new", frozen.cardID].map { id in
+            ["cardID": id, "rows": [["cue": "Recall", "answer": "Answer"]]] as [String: Any]
+        }
+        sprint = try HandbookCardPackage.load(JSONSerialization.data(withJSONObject: object))
+
+        let time = now.addingTimeInterval(1)
+        try engine.updatePackage(sprint, now: time)
+        let updated = engine.state
+        let dual = try XCTUnwrap(updated.dualFSRS)
+        XCTAssertEqual(updated.word, before.word)
+        XCTAssertEqual(Array(updated.originalCardIDs.prefix(3)), before.originalCardIDs)
+        XCTAssertEqual(Array(dual.events.dropLast()), prior.events)
+        XCTAssertEqual(dual.daily, prior.daily)
+        XCTAssertEqual(dual.all, prior.all)
+        XCTAssertEqual(engine.presentation, frozen)
+        XCTAssertEqual(dual.queue, [frozen.cardID])
+        XCTAssertEqual(engine.stats(on: time).total, 2)
+        XCTAssertEqual(engine.activePosition(of: frozen.cardID), 2)
+        XCTAssertFalse(engine.isInMainScope(first.cardID))
+        try engine.updatePackage(sprint, now: time)
+        XCTAssertEqual(engine.state, updated)
+
+        let resumed = try HandbookWordEngine(state: updated)
+        XCTAssertEqual(resumed.presentation, frozen)
+        try resumed.reveal(token: frozen.id, now: time)
+        try resumed.rate(remembered: true, token: frozen.id, now: time)
+        try resumed.start(now: time)
+        XCTAssertEqual(resumed.presentation?.cardID, "sprint-new")
+        XCTAssertEqual(resumed.state.dualFSRS?.queue, ["sprint-new"])
+        XCTAssertNoThrow(try HandbookWordEngine(state: resumed.state))
+    }
+
     func testExamRedNeedsTestedAnswerAndMatchesOnlyItsField() throws {
         var exam = package()
         exam.format = "xkl-handbook-cards-v3-exam"
