@@ -105,7 +105,6 @@ struct RootView: View {
             examTab
             professionalTab
             mathTab
-            recordsTab
         }
     }
 
@@ -114,7 +113,7 @@ struct RootView: View {
                           professionalComputer: professionalComputer, professionalPower: professionalPower,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
                           handbookMechanics: handbookMechanics,
-                          flow: flow, effectiveTime: effectiveTime, launch: launch)
+                          flow: flow, effectiveTime: effectiveTime, importing: $importing, launch: launch)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
     }
@@ -165,12 +164,6 @@ struct RootView: View {
                                })
                 .tabItem { Label("数学", systemImage: "function") }
                 .tag(6)
-    }
-
-    private var recordsTab: some View {
-            RecordsView(store: store, importing: $importing, effectiveTime: effectiveTime)
-                .tabItem { Label("记录", systemImage: "chart.bar.doc.horizontal") }
-                .tag(2)
     }
 
     private var decoratedTabs: some View {
@@ -346,7 +339,6 @@ struct RootView: View {
         screen.globalBlocked = importing || showingStudyNovel || flow.state.needsBreak
         switch selectedTab {
         case 0: screen.tab = .vocabulary
-        case 2: screen.tab = .records
         case 3: screen.tab = .publicQuestions
         case 4: screen.tab = .professional
         case 5: screen.tab = .home
@@ -892,104 +884,103 @@ struct RecordsView: View {
     @AppStorage("studyHapticsEnabled") private var hapticsEnabled = true
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    EffectiveStudyTimeSummary(store: effectiveTime, allowDateSelection: true)
-                    Button("导出有效学习时间", systemImage: "square.and.arrow.up") {
-                        do {
-                            exportDocument = RecordsDocument(data: try effectiveTime.exportData())
-                            exportName = "有效学习时间"
-                            exportType = .json
-                            effectiveExportActive = true
-                            exporting = true
-                        } catch { effectiveExportError = error.localizedDescription }
-                    }.disabled(effectiveTime.blocked)
-                    Text("单独导出各科有效时间，不修改单词档案或已有学习记录。")
-                        .font(.footnote).foregroundStyle(.secondary)
+        List {
+            Section {
+                EffectiveStudyTimeSummary(store: effectiveTime, allowDateSelection: true)
+                Button("导出有效学习时间", systemImage: "square.and.arrow.up") {
+                    do {
+                        exportDocument = RecordsDocument(data: try effectiveTime.exportData())
+                        exportName = "有效学习时间"
+                        exportType = .json
+                        effectiveExportActive = true
+                        exporting = true
+                    } catch { effectiveExportError = error.localizedDescription }
+                }.disabled(effectiveTime.blocked)
+                Text("单独导出各科有效时间，不修改单词档案或已有学习记录。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("偏好") {
+                Toggle("轻微震动反馈", isOn: $hapticsEnabled)
+                LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
+            }
+            Section("复习优化") {
+                Toggle("保守减轮（实验）", isOn: Binding(get: { store.analysis?.conservativeEnabled ?? true },
+                                              set: { store.setConservativeEnabled($0) }))
+                    .disabled(!store.canLearn)
+                LabeledContent("累计减少重复", value: "\(store.analysis?.savedRepetitions ?? 0) 次")
+                Text("上次答错或没背全后，累计 3 次合格全会；每次至少隔开 3 个不同词，其中一次至少 7 个。短间隔不计次数，答错恢复七轮，跨天复习保留。是否能省时且记得住，仍需后续记录检验。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("双 FSRS 后台比较") {
+                LabeledContent("记录的评分", value: "\(store.shadowReport?.rows.count ?? 0) 次")
+                Text(store.shadowStatus).font(.footnote).foregroundStyle(.secondary)
+                if let report=store.shadowReport,report.comparableCount>0 {
+                    LabeledContent("首答影子 Brier",value:report.firstAnswerScore.brier.map { String(format:"%.3f",$0) } ?? "—")
+                    LabeledContent("全评分影子 Brier",value:report.allRatingsScore.brier.map { String(format:"%.3f",$0) } ?? "—")
                 }
-                Section("偏好") {
-                    Toggle("轻微震动反馈", isOn: $hapticsEnabled)
-                    LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
-                }
-                Section("复习优化") {
-                    Toggle("保守减轮（实验）", isOn: Binding(get: { store.analysis?.conservativeEnabled ?? true },
-                                                  set: { store.setConservativeEnabled($0) }))
-                        .disabled(!store.canLearn)
-                    LabeledContent("累计减少重复", value: "\(store.analysis?.savedRepetitions ?? 0) 次")
-                    Text("上次答错或没背全后，累计 3 次合格全会；每次至少隔开 3 个不同词，其中一次至少 7 个。短间隔不计次数，答错恢复七轮，跨天复习保留。是否能省时且记得住，仍需后续记录检验。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("双 FSRS 后台比较") {
-                    LabeledContent("记录的评分", value: "\(store.shadowReport?.rows.count ?? 0) 次")
-                    Text(store.shadowStatus).font(.footnote).foregroundStyle(.secondary)
-                    if let report=store.shadowReport,report.comparableCount>0 {
-                        LabeledContent("首答影子 Brier",value:report.firstAnswerScore.brier.map { String(format:"%.3f",$0) } ?? "—")
-                        LabeledContent("全评分影子 Brier",value:report.allRatingsScore.brier.map { String(format:"%.3f",$0) } ?? "—")
+                Text("一个只按每日首答更新，另一个读取全部真实评分；两者用同一批延迟首答比较。只隔午夜、撤销重答或提前看过答案的记录不计入评分。Brier 越小表示这些样本上预测误差越小，不代表已证明更省时。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("单词原有的真实经过时间和前台时间采用旧口径，与新的 1 分钟无操作暂停规则不同；原记录继续保留。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("学习记录") {
+                LabeledContent("单词前台时间（旧口径）",value:String(format:"%.1f 分钟",(store.timing?.latestPoint?.foregroundMs ?? 0)/60_000))
+                LabeledContent("词库", value: "25,644 词")
+                LabeledContent("累计事件", value: "\(store.info.log_records) 条")
+                LabeledContent("归档日志",value:"\(store.history?.volumes.count ?? 0) 卷")
+                LabeledContent("本卷事件",value:"\(store.activeVolumeEvents) / \(store.info.log_capacity)")
+                Button("导出完整进度和日志", systemImage: "square.and.arrow.up") {
+                    do {
+                        let url=try store.exportFullArchive();temporaryExport=url
+                        exportDocument=RecordsDocument(data:try Data(contentsOf:url,options:.mappedIfSafe))
+                        exportName="背词完整档案";exportType = .zip;exporting=true
                     }
-                    Text("一个只按每日首答更新，另一个读取全部真实评分；两者用同一批延迟首答比较。只隔午夜、撤销重答或提前看过答案的记录不计入评分。Brier 越小表示这些样本上预测误差越小，不代表已证明更省时。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Text("单词原有的真实经过时间和前台时间采用旧口径，与新的 1 分钟无操作暂停规则不同；原记录继续保留。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("学习记录") {
-                    LabeledContent("单词前台时间（旧口径）",value:String(format:"%.1f 分钟",(store.timing?.latestPoint?.foregroundMs ?? 0)/60_000))
-                    LabeledContent("词库", value: "25,644 词")
-                    LabeledContent("累计事件", value: "\(store.info.log_records) 条")
-                    LabeledContent("归档日志",value:"\(store.history?.volumes.count ?? 0) 卷")
-                    LabeledContent("本卷事件",value:"\(store.activeVolumeEvents) / \(store.info.log_capacity)")
-                    Button("导出完整进度和日志", systemImage: "square.and.arrow.up") {
-                        do {
-                            let url=try store.exportFullArchive();temporaryExport=url
-                            exportDocument=RecordsDocument(data:try Data(contentsOf:url,options:.mappedIfSafe))
-                            exportName="背词完整档案";exportType = .zip;exporting=true
-                        }
-                        catch { store.error = error.localizedDescription }
-                    }.disabled(!store.hasArchive)
-                    Text("接近容量时自动保存旧卷并继续新卷。ZIP 包含所有已归档日志、当前进度、选填反馈和逐条事件表；导出不会删除原记录。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("词库与原进度") {
-                    Button("导入内容包") { importing = true }
-                    Text("只接收当前版本且校验通过的内容包。已有学习记录不会被再次导入的初始进度覆盖。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("首次设备初始化") {
-                    Button("设备同步与学习接力", systemImage: "arrow.triangle.2.circlepath") { showingSync = true }
-                    Button("导出空白小设备初始化包") {
-                        do {
-                            exportDocument = RecordsDocument(data: try store.exportReceiverProvisioning())
-                            exportName = "空白小设备初始化";exportType = .json
-                            exporting = true
-                        } catch { store.error = error.localizedDescription }
-                    }.disabled(!store.canLearn)
-                    Text("用于后续适配的设备固件建立相同接力基线。这个文件不执行刷机，不应用于已有学习进度的设备。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
+                    catch { store.error = error.localizedDescription }
+                }.disabled(!store.hasArchive)
+                Text("接近容量时自动保存旧卷并继续新卷。ZIP 包含所有已归档日志、当前进度、选填反馈和逐条事件表；导出不会删除原记录。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
-            .navigationTitle("记录")
-            .sheet(isPresented: $showingSync) {
-                SyncView(store: store, bluetooth: store.bluetooth)
-                    .safeAreaInset(edge: .top) {
-                        HStack { Spacer(); Button("关闭") { showingSync = false } }.padding()
-                    }
+            Section("词库与原进度") {
+                Button("导入内容包") { importing = true }
+                Text("只接收当前版本且校验通过的内容包。已有学习记录不会被再次导入的初始进度覆盖。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
-            .fileExporter(isPresented: $exporting, document: exportDocument, contentType: exportType,
-                          defaultFilename: "\(exportName)-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))") { result in
-                if case .failure(let error) = result {
-                    if effectiveExportActive { effectiveExportError = error.localizedDescription }
-                    else { store.error = error.localizedDescription }
-                }
-                effectiveExportActive = false
-                if let temporaryExport { try? FileManager.default.removeItem(at:temporaryExport);self.temporaryExport=nil }
+            Section("首次设备初始化") {
+                Button("设备同步与学习接力", systemImage: "arrow.triangle.2.circlepath") { showingSync = true }
+                Button("导出空白小设备初始化包") {
+                    do {
+                        exportDocument = RecordsDocument(data: try store.exportReceiverProvisioning())
+                        exportName = "空白小设备初始化";exportType = .json
+                        exporting = true
+                    } catch { store.error = error.localizedDescription }
+                }.disabled(!store.canLearn)
+                Text("用于后续适配的设备固件建立相同接力基线。这个文件不执行刷机，不应用于已有学习进度的设备。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
-            .alert("有效学习时间", isPresented: Binding(
-                get: { effectiveExportError != nil },
-                set: { if !$0 { effectiveExportError = nil } }
-            )) {
-                Button("知道了", role: .cancel) { effectiveExportError = nil }
-            } message: { Text(effectiveExportError ?? "") }
         }
+        .navigationTitle("记录")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingSync) {
+            SyncView(store: store, bluetooth: store.bluetooth)
+                .safeAreaInset(edge: .top) {
+                    HStack { Spacer(); Button("关闭") { showingSync = false } }.padding()
+                }
+        }
+        .fileExporter(isPresented: $exporting, document: exportDocument, contentType: exportType,
+                      defaultFilename: "\(exportName)-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))") { result in
+            if case .failure(let error) = result {
+                if effectiveExportActive { effectiveExportError = error.localizedDescription }
+                else { store.error = error.localizedDescription }
+            }
+            effectiveExportActive = false
+            if let temporaryExport { try? FileManager.default.removeItem(at:temporaryExport);self.temporaryExport=nil }
+        }
+        .alert("有效学习时间", isPresented: Binding(
+            get: { effectiveExportError != nil },
+            set: { if !$0 { effectiveExportError = nil } }
+        )) {
+            Button("知道了", role: .cancel) { effectiveExportError = nil }
+        } message: { Text(effectiveExportError ?? "") }
     }
 }
 

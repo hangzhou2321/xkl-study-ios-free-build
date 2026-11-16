@@ -15,6 +15,7 @@ struct StudyHomeView: View {
     @ObservedObject var handbookMechanics: HandbookWordStore
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var effectiveTime: EffectiveStudyTimeStore
+    @Binding var importing: Bool
     var launch: (StudyArea, StudySegmentMode) -> Void
     @State private var selectedArea: StudyArea = .vocabulary
 
@@ -85,6 +86,15 @@ struct StudyHomeView: View {
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        RecordsView(store: store, importing: $importing, effectiveTime: effectiveTime)
+                    } label: {
+                        Text("记录")
+                    }
+                }
+            }
         }
         .onAppear { if let last = flow.state.lastArea { selectedArea = last } }
     }
