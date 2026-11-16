@@ -138,6 +138,11 @@ struct HandbookCardView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     if studying { Button("卡片", systemImage: "chevron.left") { studying = false } }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    if studying, !fullScreenActive, let presentation = store.engine?.presentation {
+                        familiarButton(presentation)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     if studying {
                         Button("全屏", systemImage: "arrow.up.left.and.arrow.down.right") { fullScreenEnabled = true }
@@ -408,6 +413,10 @@ struct HandbookCardView: View {
                     .font(.footnote).frame(minHeight: 44)
             }.accessibilityIdentifier("handbook-exit-fullscreen")
             Spacer()
+            if let presentation = store.engine?.presentation {
+                familiarButton(presentation)
+                Spacer()
+            }
             if let novelStore {
                 StudyNovelEntry(store: novelStore, compact: true, open: onOpenNovel)
             }
@@ -431,6 +440,20 @@ struct HandbookCardView: View {
         }.padding(.horizontal, 16)
             .background(Color(uiColor: .systemGroupedBackground))
     }
+    private func familiarButton(_ presentation: HandbookCardPresentation) -> some View {
+        Button {
+            store.markFamiliar(token: presentation.id)
+        } label: {
+            Text("熟记")
+                .font(.footnote)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(store.blocked)
+        .accessibilityHint("将这张卡移入已熟记列表")
+        .accessibilityIdentifier("handbook-familiar")
+    }
+
     private func importStaged(_ url: URL) {
         let recommendation = store.recommendedStagedFile()
         recommendedStagedFile = recommendation
@@ -701,9 +724,6 @@ struct HandbookCardView: View {
                 Button { store.postpone(token: p.id) } label: {
                     Text("暂时不背 · 本轮稍后").font(.footnote).frame(minHeight: 44)
                 }.accessibilityIdentifier("handbook-postpone")
-                Button { store.markFamiliar(token: p.id) } label: {
-                    Text("已熟记 · 不再复习").font(.footnote).frame(minHeight: 44)
-                }.accessibilityIdentifier("handbook-familiar")
             }.controlSize(.regular).disabled(store.blocked)
                 .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 8)
                 .frame(maxWidth: .infinity).background(.bar)
@@ -729,10 +749,6 @@ struct HandbookCardView: View {
                 Text("稍后").font(.footnote).frame(minWidth: 40, minHeight: 44)
             }.buttonStyle(.bordered).accessibilityLabel("暂时不背，本轮稍后")
                 .accessibilityIdentifier("handbook-postpone")
-            Button { store.markFamiliar(token: p.id) } label: {
-                Text("熟记").font(.footnote).frame(minWidth: 40, minHeight: 44)
-            }.buttonStyle(.bordered).accessibilityLabel("已熟记，不再复习")
-                .accessibilityIdentifier("handbook-familiar")
         }.disabled(store.blocked).padding(.horizontal, 12).padding(.vertical, 8).background(.bar)
     }
 
