@@ -624,7 +624,7 @@ struct RootView: View {
     private func confirmLookup(_ session: CardLookupSession, text: String) -> Bool {
         guard lookup.session?.id == session.id, lookupStillActive(session), scenePhase == .active,
               let course = ConceptSubject(rawValue: session.subject),
-              let answer = handbookStore(for: course).passAfterLookup(session, recap: text) else { return false }
+              let answer = handbookStore(for: course).recordLookupRecap(session, recap: text) else { return false }
         if let position = session.progress, hourly.active?.start == position.slotStart { hourly.record(answer) }
         finishLookup(session.id)
         return true

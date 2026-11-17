@@ -47,35 +47,42 @@ final class CardLookupSessionTests: XCTestCase {
     }
 
     #if os(macOS)
-    @MainActor func testRecapCommitsOneRealSelfAssessmentAndSurvivesReopen() async throws {
+    @MainActor func testRecapKeepsCardScheduledForRelearningAcrossRestart() async throws {
         for subject in [ConceptSubject.power, .circuit] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-card-lookup-" + UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: root) }
-            let store = HandbookWordStore(subject: subject, baseDirectory: root)
+            let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
+            let store = HandbookWordStore(subject: subject, baseDirectory: root, now: now)
             store.importData(try JSONEncoder().encode(syntheticPackage(subject)))
-            let now = Date().addingTimeInterval(3)
             store.start(now: now)
             let original = try XCTUnwrap(store.engine?.presentation)
             XCTAssertFalse(original.revealed)
             var lookup = CardLookupSession(subject: subject.rawValue, cardID: original.cardID, presentationID: original.id,
                                            startedAt: now, progress: nil)
-            XCTAssertNil(store.passAfterLookup(lookup, recap: "卡片复述", now: now + 10))
+            XCTAssertNil(store.recordLookupRecap(lookup, recap: "卡片复述", now: now + 10))
             XCTAssertTrue(lookup.noteReturn(at: now + 25))
-            XCTAssertNil(store.passAfterLookup(lookup, recap: "", now: now + 26))
+            XCTAssertNil(store.recordLookupRecap(lookup, recap: "", now: now + 26))
             XCTAssertEqual(store.engine?.presentation?.id, original.id)
-            let receipt = try XCTUnwrap(store.passAfterLookup(lookup, recap: "我能说出这个考点。", now: now + 27), store.error ?? "")
+            let receipt = try XCTUnwrap(store.recordLookupRecap(lookup, recap: "我能说出这个考点。", now: now + 27), store.error ?? "")
             XCTAssertEqual(receipt.itemID, original.cardID)
+            XCTAssertTrue(receipt.firstPass)
             XCTAssertNotEqual(store.engine?.presentation?.id, original.id)
-            XCTAssertNil(store.passAfterLookup(lookup, recap: "重复回调", now: now + 28))
+            XCTAssertNil(store.recordLookupRecap(lookup, recap: "重复回调", now: now + 28))
             let restored = HandbookWordStore(subject: subject, baseDirectory: root)
             let engine = try XCTUnwrap(restored.engine)
             XCTAssertEqual(engine.state.originalCardIDs, ["lookup-test-card"])
+            XCTAssertFalse(engine.familiarCardIDs.contains(original.cardID))
             if engine.usesDualFSRS {
-                XCTAssertEqual(engine.state.dualFSRS?.events.filter { $0.kind == "grade" }.map(\.cardID),
-                               [original.cardID])
+                let grades = try XCTUnwrap(engine.state.dualFSRS).events.filter { $0.kind == "grade" }
+                XCTAssertEqual(grades.map(\.cardID), [original.cardID])
+                XCTAssertEqual(grades.first?.remembered, false)
+                XCTAssertEqual(engine.retryCount(on: now + 27 + 599), 0)
+                XCTAssertEqual(engine.retryCount(on: now + 27 + 600), 1)
             } else {
                 XCTAssertEqual(engine.record.attempts.count, 1)
-                XCTAssertEqual(engine.record.attempts.first?.remembered, true)
+                XCTAssertEqual(engine.record.attempts.first?.remembered, false)
+                XCTAssertEqual(engine.presentation?.cardID, original.cardID)
+                XCTAssertNotEqual(engine.presentation?.id, original.id)
             }
         }
     }

@@ -148,10 +148,12 @@ struct CardLookupRecapView: View {
                     Button {
                         if !submit(recap) { error = true }
                     } label: {
-                        Text("确认并算过").frame(maxWidth: .infinity, minHeight: 32)
+                        Text("提交复述").frame(maxWidth: .infinity, minHeight: 32)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!CardLookupSession.validRecap(recap))
+                    Text("查过的卡按「没记住」继续复习。首轮自评照常计入配速。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     if error {
                         Text("这次自评没有保存。请确认原卡仍在当前队列，再重试。")
                             .font(.footnote).foregroundStyle(.red)

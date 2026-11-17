@@ -698,16 +698,16 @@ enum HandbookSchedulerPreference {
             HourlyStudyAnswer(area: subject.rawValue, itemID: before.cardID, at: now, firstPass: fresh).post()
         }
     }
-    /// A returned lookup is credited only by the real scheduler's durable self-assessment.
-    /// The original card/presentation is required even if the user has since changed courses.
-    func passAfterLookup(_ session: CardLookupSession, recap: String, now: Date = .now) -> HourlyStudyAnswer? {
+    /// Looking up the card is assisted recall. Count the submitted attempt, but
+    /// give the scheduler the same grade as the learner tapping “没记住”.
+    func recordLookupRecap(_ session: CardLookupSession, recap: String, now: Date = .now) -> HourlyStudyAnswer? {
         guard session.returnedAt != nil, CardLookupSession.validRecap(recap),
               let presented = engine?.presentation, !blocked,
               session.matches(subject: subject.rawValue, cardID: presented.cardID, presentationID: presented.id) else { return nil }
         let fresh = engine?.isFirstPass(presented.cardID) == true
         change { candidate in
             if !presented.revealed { try candidate.reveal(token: presented.id, now: now) }
-            try candidate.rate(remembered: true, token: presented.id, now: now)
+            try candidate.rate(remembered: false, token: presented.id, now: now)
         }
         guard !blocked, error == nil, engine?.presentation?.id != presented.id else { return nil }
         return HourlyStudyAnswer(area: subject.rawValue, itemID: presented.cardID, at: now, firstPass: fresh)
