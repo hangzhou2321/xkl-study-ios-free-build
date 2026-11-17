@@ -24,6 +24,18 @@ enum StudyArea: String, Codable, CaseIterable {
     }
 }
 
+struct StudyHomeAction: Equatable {
+    let area: EffectiveStudyArea
+    let hasPosition: Bool
+    let due: Int
+
+    static func next(in actions: [Self], lastArea: EffectiveStudyArea?) -> Self? {
+        let last = actions.first { $0.area == lastArea }
+        if let last, last.hasPosition { return last }
+        return actions.first(where: \.hasPosition) ?? actions.first { $0.due > 0 } ?? last ?? actions.first
+    }
+}
+
 enum StudySegmentMode: String, Codable {
     case standard, fiveMinutes
 }

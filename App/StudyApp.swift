@@ -92,6 +92,8 @@ struct RootView: View {
     @State private var mathEffectiveVisible = false
     @State private var visibleEffectiveArea: EffectiveStudyArea?
     @State private var observedCalendarDay: Date?
+    @State private var mathEntryRequest: UUID?
+    @AppStorage("studyHome.lastStudyArea") private var lastEffectiveStudyArea = ""
     @State private var subject: ConceptSubject = .computer
     @Environment(\.scenePhase) private var scenePhase
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -109,11 +111,14 @@ struct RootView: View {
     }
 
     private var homeTab: some View {
-            StudyHomeView(store: store, exams: exams, computer: concepts, power: power,
-                          professionalComputer: professionalComputer, professionalPower: professionalPower,
+            StudyHomeView(store: store, exams: exams, math: mathExperience,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
                           handbookMechanics: handbookMechanics,
-                          flow: flow, effectiveTime: effectiveTime, importing: $importing, launch: launch)
+                          flow: flow, effectiveTime: effectiveTime, novelStore: studyNovel,
+                          importing: $importing, visible: selectedTab == 5 && scenePhase == .active,
+                          lastArea: EffectiveStudyArea(rawValue: lastEffectiveStudyArea),
+                          day: observedCalendarDay ?? Date(), launch: launch,
+                          launchMath: launchMathFromHome, readNovel: { openNovel(true) })
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
     }
@@ -158,6 +163,7 @@ struct RootView: View {
 
     private var mathTab: some View {
             MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
+                               entryRequest: mathEntryRequest,
                                onEffectiveVisibilityChanged: { visible in
                                    mathEffectiveVisible = visible
                                    syncEffectiveVisibility()
@@ -378,6 +384,7 @@ struct RootView: View {
         let next = effectiveScreen.area
         guard next != visibleEffectiveArea else { return }
         visibleEffectiveArea = next
+        if let next, lastEffectiveStudyArea != next.rawValue { lastEffectiveStudyArea = next.rawValue }
         effectiveTime.setVisibleArea(next)
     }
     private func syncExamPolicy() {
@@ -423,6 +430,12 @@ struct RootView: View {
     private func beganProfessional(_ area: StudyArea) {
         flow.enterProfessionalPractice(area: area)
         trackStudyVisibility()
+    }
+
+    private func launchMathFromHome() {
+        guard !flow.state.needsBreak else { return }
+        mathEntryRequest = UUID()
+        selectedTab = 6
     }
 
     private func launch(_ area: StudyArea, _ mode: StudySegmentMode) {

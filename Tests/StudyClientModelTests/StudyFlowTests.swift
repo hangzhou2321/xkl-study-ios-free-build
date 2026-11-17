@@ -6,6 +6,18 @@ import XCTest
 final class StudyFlowTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testTodayNextActionUsesAvailableBreakpointsBeforeDueAndLastSubject() {
+        let power = StudyHomeAction(area: .power, hasPosition: true, due: 2)
+        let math = StudyHomeAction(area: .math, hasPosition: true, due: 0)
+        let vocabulary = StudyHomeAction(area: .vocabulary, hasPosition: false, due: 40)
+        let circuit = StudyHomeAction(area: .circuit, hasPosition: false, due: 0)
+        XCTAssertEqual(StudyHomeAction.next(in: [power, math, vocabulary], lastArea: .math), math)
+        XCTAssertEqual(StudyHomeAction.next(in: [power, math, vocabulary], lastArea: .circuit), power)
+        XCTAssertEqual(StudyHomeAction.next(in: [circuit, vocabulary], lastArea: .circuit), vocabulary)
+        XCTAssertEqual(StudyHomeAction.next(in: [circuit], lastArea: .power), circuit)
+        XCTAssertNil(StudyHomeAction.next(in: [], lastArea: .power))
+    }
+
     private final class Writer {
         enum Failure: Error { case disk }
         var shouldFail = false

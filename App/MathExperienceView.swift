@@ -14,6 +14,7 @@ struct MathExperienceView: View {
     @ObservedObject var store: MathExperienceStore
     @ObservedObject var legacy: MathStore
     var isVisible: Bool = true
+    var entryRequest: UUID?
     var onEffectiveVisibilityChanged: (Bool) -> Void = { _ in }
     var previewCase: String? = nil
     var previewFont: Double? = nil
@@ -25,6 +26,7 @@ struct MathExperienceView: View {
     @State private var readyParts = Set<String>()
     @State private var previewReported = false
     @State private var familiarExpanded = false
+    @State private var handledEntryRequest: UUID?
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         #if DEBUG
@@ -77,6 +79,7 @@ struct MathExperienceView: View {
                 MathPreviewTrace.phase("experience.inbox-return")
                 #endif
                 configurePreview()
+                handleEntryRequest()
                 #if DEBUG
                 MathPreviewTrace.phase("experience.configure-return")
                 #endif
@@ -86,7 +89,12 @@ struct MathExperienceView: View {
                 MathPreviewTrace.phase("experience.outer-appear-return")
                 #endif
             }
-            .onChange(of: isVisible) { _, _ in syncVisibility(); reportEffectiveVisibility() }
+            .onChange(of: isVisible) { _, _ in
+                handleEntryRequest()
+                syncVisibility()
+                reportEffectiveVisibility()
+            }
+            .onChange(of: entryRequest) { _, _ in handleEntryRequest() }
             .onChange(of: inCourse) { _, _ in reportEffectiveVisibility() }
             .onChange(of: card?.id) { _, _ in reportEffectiveVisibility() }
             .onChange(of: store.engine?.current?.id) { _, _ in reportEffectiveVisibility() }
@@ -110,10 +118,8 @@ struct MathExperienceView: View {
                 Text("原题：\(store.practiceQuestionCount) · 熟悉：\(engine.familiar.count) · 卡片队列：\(engine.cardQueue.count)")
                     .font(.subheadline).foregroundStyle(.secondary)
                 Text("已有效评价原题：\(effectiveQuestionCount(engine)) · 已评价知识卡：\(engine.cardMemories.count)").font(.subheadline)
-                Button(engine.current == nil ? "开始做题" : "继续当前题") {
-                    if engine.current == nil { store.start() } else { resumeCurrent() }
-                    if store.engine?.current != nil { inCourse = false }
-                }.buttonStyle(.borderedProminent).disabled(store.blocked)
+                Button(engine.current == nil ? "开始做题" : "继续当前题", action: beginQuestion)
+                    .buttonStyle(.borderedProminent).disabled(store.blocked)
                 if let guide = store.guide, let groups = guide.reviewGroups {
                     DisclosureGroup("宝典公式卡（\(groups.flatMap(\.cardIDs).count)）") {
                         ForEach(groups) { group in
@@ -302,6 +308,18 @@ struct MathExperienceView: View {
     }
     #endif
     private func pauseCurrent() { if let id = store.engine?.current?.id { store.pause(sessionID: id) } }
+    private func beginQuestion() {
+        if store.engine?.current == nil { store.start() } else { resumeCurrent() }
+        if store.engine?.current != nil && store.error == nil { inCourse = false }
+    }
+
+    private func handleEntryRequest() {
+        guard isVisible, let entryRequest, entryRequest != handledEntryRequest else { return }
+        handledEntryRequest = entryRequest
+        guard store.guide != nil, !store.blocked else { return }
+        beginQuestion()
+    }
+
     private func resumeCurrent() { if let id = store.engine?.current?.id { store.resume(sessionID: id) } }
     private func reportEffectiveVisibility() {
         let cardVisible = card.flatMap { selected in store.guide?.cards.first { $0.id == selected.id } } != nil

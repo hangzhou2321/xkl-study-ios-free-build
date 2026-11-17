@@ -643,6 +643,13 @@ final class StudyStore: ObservableObject {
     private var shadowFirstSequence: UInt32? {
         analysis.map { ContentRevision.comparisonFirstSequence(base:$0.shadowFirstSequence,revisions:contentRevisions) }
     }
+    func reviewCount(on date: Date) -> Int {
+        guard !fatalStorageError, let day = try? ConceptCalendar.studyDay(date),
+              let events = try? allEvents() else { return 0 }
+        let undone = Set(events.lazy.filter { $0.kind == 8 && $0.undoRevision != .max }.map(\.undoRevision))
+        return events.lazy.filter { $0.day == UInt32(day) && $0.graded && !undone.contains($0.afterRevision) }.count
+    }
+
     private func allEvents() throws -> [StudyEvent] {
         guard let engine else { return [] }
         return priorEvents + (try engine.events(from:engine.logBase+1))
