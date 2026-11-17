@@ -252,7 +252,9 @@ struct HandbookWordState: Codable, Equatable {
             && ((try? core.packedCard(id: alias)) ?? 0) & (1 << 21) == 0
     }
 
-    var firstPassRemaining: Int {
+    var firstPassRemaining: Int { firstPassRemaining(includingShortBook: false) }
+
+    func firstPassRemaining(includingShortBook: Bool) -> Int {
         if let dualFSRS {
             let state = dualFSRS.state
             let assessed = Set(state.lastRating.keys).union(state.familiar)
@@ -262,7 +264,9 @@ struct HandbookWordState: Codable, Equatable {
         let assessed = Set(record.attempts.map(\.cardID))
         let seen = Set(zip(record.cardIDs, originalIDs).compactMap { assessed.contains($0.0) ? $0.1 : nil })
             .union(familiarCardIDs)
-        return Set(activeOriginalIDs).subtracting(seen).count
+        let active = Set(activeOriginalIDs)
+        let scope = includingShortBook ? active.union(shortBookScope.all) : active
+        return scope.subtracting(seen).count
     }
 
     func hourlyWarmup(seed: Int) -> HandbookCard? {

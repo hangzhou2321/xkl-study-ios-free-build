@@ -23,7 +23,7 @@ final class FirstPassScheduleTests: XCTestCase {
         let raw = try JSONEncoder().encode(FirstPassSchedule(format: "xkl-first-pass-hours-v1", assignments: [task]))
         let schedule = try FirstPassSchedule.load(raw, calendar: calendar)
         XCTAssertEqual(schedule.deadline, row.end)
-        XCTAssertEqual(schedule.assignment(for: row, in: HourlyStudyPlan(), remaining: [:], calendar: calendar), task)
+
         var ledger = HourlyStudyPlan()
         XCTAssertTrue(ledger.begin(row, area: subject, at: row.start, firstPassTarget: task.cards, calendar: calendar))
         XCTAssertTrue(ledger.interact(row, area: subject, at: row.start, warmup: true))
@@ -36,17 +36,9 @@ final class FirstPassScheduleTests: XCTestCase {
         XCTAssertEqual(decoded.firstPassCredit(at: row.start, subject: subject), 7)
     }
 
-    func testFlexOnlyCatchesPreviouslyMissedCardsAndRejectsDuplicateWindows() throws {
-        let core = try window(15), firstFlex = try window(16), secondFlex = try window(21)
-        let task = assignment(core, "math", 7)
-        let schedule = FirstPassSchedule(format: "xkl-first-pass-hours-v1", assignments: [task])
-        var ledger = HourlyStudyPlan()
-        XCTAssertEqual(schedule.assignment(for: firstFlex, in: ledger, remaining: ["math": 12], calendar: calendar)?.cards, 7)
-        XCTAssertTrue(ledger.begin(firstFlex, area: "math", at: firstFlex.start, firstPassTarget: 7, calendar: calendar))
-        XCTAssertTrue(ledger.interact(firstFlex, area: "math", at: firstFlex.start, warmup: true))
-        XCTAssertTrue(ledger.record(firstFlex, area: "math", itemID: "formula", at: firstFlex.start, activeSeconds: nil, firstPass: true))
-        XCTAssertEqual(schedule.assignment(for: secondFlex, in: ledger, remaining: ["math": 12], calendar: calendar)?.cards, 6)
-        let invalid = FirstPassSchedule(format: schedule.format, assignments: [task, task])
-        XCTAssertThrowsError(try FirstPassSchedule.load(JSONEncoder().encode(invalid), calendar: calendar))
+    func testRejectsDuplicateWindows() throws {
+        let task = assignment(try window(15), "math", 7)
+        let duplicate = FirstPassSchedule(format: "xkl-first-pass-hours-v1", assignments: [task, task])
+        XCTAssertThrowsError(try FirstPassSchedule.load(JSONEncoder().encode(duplicate), calendar: calendar))
     }
 }

@@ -74,9 +74,9 @@ final class HourlyStudyTracker: ObservableObject {
     }
 
     func open(_ window: HourlyStudyPlan.Window, area: EffectiveStudyArea, card: HandbookCard?,
-              firstPassTarget: Int? = nil, now: Date = .now) {
+              firstPassTarget: Int? = nil, freeSubject: Bool = false, now: Date = .now) {
         guard !blocked, window.start <= now, now < window.end else { return }
-        let started = plan.begin(window, area: area.rawValue, at: now, firstPassTarget: firstPassTarget)
+        let started = plan.begin(window, area: area.rawValue, at: now, firstPassTarget: firstPassTarget, freeSubject: freeSubject)
         guard let slot = plan.slot(window), slot.area == area.rawValue else { return }
         if started { save() }
         settled = nil
@@ -122,12 +122,13 @@ final class HourlyStudyTracker: ObservableObject {
         let time = ProcessInfo.processInfo.systemUptime
         if let began = engagedSince { accumulated += max(0, time - began) }
         timingArea = next
-        engagedSince = next == active?.area && next != nil ? time : nil
+        let enabled = next.map { active?.accepts($0) == true } ?? false
+        engagedSince = enabled ? time : nil
     }
 
     func record(_ answer: HourlyStudyAnswer) {
         guard !blocked, let itemID = answer.itemID, let window = HourlyStudyPlan.window(at: answer.at),
-              active?.start == window.start, active?.area == answer.area else { return }
+              active?.start == window.start, active?.accepts(answer.area) == true else { return }
         let time = ProcessInfo.processInfo.systemUptime
         let interval = accumulated + (engagedSince.map { max(0, time - $0) } ?? 0)
         if plan.record(window, area: answer.area, itemID: itemID, at: answer.at,
@@ -170,7 +171,7 @@ final class HourlyStudyTracker: ObservableObject {
     }
 
     private func syncLive(now: Date) {
-        live.sync(slot: active, subject: active?.area.flatMap { EffectiveStudyArea(rawValue: $0)?.title },
+        live.sync(slot: active, subject: active?.freeSubject == true ? "首轮配速" : active?.area.flatMap { EffectiveStudyArea(rawValue: $0)?.title },
                   lookup: lookup, away: !foreground, now: now)
     }
 
@@ -196,25 +197,21 @@ struct HourlyStudyBoard: View {
     let unseen: Int?
     let remainingFirstPass: [String: Int]
     let enabled: Bool
-    let open: (HourlyStudyPlan.Window, EffectiveStudyArea, Int?) -> Void
+    let open: (HourlyStudyPlan.Window, EffectiveStudyArea) -> Void
+    let choose: (HourlyStudyPlan.Window, Int) -> Void
 
     var body: some View {
         TimelineView(.periodic(from: Calendar.current.startOfDay(for: .now), by: 60)) { context in
             let now = context.date
             let plan = tracker.plan
             let delivery = plan.delivery(on: now)
-            let datedPlan = tracker.schedule.flatMap { $0.includesDay(now) ? $0 : nil }
-            let today = datedPlan?.rows(on: now) ?? []
-            let plannedLeft = today.reduce(0) { $0 + max(0, $1.cards - plan.firstPassCredit(at: $1.start, subject: $1.subject)) }
-            let flexibleCredit = HourlyStudyPlan.windows(on: now).filter(\.flexible).reduce(0) { sum, window in
-                guard let slot = plan.slot(window), slot.firstPassOnly == true else { return sum }
-                return sum + slot.credited
-            }
+            let remaining = remainingFirstPass.values.reduce(0, +)
+            let pace = (tracker.schedule?.deadline).map { DeadlinePace(remaining: remaining, now: now, end: $0, current: tracker.active) }
             VStack(alignment: .leading, spacing: 13) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("今天的配速").font(.headline)
                     Spacer()
-                    if let deadline = datedPlan?.deadline {
+                    if let deadline = pace?.end {
                         Text(deadline, format: .dateTime.month().day().hour().minute())
                             .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                     } else {
@@ -222,16 +219,19 @@ struct HourlyStudyBoard: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if datedPlan != nil {
-                    Text("今天计划还差 \(max(0, plannedLeft - flexibleCredit)) 张")
+                if let pace {
+                    Text(pace.now >= pace.end ? "已到截止 · 首轮剩 \(pace.remaining) 张"
+                        : "首轮剩 \(pace.remaining) 张 · 今天 \(pace.todayLeft()) 张")
                         .font(.title2.weight(.semibold)).monospacedDigit()
-                    Text("五科剩余 \(remainingFirstPass.values.reduce(0, +)) 张 · 只计首轮自评")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if pace.now < pace.end && pace.ordinaryHour > 0 {
+                        Text("完整时段约 \(pace.ordinaryHour) 张／小时 · 自选科目")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else {
                     Text("今日还差 \(plan.remaining(on: now)) 张／题")
                         .font(.title2.weight(.semibold)).monospacedDigit()
                 }
-                if datedPlan == nil, let subject, let unseen {
+                if pace == nil, let subject, let unseen {
                     if let eta = plan.firstPassETA(unseen: unseen, now: now) {
                         Text("\(subject.title)还有 \(unseen)\(unit)未过首轮 · 预计 \(eta.formatted(.dateTime.month().day().hour()))")
                             .font(.subheadline)
@@ -243,7 +243,7 @@ struct HourlyStudyBoard: View {
                 }
                 LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], spacing: 8) {
                     ForEach(HourlyStudyPlan.windows(on: now)) { window in
-                        cell(window, now: now, schedule: datedPlan)
+                        cell(window, now: now, pace: pace)
                     }
                 }
                 metricSummary(plan.latencyComparison(on: now))
@@ -259,36 +259,38 @@ struct HourlyStudyBoard: View {
         }
     }
 
-    private func cell(_ window: HourlyStudyPlan.Window, now: Date, schedule: FirstPassSchedule?) -> some View {
+    private func cell(_ window: HourlyStudyPlan.Window, now: Date, pace: DeadlinePace?) -> some View {
         let slot = tracker.plan.slot(window)
-        let assigned = schedule?.assignment(for: window, in: tracker.plan, remaining: remainingFirstPass)
         let storedArea = slot?.area.flatMap(EffectiveStudyArea.init(rawValue:))
-        let plannedArea = assigned.flatMap { EffectiveStudyArea(rawValue: $0.subject) }
-        let area = storedArea ?? (schedule == nil ? subject : plannedArea)
-        let target = storedArea != nil ? (slot?.target ?? 0)
-            : (schedule == nil ? tracker.plan.target(for: window) : assigned?.cards ?? 0)
         let current = window.start <= now && now < window.end
         let closed = now >= window.end
         let credited = slot?.credited ?? 0
+        let confined = slot?.firstPassOnly != true && credited > 0
+        let area = storedArea ?? subject
+        let free = pace != nil && !confined
+        let target: Int
+        if closed || !free {
+            target = storedArea != nil ? (slot?.target ?? 0) : (pace == nil ? tracker.plan.target(for: window) : 0)
+        } else if slot?.freeSubject == true {
+            target = slot?.target ?? 0
+        } else {
+            target = (pace?.target(for: window) ?? 0) + credited
+        }
+        let available = target > 0 && (free ? (pace?.remaining ?? 0) > 0 : area != nil)
         return Button {
-            if let area, target > 0 {
-                let isFirstPass = storedArea != nil ? slot?.firstPassOnly == true : schedule != nil
-                open(window, area, isFirstPass ? target : nil)
-            }
+            if free { choose(window, target) }
+            else if let area { open(window, area) }
         } label: {
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text("\(window.endingHour - 1):00–\(window.endingHour):00")
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
                     Spacer(minLength: 4)
-                    if current, area != nil, target > 0 {
+                    if current, available {
                         Image(systemName: "arrow.right.circle.fill").accessibilityHidden(true)
                     }
                 }
-                let label = schedule != nil && area != nil ? (area?.title ?? "") + " · " : ""
-                Text(target == 0 ? (window.flexible ? "弹性 · 补交" : "未排课")
-                     : window.flexible ? label + "补交 \(credited)/\(target)"
-                     : label + (closed ? "封盘 " : "") + "\(credited)/\(target)")
+                Text(status(window: window, closed: closed, credited: credited, target: target))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(current ? Color.teal : Color.secondary)
             }
@@ -298,7 +300,13 @@ struct HourlyStudyBoard: View {
                         in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .disabled(!enabled || !current || area == nil || target == 0)
+        .disabled(!enabled || !current || !available)
+    }
+
+    private func status(window: HourlyStudyPlan.Window, closed: Bool, credited: Int, target: Int) -> String {
+        if target == 0 { return window.flexible ? "弹性 · 补交" : (closed ? "已封盘" : "本段无配额") }
+        if window.flexible { return "补交 \(credited)/\(target)" }
+        return (closed ? "封盘 " : "") + "\(credited)/\(target)"
     }
 
     private func metricSummary(_ metrics: (guided: [Int], ordinary: [Int])) -> some View {

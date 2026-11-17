@@ -19,12 +19,18 @@ struct StudyHomeView: View {
     let day: Date
     let launch: (StudyArea, StudySegmentMode) -> Void
     let launchMath: () -> Void
-    let openHour: (HourlyStudyPlan.Window, EffectiveStudyArea, Int?) -> Void
+    let openHour: (HourlyStudyPlan.Window, EffectiveStudyArea, Int?, Bool) -> Void
 
     @State private var actions: [StudyHomeAction] = []
     @State private var chosenArea: EffectiveStudyArea?
     @State private var firstPassByArea: [EffectiveStudyArea: Int] = [:]
     @State private var importingSchedule = false
+    @State private var choosingWindow: HourlyStudyPlan.Window?
+    @State private var choosingTarget = 0
+
+    private var choices: [EffectiveStudyArea] {
+        EffectiveStudyArea.allCases.filter { (cardsRemaining[$0.rawValue] ?? 0) > 0 }
+    }
 
     private var cardsRemaining: [String: Int] {
         var subjects = Dictionary(uniqueKeysWithValues: firstPassByArea.compactMap { (area, count) in
@@ -45,7 +51,7 @@ struct StudyHomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if flow.state.needsBreak { completedTimedSegment }
-                    if !actions.isEmpty {
+                    if hourly.schedule == nil && !actions.isEmpty {
                         Picker("配速科目", selection: Binding(get: { nextAction?.area }, set: { chosenArea = $0 })) {
                             ForEach(actions, id: \.area) { action in
                                 Text(action.area.title).tag(Optional(action.area))
@@ -57,7 +63,11 @@ struct StudyHomeView: View {
                                      unit: nextAction?.area == .publicQuestions || nextAction?.area == .math ? "题" : "张",
                                      unseen: nextAction.flatMap { firstPassByArea[$0.area] },
                                      remainingFirstPass: cardsRemaining, enabled: !flow.state.needsBreak,
-                                     open: openHour)
+                                     open: { window, area in openHour(window, area, nil, false) },
+                                     choose: { window, target in
+                                         choosingTarget = target
+                                         choosingWindow = window
+                                     })
                     if let next = nextAction, !flow.state.needsBreak { nextCard(next) }
                     EffectiveStudyTimeSummary(store: effectiveTime)
                         .padding(20)
@@ -85,6 +95,15 @@ struct StudyHomeView: View {
                 }
             }
         }
+        .confirmationDialog("先背哪一科", isPresented: Binding(
+            get: { choosingWindow != nil }, set: { if !$0 { choosingWindow = nil } }
+        ), titleVisibility: .visible, presenting: choosingWindow) { window in
+            ForEach(choices, id: \.self) { area in
+                Button("\(area.title) · 剩 \(cardsRemaining[area.rawValue] ?? 0) 张") {
+                    openHour(window, area, choosingTarget, true)
+                }
+            }
+        }
         .fileImporter(isPresented: $importingSchedule, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url): hourly.importSchedule(url)
@@ -100,6 +119,7 @@ struct StudyHomeView: View {
             if active { refresh() }
         }
         .onChange(of: day) { _, _ in if visible { refresh() } }
+        .onChange(of: hourly.schedule?.deadline) { _, _ in if visible { refresh() } }
     }
 
     private func nextCard(_ action: StudyHomeAction) -> some View {
@@ -215,7 +235,7 @@ struct StudyHomeView: View {
         for area in EffectiveStudyArea.allCases {
             guard let store = handbook(for: area), !store.blocked, let engine = store.engine else { continue }
             let stats = engine.stats(on: date)
-            firstPass[area] = engine.firstPassRemaining
+            firstPass[area] = engine.firstPassRemaining(includingShortBook: hourly.schedule != nil)
             let short = engine.shortBookScope
             if engine.presentation != nil || stats.remainingToday > 0 || stats.due > 0 || stats.unseen > 0 || short.active != short.all {
                 options.append(.init(area: area, hasPosition: engine.presentation != nil, due: stats.due))

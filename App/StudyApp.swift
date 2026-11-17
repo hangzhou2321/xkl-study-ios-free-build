@@ -172,7 +172,7 @@ struct RootView: View {
     private var mathTab: some View {
             MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
                                entryRequest: mathEntryRequest, formulaEntry: mathFormulaEntry,
-                               formulaSlot: hourly.active?.firstPassOnly == true && hourly.active?.area == "math"
+                               formulaSlot: hourly.active?.firstPassOnly == true && hourly.active?.accepts("math") == true
                                    ? hourly.active : nil,
                                onEffectiveVisibilityChanged: { visible in
                                    mathEffectiveVisible = visible
@@ -316,7 +316,7 @@ struct RootView: View {
                       let answer = $0.userInfo?["answer"] as? HourlyStudyAnswer,
                       let area = EffectiveStudyArea(rawValue: answer.area),
                       visibleEffectiveArea == area else { return }
-                if let active = hourly.active, active.area == answer.area {
+                if let active = hourly.active, active.accepts(answer.area) {
                     hourly.record(answer)
                 } else { hourly.ordinaryInteraction(area: area, now: answer.at) }
             }
@@ -505,12 +505,14 @@ struct RootView: View {
 
     private var visibleHourlySlot: HourlyStudyPlan.Slot? {
         guard let slot = hourly.active ?? hourly.settled,
-              visibleEffectiveArea?.rawValue == slot.area else { return nil }
+              let area = visibleEffectiveArea, slot.accepts(area.rawValue) else { return nil }
         return slot
     }
 
-    private func openHour(_ window: HourlyStudyPlan.Window, _ requested: EffectiveStudyArea, _ firstPassTarget: Int? = nil) {
-        let area = hourly.plan.slot(window)?.area.flatMap(EffectiveStudyArea.init(rawValue:)) ?? requested
+    private func openHour(_ window: HourlyStudyPlan.Window, _ requested: EffectiveStudyArea,
+                          _ firstPassTarget: Int? = nil, _ freeSubject: Bool = false) {
+        let saved = hourly.plan.slot(window)
+        let area = freeSubject ? requested : (saved?.area.flatMap(EffectiveStudyArea.init(rawValue:)) ?? requested)
         let engine: HandbookWordEngine?
         switch area {
         case .computer: engine = handbookComputer.engine
@@ -519,8 +521,8 @@ struct RootView: View {
         case .mechanics: engine = handbookMechanics.engine
         default: engine = nil
         }
-        hourly.open(window, area: area, card: engine?.hourlyWarmup(seed: window.endingHour), firstPassTarget: firstPassTarget)
-        guard hourly.active?.start == window.start else { return }
+        hourly.open(window, area: area, card: engine?.hourlyWarmup(seed: window.endingHour), firstPassTarget: firstPassTarget, freeSubject: freeSubject)
+        guard hourly.active?.start == window.start, hourly.active?.area == area.rawValue else { return }
         if hourly.warmup != nil { hourlyPendingArea = area }
         else { routeHourlyStudy(area) }
     }
@@ -567,7 +569,7 @@ struct RootView: View {
             return true
         }
         var position: CardLookupSession.Progress?
-        if let slot = hourly.active, slot.area == course.rawValue, now < slot.end, slot.credited < slot.target {
+        if let slot = hourly.active, slot.accepts(course.rawValue), now < slot.end, slot.credited < slot.target {
             position = .init(index: slot.credited + 1, target: slot.target, slotStart: slot.start)
         }
         let next = CardLookupSession(subject: course.rawValue, cardID: card.id,
@@ -605,9 +607,9 @@ struct RootView: View {
         if let position = pending.progress, hourly.active == nil,
            let area = EffectiveStudyArea(rawValue: pending.subject),
            let window = HourlyStudyPlan.window(at: now), window.start == position.slotStart,
-           hourly.plan.slot(window)?.area == course.rawValue, hourly.plan.slot(window)?.firstCardInteraction != nil {
+           hourly.plan.slot(window)?.accepts(course.rawValue) == true, hourly.plan.slot(window)?.firstCardInteraction != nil {
             let saved = hourly.plan.slot(window)
-            hourly.open(window, area: area, card: nil, firstPassTarget: saved?.firstPassOnly == true ? saved?.target : nil, now: now)
+            hourly.open(window, area: area, card: nil, firstPassTarget: saved?.firstPassOnly == true ? saved?.target : nil, freeSubject: saved?.freeSubject == true, now: now)
         }
         hourly.setLookup(nil, now: now)
         subject = course
@@ -648,7 +650,7 @@ struct RootView: View {
             return
         }
         if hourly.warmup != nil { return }
-        openHour(window, area, slot.firstPassOnly == true ? slot.target : nil)
+        openHour(window, area, slot.firstPassOnly == true ? slot.target : nil, slot.freeSubject == true)
     }
 
     private func launchMathFromHome() { launchMathFromHome(formula: false) }

@@ -16,13 +16,18 @@ struct HourlyStudyPlan: Codable {
         let start: Date
         let end: Date
         let flexible: Bool
-        let target: Int
+        var target: Int
         var area: String?
         var firstCardInteraction: Date?
         var ordinaryFirstInteraction: Date?
         var ordinaryArea: String?
         var units: [Unit] = []
         var firstPassOnly: Bool? = nil
+        var freeSubject: Bool? = nil
+        func accepts(_ key: String) -> Bool {
+            if freeSubject == true { return FirstPassSchedule.subjects.contains(key) }
+            return area == key
+        }
         var credited: Int { min(units.count, target) }
         var latencySeconds: Int? {
             firstCardInteraction.map { Int($0.timeIntervalSince(start)) }
@@ -45,6 +50,7 @@ struct HourlyStudyPlan: Codable {
         let itemID: String
         let at: Date
         let activeSeconds: Double?
+        var subject: String? = nil
     }
 
     static func windows(on date: Date, calendar: Calendar = .current) -> [Window] {
@@ -105,19 +111,33 @@ struct HourlyStudyPlan: Codable {
     }
 
     @discardableResult mutating func begin(_ window: Window, area: String, at date: Date,
-                                           firstPassTarget: Int? = nil, calendar: Calendar = .current) -> Bool {
+                                           firstPassTarget: Int? = nil, freeSubject: Bool = false,
+                                           calendar: Calendar = .current) -> Bool {
         let goal = firstPassTarget ?? target(for: window, calendar: calendar)
-        guard window.start <= date, date < window.end, (1...60).contains(goal) else { return false }
+        guard window.start <= date, date < window.end, (1...(freeSubject ? 25_000 : 60)).contains(goal),
+              !freeSubject || (firstPassTarget != nil && FirstPassSchedule.subjects.contains(area)) else { return false }
         if let index = slots.firstIndex(where: { $0.start == window.start }) {
-            guard slots[index].area == nil else { return false }
+            if let previousArea = slots[index].area {
+                guard freeSubject, slots[index].firstPassOnly == true || slots[index].units.isEmpty else { return false }
+                if slots[index].freeSubject == true && previousArea == area { return false }
+                // Old receipts without an explicit subject belong to the original subject.
+                for unitIndex in slots[index].units.indices where slots[index].units[unitIndex].subject == nil {
+                    slots[index].units[unitIndex].subject = previousArea
+                }
+                slots[index].target = max(slots[index].credited, goal)
+                slots[index].area = area
+                slots[index].firstPassOnly = true
+                slots[index].freeSubject = true
+                return true
+            }
             let baseline = slots[index]
             slots[index] = Slot(start: window.start, end: window.end, flexible: window.flexible,
                                 target: goal, area: area, firstCardInteraction: nil,
                                 ordinaryFirstInteraction: baseline.ordinaryFirstInteraction, ordinaryArea: baseline.ordinaryArea,
-                                firstPassOnly: firstPassTarget.map { _ in true })
+                                firstPassOnly: firstPassTarget.map { _ in true }, freeSubject: freeSubject ? true : nil)
         } else {
             slots.append(Slot(start: window.start, end: window.end, flexible: window.flexible,
-                              target: goal, area: area, firstPassOnly: firstPassTarget.map { _ in true }))
+                              target: goal, area: area, firstPassOnly: firstPassTarget.map { _ in true }, freeSubject: freeSubject ? true : nil))
         }
         return true
     }
@@ -145,10 +165,11 @@ struct HourlyStudyPlan: Codable {
                                            at date: Date, activeSeconds: Double?, firstPass: Bool = false) -> Bool {
         guard let index = slots.firstIndex(where: { $0.start == window.start }),
               date < slots[index].end, let first = slots[index].firstCardInteraction, date >= first,
-              slots[index].area == area, (slots[index].firstPassOnly != true || firstPass),
+              slots[index].accepts(area), (slots[index].firstPassOnly != true || firstPass),
               !itemID.isEmpty, slots[index].credited < slots[index].target,
-              !slots[index].units.contains(where: { $0.itemID == itemID }) else { return false }
-        slots[index].units.append(Unit(itemID: itemID, at: date, activeSeconds: activeSeconds))
+              !slots[index].units.contains(where: { $0.itemID == itemID && ($0.subject ?? slots[index].area) == area })
+        else { return false }
+        slots[index].units.append(Unit(itemID: itemID, at: date, activeSeconds: activeSeconds, subject: area))
         return true
     }
 
