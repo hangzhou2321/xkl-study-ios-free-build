@@ -23,6 +23,7 @@ struct ProfessionalCoursesView: View {
     var fullScreenEnabled: Binding<Bool> = .constant(false)
     var novelStore: StudyNovelStore? = nil
     var onOpenNovel: (Bool) -> Void = { _ in }
+    var onLookup: ((ConceptSubject, HandbookCard, HandbookCardPresentation) -> Bool)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,7 +54,7 @@ struct ProfessionalCoursesView: View {
                              onStart: onStart, onOverlayChanged: onOverlayChanged,
                              onEffectiveOverlayChanged: onEffectiveOverlayChanged,
                              novelStore: subject == .computer || subject == .power ? novelStore : nil,
-                             onOpenNovel: onOpenNovel)
+                             onOpenNovel: onOpenNovel, onLookup: onLookup)
                 #if DEBUG
                 .modifier(HandbookStudyEnabledProbe())
                 #endif

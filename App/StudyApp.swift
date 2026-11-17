@@ -6,6 +6,7 @@ import StudyCore
 #if DEBUG
 @main
 struct StudyApp: App {
+    @UIApplicationDelegateAdaptor(StudyAppNotificationDelegate.self) private var notificationDelegate
     var body: some Scene {
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--effective-time-preview") {
@@ -43,6 +44,7 @@ private struct StudyApplicationRoot: View {
 #else
 @main
 struct StudyApp: App {
+    @UIApplicationDelegateAdaptor(StudyAppNotificationDelegate.self) private var notificationDelegate
     @StateObject private var store = StudyStore()
     @StateObject private var examStore = ExamStore()
     @StateObject private var conceptStore = ConceptStore()
@@ -78,6 +80,9 @@ struct RootView: View {
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @StateObject private var effectiveTime = EffectiveStudyTimeStore()
     @StateObject private var hourly = HourlyStudyTracker()
+    @StateObject private var lookup = CardLookupCoordinator()
+    @State private var lookupRecap: CardLookupRecap?
+    @State private var lookupOpenID: UUID?
     @State private var hourlyPendingArea: EffectiveStudyArea?
     @State private var importing = false
     @State private var selectedTab = 5
@@ -157,7 +162,7 @@ struct RootView: View {
                                     contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling),
                                     segmentBar: AnyView(segmentBar),
                                     fullScreenEnabled: handbookFullScreenBinding,
-                                    novelStore: studyNovel, onOpenNovel: openNovel)
+                                    novelStore: studyNovel, onOpenNovel: openNovel, onLookup: startCardLookup)
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
@@ -213,6 +218,8 @@ struct RootView: View {
             trackStudyVisibility()
             syncExamPolicy()
             syncNovel()
+            if let pending = StudyAppNotificationDelegate.takePendingLookup() { lookupOpenID = pending }
+            if scenePhase == .active { resumeLookupIfNeeded() }
             hourly.scene(active: scenePhase == .active)
         }
     }
@@ -284,6 +291,8 @@ struct RootView: View {
         }
         .onChange(of: store.analysis?.conservativeEnabled) { _, _ in syncExamPolicy() }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .background { lookup.didEnterBackground() }
+            if phase == .active { resumeLookupIfNeeded() }
             hourly.scene(active: phase == .active)
             if phase != .active {
                 // Clear a recent touch even when the previous visible area was nil.
@@ -308,7 +317,26 @@ struct RootView: View {
                     hourly.record(answer)
                 } else { hourly.ordinaryInteraction(area: area, now: answer.at) }
             }
-            .onOpenURL(perform: handleHourlyURL)
+            .onOpenURL { url in
+                if let id = CardLookupSession.returnID(from: url) {
+                    requestLookupReturn(id)
+                } else { handleHourlyURL(url) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: StudyAppNotificationDelegate.openedLookup)) { notification in
+                guard let id = notification.object as? UUID else { return }
+                _ = StudyAppNotificationDelegate.takePendingLookup()
+                requestLookupReturn(id)
+            }
+            .onChange(of: lookupCardPresentation?.id) { _, _ in
+                if let session = lookup.session, !lookupStillActive(session) {
+                    finishLookup(session.id)
+                }
+            }
+            .onChange(of: lookupRecap?.id) { _, _ in trackStudyVisibility() }
+            .sheet(item: $lookupRecap) { recap in
+                CardLookupRecapView(card: recap, submit: { confirmLookup(recap.session, text: $0) },
+                                    cancel: { finishLookup(recap.id) })
+            }
             .sheet(item: $hourly.warmup, onDismiss: continueHourlyAfterWarmup) { card in
                 HourlyStudyWarmupView(card: card, touched: { hourly.warmupInteraction() }, continueStudy: {
                     hourly.closeWarmup()
@@ -367,7 +395,7 @@ struct RootView: View {
                 selectedTab = 5
             }
         }
-        let overlay = importing || showingStudyNovel || (selectedTab == 3 && examOverlay) || (selectedTab == 4 && professionalOverlay)
+        let overlay = importing || showingStudyNovel || lookupRecap != nil || (selectedTab == 3 && examOverlay) || (selectedTab == 4 && professionalOverlay)
         let visible = scenePhase == .active && !overlay && currentPracticeArea == flow.state.activeArea
             && currentPracticeArea != nil
         flow.setVisible(visible)
@@ -381,7 +409,7 @@ struct RootView: View {
     private var effectiveScreen: EffectiveStudyScreen {
         var screen = EffectiveStudyScreen()
         screen.foreground = scenePhase == .active
-        screen.globalBlocked = importing || showingStudyNovel || flow.state.needsBreak
+        screen.globalBlocked = importing || showingStudyNovel || lookupRecap != nil || flow.state.needsBreak
         switch selectedTab {
         case 0: screen.tab = .vocabulary
         case 3: screen.tab = .publicQuestions
@@ -506,6 +534,103 @@ struct RootView: View {
         if let route = StudyArea(rawValue: area.rawValue) { launch(route, .standard) }
         else { launchMathFromHome() }
         syncEffectiveVisibility()
+    }
+
+    private func handbookStore(for subject: ConceptSubject) -> HandbookWordStore {
+        switch subject {
+        case .computer: return handbookComputer
+        case .power: return handbookPower
+        case .circuit: return handbookCircuit
+        case .mechanics: return handbookMechanics
+        }
+    }
+
+    private var lookupCardPresentation: HandbookCardPresentation? {
+        lookup.session.flatMap { ConceptSubject(rawValue: $0.subject) }
+            .flatMap { handbookStore(for: $0).engine?.presentation }
+    }
+
+    private func lookupStillActive(_ session: CardLookupSession) -> Bool {
+        guard let subject = ConceptSubject(rawValue: session.subject),
+              let current = handbookStore(for: subject).engine?.presentation else { return false }
+        return session.matches(subject: subject.rawValue, cardID: current.cardID, presentationID: current.id)
+    }
+
+    private func startCardLookup(_ course: ConceptSubject, _ card: HandbookCard, _ presented: HandbookCardPresentation) -> Bool {
+        let now = Date()
+        if let pending = lookup.session,
+           pending.matches(subject: course.rawValue, cardID: card.id, presentationID: presented.id) {
+            requestLookupReturn(pending.id)
+            return true
+        }
+        var position: CardLookupSession.Progress?
+        if let slot = hourly.active, slot.area == course.rawValue, now < slot.end, slot.credited < slot.target {
+            position = .init(index: slot.credited + 1, target: slot.target, slotStart: slot.start)
+        }
+        let next = CardLookupSession(subject: course.rawValue, cardID: card.id,
+                                     presentationID: presented.id, startedAt: now, progress: position)
+        guard lookupStillActive(next) else { return false }
+        do {
+            try lookup.start(next, prompt: CardLookupSession.prompt(subject: course.shortTitle, title: card.title,
+                                                                    question: card.prompt, answer: card.answerSummary))
+        } catch { return false }
+        hourly.setLookup(next, now: now)
+        lookup.scheduleReminder(for: next)
+        return true
+    }
+
+    private func requestLookupReturn(_ id: UUID) {
+        guard lookup.session?.id == id else { return }
+        lookupOpenID = id
+        if scenePhase == .active { resumeLookupIfNeeded() }
+    }
+
+    private func resumeLookupIfNeeded() {
+        guard let pending = lookup.session, lookupRecap == nil else { return }
+        let now = Date()
+        guard lookupOpenID == pending.id || pending.leftApp || pending.returnedAt != nil || now >= pending.deadline else {
+            hourly.setLookup(pending, now: now)
+            return
+        }
+        lookupOpenID = nil
+        guard lookupStillActive(pending), let course = ConceptSubject(rawValue: pending.subject),
+              let card = handbookStore(for: course).engine?.currentCard,
+              let resumed = lookup.returnToCard(id: pending.id, now: now) else {
+            finishLookup(pending.id)
+            return
+        }
+        if let position = pending.progress, hourly.active == nil,
+           let area = EffectiveStudyArea(rawValue: pending.subject),
+           let window = HourlyStudyPlan.window(at: now), window.start == position.slotStart,
+           hourly.plan.slot(window)?.area == course.rawValue, hourly.plan.slot(window)?.firstCardInteraction != nil {
+            hourly.open(window, area: area, card: nil, now: now)
+        }
+        hourly.setLookup(nil, now: now)
+        subject = course
+        professionalPracticing = false
+        professionalRecalling = true
+        selectedTab = 4
+        lookupRecap = .init(session: resumed, title: card.title, question: card.prompt)
+        if let area = StudyArea(rawValue: course.rawValue) { flow.enterProfessionalPractice(area: area) }
+        trackStudyVisibility()
+    }
+
+    private func confirmLookup(_ session: CardLookupSession, text: String) -> Bool {
+        guard lookup.session?.id == session.id, lookupStillActive(session), scenePhase == .active,
+              let course = ConceptSubject(rawValue: session.subject),
+              let answer = handbookStore(for: course).passAfterLookup(session, recap: text) else { return false }
+        if let position = session.progress, hourly.active?.start == position.slotStart { hourly.record(answer) }
+        finishLookup(session.id)
+        return true
+    }
+
+    private func finishLookup(_ id: UUID) {
+        guard lookup.session?.id == id else { return }
+        lookup.finish(id: id)
+        if lookupRecap?.id == id { lookupRecap = nil }
+        if lookupOpenID == id { lookupOpenID = nil }
+        hourly.setLookup(nil)
+        trackStudyVisibility()
     }
 
     private func handleHourlyURL(_ url: URL) {

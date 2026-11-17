@@ -3,40 +3,60 @@ import Foundation
 
 @MainActor
 final class StudyPaceActivity {
-    private var attemptedStart: Date?
+    private var attemptedStart: URL?
     private var pending: Task<Void, Never>?
-    private var sent: ActivityContent<StudyPaceActivityAttributes.ContentState>?
+    private var sent: StudyPaceActivityAttributes.ContentState?
     private var current: Activity<StudyPaceActivityAttributes>?
 
-    func sync(slot: HourlyStudyPlan.Slot?, subject: String?, away: Bool, now: Date = .now) {
-        typealias Live = Activity<StudyPaceActivityAttributes>
-        guard let slot, let subject, now < slot.end else {
-            let expired = Live.activities
+    func sync(slot: HourlyStudyPlan.Slot?, subject: String?, lookup: CardLookupSession?,
+              away: Bool, now: Date = .now) {
+        if let lookup {
+            // Keep the expired lookup visible as a way back while iOS delivers the reminder.
+            let title = EffectiveStudyArea(rawValue: lookup.subject)?.title ?? "背词"
+            let attrs = StudyPaceActivityAttributes(start: lookup.startedAt, end: lookup.deadline,
+                                                    subject: title, lookupID: lookup.id)
+            sync(attributes: attrs, state: .init(completed: lookup.progress?.index ?? 0,
+                                                 target: lookup.progress?.target ?? 0, away: away),
+                 mayStart: !away && now < lookup.deadline)
+        } else if let slot, let subject, now < slot.end {
+            sync(attributes: .init(start: slot.start, end: slot.end, subject: subject),
+                 state: .init(completed: slot.credited, target: slot.target, away: away), mayStart: !away)
+        } else {
+            let expired = Activity<StudyPaceActivityAttributes>.activities
             current = nil
             sent = nil
-            enqueue { for activity in expired { await activity.end(nil, dismissalPolicy: .immediate) } }
-            return
+            attemptedStart = nil
+            end(expired)
         }
-        let state = StudyPaceActivityAttributes.ContentState(completed: slot.credited, target: slot.target, away: away)
-        let content = ActivityContent(state: state, staleDate: slot.end, relevanceScore: 1)
-        if current?.attributes.start != slot.start {
+    }
+
+    private func sync(attributes: StudyPaceActivityAttributes, state: StudyPaceActivityAttributes.ContentState,
+                      mayStart: Bool) {
+        typealias Live = Activity<StudyPaceActivityAttributes>
+        let key = attributes.returnURL
+        let content = ActivityContent(state: state, staleDate: attributes.end,
+                                      relevanceScore: attributes.lookupID == nil ? 1 : 100)
+        if current?.attributes.returnURL != key {
             sent = nil
             let existing = Live.activities
-            current = existing.first { $0.attributes.start == slot.start }
-            let old = existing.filter { $0.attributes.start != slot.start }
-            if !old.isEmpty {
-                enqueue { for activity in old { await activity.end(nil, dismissalPolicy: .immediate) } }
-            }
+            current = existing.first { $0.attributes.returnURL == key }
+            end(existing.filter { $0.attributes.returnURL != key })
         }
         if let current {
-            guard sent?.state != state else { return }
-            sent = content
+            guard sent != state else { return }
+            sent = state
             enqueue { await current.update(content) }
-        } else if !away, attemptedStart != slot.start, ActivityAuthorizationInfo().areActivitiesEnabled {
-            attemptedStart = slot.start
-            current = try? Live.request(attributes: .init(start: slot.start, end: slot.end, subject: subject),
-                                        content: content, pushType: nil)
-            sent = current == nil ? nil : content
+        } else if mayStart, attemptedStart != key, ActivityAuthorizationInfo().areActivitiesEnabled {
+            attemptedStart = key
+            current = try? Live.request(attributes: attributes, content: content, pushType: nil)
+            sent = current == nil ? nil : state
+        }
+    }
+
+    private func end(_ activities: [Activity<StudyPaceActivityAttributes>]) {
+        guard !activities.isEmpty else { return }
+        enqueue {
+            for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
         }
     }
 

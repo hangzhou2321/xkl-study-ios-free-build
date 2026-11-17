@@ -685,6 +685,19 @@ enum HandbookSchedulerPreference {
             HourlyStudyAnswer(area: subject.rawValue, itemID: before.cardID, at: now).post()
         }
     }
+    /// A returned lookup is credited only by the real scheduler's durable self-assessment.
+    /// The original card/presentation is required even if the user has since changed courses.
+    func passAfterLookup(_ session: CardLookupSession, recap: String, now: Date = .now) -> HourlyStudyAnswer? {
+        guard session.returnedAt != nil, CardLookupSession.validRecap(recap),
+              let presented = engine?.presentation, !blocked,
+              session.matches(subject: subject.rawValue, cardID: presented.cardID, presentationID: presented.id) else { return nil }
+        change { candidate in
+            if !presented.revealed { try candidate.reveal(token: presented.id, now: now) }
+            try candidate.rate(remembered: true, token: presented.id, now: now)
+        }
+        guard !blocked, error == nil, engine?.presentation?.id != presented.id else { return nil }
+        return HourlyStudyAnswer(area: subject.rawValue, itemID: presented.cardID, at: now)
+    }
     func markFamiliar(token: UUID, now: Date = Date()) { change { try $0.markFamiliar(token: token, now: now) } }
     func postpone(token: UUID, now: Date = Date()) { change { try $0.postpone(token: token, now: now) } }
     @discardableResult func requeue(cardID: String, now: Date = Date()) -> Bool {

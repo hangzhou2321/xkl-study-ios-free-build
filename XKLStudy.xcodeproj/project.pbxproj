@@ -15,6 +15,26 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "133EB9917BA18970F4C90D25";
 		};
+		"E87D1C02CE0A002F247E95F2" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "CardLookupSession.swift";
+			"sourceTree" = "<group>";
+		};
+		"6E971C683B608AB08446BEFE" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "E87D1C02CE0A002F247E95F2";
+		};
+		"467FEA5C5D2C3C2F320718B7" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "CardLookupView.swift";
+			"sourceTree" = "<group>";
+		};
+		"2748B27CDF32AE819EEE7713" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "467FEA5C5D2C3C2F320718B7";
+		};
 		"96FBB2855D217BF2378E3D26" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -895,6 +915,8 @@
 			"isa" = "PBXGroup";
 			"children" = (
 				"133EB9917BA18970F4C90D25",
+				"E87D1C02CE0A002F247E95F2",
+				"467FEA5C5D2C3C2F320718B7",
 				"96FBB2855D217BF2378E3D26",
 				"C1A1D7B5F4A62D897B5090BA",
 				"C4639D29D5B227A9E0F7FBF2",
@@ -1075,6 +1097,8 @@
 			"buildActionMask" = 2147483647;
 			"files" = (
 				"83654E1BDCA9C0856E704152",
+				"6E971C683B608AB08446BEFE",
+				"2748B27CDF32AE819EEE7713",
 				"B60B08CB1803D1FC06F628A9",
 				"F484822CE2CDBE699734D551",
 				"AA063C0FF211FD5AE103006F",
@@ -1242,8 +1266,8 @@
 				"PRODUCT_BUNDLE_IDENTIFIER" = "local.xkl.study";
 				"INFOPLIST_FILE" = "App/Info.plist";
 				"GENERATE_INFOPLIST_FILE" = "NO";
-				"MARKETING_VERSION" = "1.37.0";
-				"CURRENT_PROJECT_VERSION" = "74";
+				"MARKETING_VERSION" = "1.37.1";
+				"CURRENT_PROJECT_VERSION" = "75";
 				"SWIFT_VERSION" = "5.0";
 				"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
 				"TARGETED_DEVICE_FAMILY" = "1,2";
@@ -1265,8 +1289,8 @@
 				"PRODUCT_BUNDLE_IDENTIFIER" = "local.xkl.study.pace";
 				"INFOPLIST_FILE" = "StudyPaceWidget/Info.plist";
 				"GENERATE_INFOPLIST_FILE" = "NO";
-				"MARKETING_VERSION" = "1.37.0";
-				"CURRENT_PROJECT_VERSION" = "74";
+				"MARKETING_VERSION" = "1.37.1";
+				"CURRENT_PROJECT_VERSION" = "75";
 				"SKIP_INSTALL" = "YES";
 				"APPLICATION_EXTENSION_API_ONLY" = "YES";
 				"TARGETED_DEVICE_FAMILY" = "1,2";
@@ -1302,8 +1326,8 @@
 				"PRODUCT_BUNDLE_IDENTIFIER" = "local.xkl.study";
 				"INFOPLIST_FILE" = "App/Info.plist";
 				"GENERATE_INFOPLIST_FILE" = "NO";
-				"MARKETING_VERSION" = "1.37.0";
-				"CURRENT_PROJECT_VERSION" = "74";
+				"MARKETING_VERSION" = "1.37.1";
+				"CURRENT_PROJECT_VERSION" = "75";
 				"SWIFT_VERSION" = "5.0";
 				"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
 				"TARGETED_DEVICE_FAMILY" = "1,2";
@@ -1325,8 +1349,8 @@
 				"PRODUCT_BUNDLE_IDENTIFIER" = "local.xkl.study.pace";
 				"INFOPLIST_FILE" = "StudyPaceWidget/Info.plist";
 				"GENERATE_INFOPLIST_FILE" = "NO";
-				"MARKETING_VERSION" = "1.37.0";
-				"CURRENT_PROJECT_VERSION" = "74";
+				"MARKETING_VERSION" = "1.37.1";
+				"CURRENT_PROJECT_VERSION" = "75";
 				"SKIP_INSTALL" = "YES";
 				"APPLICATION_EXTENSION_API_ONLY" = "YES";
 				"TARGETED_DEVICE_FAMILY" = "1,2";

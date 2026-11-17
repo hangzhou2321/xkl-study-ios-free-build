@@ -10,12 +10,18 @@ struct StudyPaceActivityAttributes: ActivityAttributes {
     let start: Date
     let end: Date
     let subject: String
+    var lookupID: UUID? = nil
 
     var returnURL: URL {
         var components = URLComponents()
         components.scheme = "xklstudy"
-        components.host = "hourly"
-        components.path = "/\(Int(start.timeIntervalSince1970))"
+        if let lookupID {
+            components.host = "lookup"
+            components.path = "/\(lookupID.uuidString)"
+        } else {
+            components.host = "hourly"
+            components.path = "/\(Int(start.timeIntervalSince1970))"
+        }
         return components.url!
     }
 }

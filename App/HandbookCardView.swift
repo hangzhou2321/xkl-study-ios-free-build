@@ -15,6 +15,7 @@ struct HandbookCardView: View {
     private let startInStudy: Bool
     private let novelStore: StudyNovelStore?
     private let onOpenNovel: (Bool) -> Void
+    private let onLookup: ((ConceptSubject, HandbookCard, HandbookCardPresentation) -> Bool)?
     @Binding private var externalStudying: Bool
     @Binding private var fullScreenEnabled: Bool
     @StateObject private var store: HandbookWordStore
@@ -42,6 +43,7 @@ struct HandbookCardView: View {
     @State private var tableTarget: HandbookCard?
     @State private var document = HandbookCardRecordDocument(data: Data())
     @State private var displayDate = Date()
+    @State private var lookupFeedback: String?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -59,13 +61,14 @@ struct HandbookCardView: View {
          fullScreenEnabled: Binding<Bool> = .constant(false),
          onStart: @escaping () -> Void = {}, onOverlayChanged: @escaping (Bool) -> Void = { _ in },
          onEffectiveOverlayChanged: @escaping (Bool, Bool) -> Void = { _, _ in },
-         novelStore: StudyNovelStore? = nil, onOpenNovel: @escaping (Bool) -> Void = { _ in }) {
+         novelStore: StudyNovelStore? = nil, onOpenNovel: @escaping (Bool) -> Void = { _ in },
+         onLookup: ((ConceptSubject, HandbookCard, HandbookCardPresentation) -> Bool)? = nil) {
         self.subject = subject; self.baseDirectory = baseDirectory
         self.originalQuestionStore = originalQuestionStore; self.legacyStore = legacyStore
         self.onStart = onStart; self.onOverlayChanged = onOverlayChanged
         self.onEffectiveOverlayChanged = onEffectiveOverlayChanged
         self.startInStudy = startInStudy
-        self.novelStore = novelStore; self.onOpenNovel = onOpenNovel
+        self.novelStore = novelStore; self.onOpenNovel = onOpenNovel; self.onLookup = onLookup
         _externalStudying = studying
         _fullScreenEnabled = fullScreenEnabled
         _studying = State(initialValue: startInStudy || studying.wrappedValue)
@@ -594,6 +597,20 @@ struct HandbookCardView: View {
                     ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
                         .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
                 }
+            }
+            if let onLookup {
+                HStack(alignment: .firstTextBaseline) {
+                    Button("查这张卡", systemImage: "text.magnifyingglass") {
+                        if onLookup(subject, card, p) { lookupFeedback = "已复制，切到 GPT 粘贴" }
+                        else { lookupFeedback = "查卡未启动，请重试" }
+                    }
+                    .font(.footnote.weight(.medium))
+                    .accessibilityIdentifier("handbook-lookup-card")
+                    if let lookupFeedback {
+                        Text(lookupFeedback).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("handbook-lookup-clipboard-status")
+                    }
+                }.onChange(of: p.id) { _, _ in lookupFeedback = nil }
             }
             HStack(alignment: .top, spacing: 4) {
                 HandbookCardFace(card: card, revealed: p.revealed, showRecallCues: subject == .power || engine.package.mainCardIDs != nil,

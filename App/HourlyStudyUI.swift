@@ -31,6 +31,7 @@ final class HourlyStudyTracker: ObservableObject {
     private let file: URL
     private let writer = DispatchQueue(label: "local.xkl.study.hourly-plan")
     private let live = StudyPaceActivity()
+    private var lookup: CardLookupSession?
     private var finishTask: Task<Void, Never>?
     private var foreground = true
     private var blocked = false
@@ -122,6 +123,11 @@ final class HourlyStudyTracker: ObservableObject {
         syncLive(now: now)
     }
 
+    func setLookup(_ session: CardLookupSession?, now: Date = .now) {
+        lookup = session
+        syncLive(now: now)
+    }
+
     func dismissSettlement() { settled = nil }
 
     private func armDeadline(until deadline: Date, now: Date) {
@@ -138,7 +144,7 @@ final class HourlyStudyTracker: ObservableObject {
 
     private func syncLive(now: Date) {
         live.sync(slot: active, subject: active?.area.flatMap { EffectiveStudyArea(rawValue: $0)?.title },
-                  away: !foreground, now: now)
+                  lookup: lookup, away: !foreground, now: now)
     }
 
     private func save() {
