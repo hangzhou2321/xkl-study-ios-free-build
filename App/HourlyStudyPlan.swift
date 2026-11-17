@@ -22,6 +22,7 @@ struct HourlyStudyPlan: Codable {
         var ordinaryFirstInteraction: Date?
         var ordinaryArea: String?
         var units: [Unit] = []
+        var firstPassOnly: Bool? = nil
         var credited: Int { min(units.count, target) }
         var latencySeconds: Int? {
             firstCardInteraction.map { Int($0.timeIntervalSince(start)) }
@@ -59,6 +60,10 @@ struct HourlyStudyPlan: Codable {
     }
 
     func slot(_ window: Window) -> Slot? { slots.first { $0.start == window.start } }
+
+    func firstPassCredit(at start: Date, subject: String) -> Int {
+        slots.first { $0.start == start && $0.area == subject && $0.firstPassOnly == true }?.credited ?? 0
+    }
 
     func target(for window: Window, calendar: Calendar = .current) -> Int {
         guard window.flexible else { return Self.goal }
@@ -99,18 +104,20 @@ struct HourlyStudyPlan: Codable {
         return Self.windows(on: future, calendar: calendar).filter { !$0.flexible }[index].end
     }
 
-    @discardableResult mutating func begin(_ window: Window, area: String, at date: Date, calendar: Calendar = .current) -> Bool {
-        let goal = target(for: window, calendar: calendar)
-        guard window.start <= date, date < window.end, goal > 0 else { return false }
+    @discardableResult mutating func begin(_ window: Window, area: String, at date: Date,
+                                           firstPassTarget: Int? = nil, calendar: Calendar = .current) -> Bool {
+        let goal = firstPassTarget ?? target(for: window, calendar: calendar)
+        guard window.start <= date, date < window.end, (1...60).contains(goal) else { return false }
         if let index = slots.firstIndex(where: { $0.start == window.start }) {
             guard slots[index].area == nil else { return false }
             let baseline = slots[index]
             slots[index] = Slot(start: window.start, end: window.end, flexible: window.flexible,
                                 target: goal, area: area, firstCardInteraction: nil,
-                                ordinaryFirstInteraction: baseline.ordinaryFirstInteraction, ordinaryArea: baseline.ordinaryArea)
+                                ordinaryFirstInteraction: baseline.ordinaryFirstInteraction, ordinaryArea: baseline.ordinaryArea,
+                                firstPassOnly: firstPassTarget.map { _ in true })
         } else {
             slots.append(Slot(start: window.start, end: window.end, flexible: window.flexible,
-                              target: goal, area: area))
+                              target: goal, area: area, firstPassOnly: firstPassTarget.map { _ in true }))
         }
         return true
     }
@@ -135,10 +142,11 @@ struct HourlyStudyPlan: Codable {
     }
 
     @discardableResult mutating func record(_ window: Window, area: String, itemID: String,
-                                           at date: Date, activeSeconds: Double?) -> Bool {
+                                           at date: Date, activeSeconds: Double?, firstPass: Bool = false) -> Bool {
         guard let index = slots.firstIndex(where: { $0.start == window.start }),
               date < slots[index].end, let first = slots[index].firstCardInteraction, date >= first,
-              slots[index].area == area, !itemID.isEmpty, slots[index].credited < slots[index].target,
+              slots[index].area == area, (slots[index].firstPassOnly != true || firstPass),
+              !itemID.isEmpty, slots[index].credited < slots[index].target,
               !slots[index].units.contains(where: { $0.itemID == itemID }) else { return false }
         slots[index].units.append(Unit(itemID: itemID, at: date, activeSeconds: activeSeconds))
         return true
@@ -160,6 +168,7 @@ struct HourlyStudyAnswer {
     let area: String
     let itemID: String?
     let at: Date
+    var firstPass = false
 
     func post() {
         NotificationCenter.default.post(name: Self.committed, object: nil, userInfo: ["answer": self])

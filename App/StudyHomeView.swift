@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Reads the existing study records and routes to their normal entry points.
 struct StudyHomeView: View {
@@ -18,11 +19,20 @@ struct StudyHomeView: View {
     let day: Date
     let launch: (StudyArea, StudySegmentMode) -> Void
     let launchMath: () -> Void
-    let openHour: (HourlyStudyPlan.Window, EffectiveStudyArea) -> Void
+    let openHour: (HourlyStudyPlan.Window, EffectiveStudyArea, Int?) -> Void
 
     @State private var actions: [StudyHomeAction] = []
     @State private var chosenArea: EffectiveStudyArea?
     @State private var firstPassByArea: [EffectiveStudyArea: Int] = [:]
+    @State private var importingSchedule = false
+
+    private var cardsRemaining: [String: Int] {
+        var subjects = Dictionary(uniqueKeysWithValues: firstPassByArea.compactMap { (area, count) in
+            [.computer, .power, .circuit, .mechanics].contains(area) ? (area.rawValue, count) : nil
+        })
+        if math.guide != nil { subjects["math"] = math.formulaFirstPassIDs.count }
+        return subjects
+    }
 
     private var nextAction: StudyHomeAction? {
         if let chosen = actions.first(where: { $0.area == chosenArea }) { return chosen }
@@ -45,9 +55,9 @@ struct StudyHomeView: View {
                     }
                     HourlyStudyBoard(tracker: hourly, subject: flow.state.needsBreak ? nil : nextAction?.area,
                                      unit: nextAction?.area == .publicQuestions || nextAction?.area == .math ? "题" : "张",
-                                     unseen: nextAction.flatMap { firstPassByArea[$0.area] }) { window in
-                        if let area = nextAction?.area { openHour(window, area) }
-                    }
+                                     unseen: nextAction.flatMap { firstPassByArea[$0.area] },
+                                     remainingFirstPass: cardsRemaining, enabled: !flow.state.needsBreak,
+                                     open: openHour)
                     if let next = nextAction, !flow.state.needsBreak { nextCard(next) }
                     EffectiveStudyTimeSummary(store: effectiveTime)
                         .padding(20)
@@ -64,6 +74,10 @@ struct StudyHomeView: View {
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("今天").navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("导入小时计划") { importingSchedule = true }
+                        .font(.footnote)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink("记录") {
                         RecordsView(store: store, importing: $importing, effectiveTime: effectiveTime)
@@ -71,7 +85,17 @@ struct StudyHomeView: View {
                 }
             }
         }
-        .onAppear { if visible { refresh() } }
+        .fileImporter(isPresented: $importingSchedule, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url): hourly.importSchedule(url)
+            case .failure(let error): hourly.scheduleError = error.localizedDescription
+            }
+        }
+        .alert("小时计划", isPresented: Binding(get: { hourly.scheduleError != nil },
+                                               set: { if !$0 { hourly.scheduleError = nil } })) {
+            Button("知道了", role: .cancel) { hourly.scheduleError = nil }
+        } message: { Text(hourly.scheduleError ?? "") }
+        .onAppear { if visible { refresh(); hourly.reloadSchedule() } }
         .onChange(of: visible) { _, active in
             if active { refresh() }
         }

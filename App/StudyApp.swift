@@ -100,6 +100,7 @@ struct RootView: View {
     @State private var visibleEffectiveArea: EffectiveStudyArea?
     @State private var observedCalendarDay: Date?
     @State private var mathEntryRequest: UUID?
+    @State private var mathFormulaEntry = false
     @AppStorage("studyHome.lastStudyArea") private var lastEffectiveStudyArea = ""
     @State private var subject: ConceptSubject = .computer
     @Environment(\.scenePhase) private var scenePhase
@@ -170,7 +171,9 @@ struct RootView: View {
 
     private var mathTab: some View {
             MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
-                               entryRequest: mathEntryRequest,
+                               entryRequest: mathEntryRequest, formulaEntry: mathFormulaEntry,
+                               formulaSlot: hourly.active?.firstPassOnly == true && hourly.active?.area == "math"
+                                   ? hourly.active : nil,
                                onEffectiveVisibilityChanged: { visible in
                                    mathEffectiveVisible = visible
                                    syncEffectiveVisibility()
@@ -506,7 +509,7 @@ struct RootView: View {
         return slot
     }
 
-    private func openHour(_ window: HourlyStudyPlan.Window, _ requested: EffectiveStudyArea) {
+    private func openHour(_ window: HourlyStudyPlan.Window, _ requested: EffectiveStudyArea, _ firstPassTarget: Int? = nil) {
         let area = hourly.plan.slot(window)?.area.flatMap(EffectiveStudyArea.init(rawValue:)) ?? requested
         let engine: HandbookWordEngine?
         switch area {
@@ -516,7 +519,7 @@ struct RootView: View {
         case .mechanics: engine = handbookMechanics.engine
         default: engine = nil
         }
-        hourly.open(window, area: area, card: engine?.hourlyWarmup(seed: window.endingHour))
+        hourly.open(window, area: area, card: engine?.hourlyWarmup(seed: window.endingHour), firstPassTarget: firstPassTarget)
         guard hourly.active?.start == window.start else { return }
         if hourly.warmup != nil { hourlyPendingArea = area }
         else { routeHourlyStudy(area) }
@@ -532,7 +535,7 @@ struct RootView: View {
     private func routeHourlyStudy(_ area: EffectiveStudyArea) {
         if effectiveScreen.area == area { return }
         if let route = StudyArea(rawValue: area.rawValue) { launch(route, .standard) }
-        else { launchMathFromHome() }
+        else { launchMathFromHome(formula: hourly.active?.firstPassOnly == true) }
         syncEffectiveVisibility()
     }
 
@@ -603,7 +606,8 @@ struct RootView: View {
            let area = EffectiveStudyArea(rawValue: pending.subject),
            let window = HourlyStudyPlan.window(at: now), window.start == position.slotStart,
            hourly.plan.slot(window)?.area == course.rawValue, hourly.plan.slot(window)?.firstCardInteraction != nil {
-            hourly.open(window, area: area, card: nil, now: now)
+            let saved = hourly.plan.slot(window)
+            hourly.open(window, area: area, card: nil, firstPassTarget: saved?.firstPassOnly == true ? saved?.target : nil, now: now)
         }
         hourly.setLookup(nil, now: now)
         subject = course
@@ -644,11 +648,14 @@ struct RootView: View {
             return
         }
         if hourly.warmup != nil { return }
-        openHour(window, area)
+        openHour(window, area, slot.firstPassOnly == true ? slot.target : nil)
     }
 
-    private func launchMathFromHome() {
+    private func launchMathFromHome() { launchMathFromHome(formula: false) }
+
+    private func launchMathFromHome(formula: Bool) {
         guard !flow.state.needsBreak else { return }
+        mathFormulaEntry = formula
         mathEntryRequest = UUID()
         selectedTab = 6
     }

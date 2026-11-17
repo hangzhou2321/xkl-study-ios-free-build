@@ -222,6 +222,19 @@ struct HandbookWordState: Codable, Equatable {
         }
         return result
     }
+    func isFirstPass(_ cardID: String) -> Bool {
+        if let dualFSRS {
+            let state = dualFSRS.state
+            return dualFSRS.scheduledIDs.contains(cardID) && state.lastRating[cardID] == nil
+                && !state.familiar.contains(cardID)
+                && !state.legacyRatings.contains(where: { $0.cardID == cardID && !$0.retracted })
+        }
+        guard let index = originalIDs.firstIndex(of: cardID), index < record.cardIDs.count else { return false }
+        let alias = record.cardIDs[index]
+        return core.activeCardIDs.contains(alias) && !record.attempts.contains(where: { $0.cardID == alias })
+            && ((try? core.packedCard(id: alias)) ?? 0) & (1 << 21) == 0
+    }
+
     var firstPassRemaining: Int {
         if let dualFSRS {
             let state = dualFSRS.state

@@ -22,6 +22,10 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
         return engine.baseline.content.questions.filter { $0.eligible && ids.contains($0.id) }.count
     }
     func practiceBlockedReason(for id: String) -> String? { guide?.questions.first(where: { $0.questionID == id && !$0.practiceAllowed })?.practiceBlockedReason }
+    var formulaFirstPassIDs: [String] {
+        guard let engine, let guide else { return [] }
+        return (guide.reviewGroups ?? []).flatMap(\.cardIDs).filter { engine.cardMemories[$0] == nil }
+    }
     var currentPracticeBlockedReason: String? { engine?.current.flatMap { practiceBlockedReason(for:$0.questionID) } }
     var canUndo: Bool {
         guard let e=engine?.events.last(where: { ["grade","familiar"].contains($0.kind) }), clock().timeIntervalSince(e.timestamp) <= 15 else { return false }
@@ -145,12 +149,13 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
     }
     @discardableResult func revealCard(sessionID: UUID) -> Bool { change { if let c=$0.currentCard, $0.current != nil { try $0.openCard(c.cardID,now:clock()) }; try $0.revealCard(sessionID:sessionID,now:clock()) } }
     @discardableResult func gradeCard(_ id: String, remembered: Bool, sessionID: UUID) -> Bool {
+        let freshFormula = formulaFirstPassIDs.contains(id)
         let committed = change {
             if $0.current != nil { try $0.openCard(id, now: clock()) }
             try $0.gradeCard(id, remembered: remembered, sessionID: sessionID, now: clock())
         }
         if committed, let at = engine?.events.last?.timestamp {
-            HourlyStudyAnswer(area: "math", itemID: "card:" + id, at: at).post()
+            HourlyStudyAnswer(area: "math", itemID: "card:" + id, at: at, firstPass: freshFormula).post()
         }
         return committed
     }

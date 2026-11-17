@@ -8,6 +8,7 @@ private struct MathCardSelection: Identifiable {
     let recall: Bool
     var recallSessionID: UUID? = nil
     var standalone = false
+    var firstPass = false
 }
 
 struct MathExperienceView: View {
@@ -15,6 +16,8 @@ struct MathExperienceView: View {
     @ObservedObject var legacy: MathStore
     var isVisible: Bool = true
     var entryRequest: UUID?
+    var formulaEntry = false
+    var formulaSlot: HourlyStudyPlan.Slot?
     var onEffectiveVisibilityChanged: (Bool) -> Void = { _ in }
     var previewCase: String? = nil
     var previewFont: Double? = nil
@@ -317,7 +320,19 @@ struct MathExperienceView: View {
         guard isVisible, let entryRequest, entryRequest != handledEntryRequest else { return }
         handledEntryRequest = entryRequest
         guard store.guide != nil, !store.blocked else { return }
-        beginQuestion()
+        if formulaEntry { openNextFormula() } else { beginQuestion() }
+    }
+
+    private func openNextFormula() {
+        let ids = store.formulaFirstPassIDs
+        let current = store.engine?.currentCard?.cardID
+        let id = current.flatMap { ids.contains($0) ? $0 : nil } ?? ids.first
+        guard let id,
+              store.startCardRecall(id, questionSessionID: store.engine?.current?.id, standalone: true),
+              let visible = store.engine?.currentCard else { card = nil; return }
+        inCourse = true
+        card = MathCardSelection(id: id, presentationID: store.engine?.current?.id, recall: true,
+                                 recallSessionID: visible.id, standalone: true, firstPass: true)
     }
 
     private func resumeCurrent() { if let id = store.engine?.current?.id { store.resume(sessionID: id) } }
@@ -371,7 +386,10 @@ struct MathExperienceView: View {
                 guard selection.presentationID == store.engine?.current?.id else { return }; store.queueCard(c.id)
             }, grade: { remembered in
                 guard selection.recall, selection.presentationID == store.engine?.current?.id, let id = selection.recallSessionID, store.engine?.currentCard?.id == id else { return false }; return store.gradeCard(c.id, remembered: remembered, sessionID: id)
-            })
+            }, slot: selection.firstPass ? formulaSlot : nil,
+                next: selection.firstPass && formulaSlot.map({ $0.credited < $0.target }) == true
+                    && !store.formulaFirstPassIDs.isEmpty ? openNextFormula : nil)
+                .id(selection.recallSessionID)
         }
     }
 }
@@ -379,6 +397,8 @@ struct MathExperienceView: View {
 private struct MathExperienceCardSheet: View {
     let card: MathGuideCard; let fontSize: Double; let recall: Bool; let revealed: Bool; let reveal: () -> Void; let rendered: () -> Void
     let close: () -> Void; let queue: () -> Void; let grade: (Bool) -> Bool
+    var slot: HourlyStudyPlan.Slot?
+    var next: (() -> Void)?
     @State private var graded = false
     @State private var ready = Set<String>()
     @State private var failure: String?
@@ -393,13 +413,18 @@ private struct MathExperienceCardSheet: View {
                         cardRich(card.detail, role: "detail")
                     }
                     if recall {
-                        if graded { Text("卡片评价已提交；原题成绩不受影响。") }
+                        if graded {
+                            Text("卡片自评已保存。")
+                            if let next { Button("下一张公式卡", action: next).buttonStyle(.borderedProminent) }
+                        }
                         else if !revealed { Button("揭晓卡片", action: reveal).disabled(failure != nil || !ready.contains("prompt")) }
                         else { HStack { Button("没记住") { if allReady { graded = grade(false) } }; Button("记住了") { if allReady { graded = grade(true) } } }.buttonStyle(.bordered).disabled(!allReady) }
                     } else { Button("加入独立卡片复习", action: queue).buttonStyle(.bordered) }
                     if let failure { Text("公式排版失败，暂停卡片评分：\(failure)").foregroundStyle(.red) }
                 }.padding(20)
             }.navigationTitle(card.title).toolbar { Button("关闭", action: close) }
+                .safeAreaInset(edge: .top) { if let slot { HourlyStudyHeader(slot: slot) } }
+                .safeAreaInset(edge: .bottom) { if let slot { HourlyStudyProgress(slot: slot) } }
                 .onChange(of: renderReady) { _, ready in if ready { failure = nil; rendered() } }
         }
     }

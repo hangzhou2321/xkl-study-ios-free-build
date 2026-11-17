@@ -680,9 +680,10 @@ enum HandbookSchedulerPreference {
     }
     func rate(remembered: Bool, token: UUID, now: Date = Date()) {
         let before = engine?.presentation
+        let fresh = before.map { engine?.isFirstPass($0.cardID) == true } ?? false
         change { try $0.rate(remembered: remembered, token: token, now: now) }
         if error == nil, !blocked, let before, before.id == token, engine?.presentation?.id != token {
-            HourlyStudyAnswer(area: subject.rawValue, itemID: before.cardID, at: now).post()
+            HourlyStudyAnswer(area: subject.rawValue, itemID: before.cardID, at: now, firstPass: fresh).post()
         }
     }
     /// A returned lookup is credited only by the real scheduler's durable self-assessment.
@@ -691,12 +692,13 @@ enum HandbookSchedulerPreference {
         guard session.returnedAt != nil, CardLookupSession.validRecap(recap),
               let presented = engine?.presentation, !blocked,
               session.matches(subject: subject.rawValue, cardID: presented.cardID, presentationID: presented.id) else { return nil }
+        let fresh = engine?.isFirstPass(presented.cardID) == true
         change { candidate in
             if !presented.revealed { try candidate.reveal(token: presented.id, now: now) }
             try candidate.rate(remembered: true, token: presented.id, now: now)
         }
         guard !blocked, error == nil, engine?.presentation?.id != presented.id else { return nil }
-        return HourlyStudyAnswer(area: subject.rawValue, itemID: presented.cardID, at: now)
+        return HourlyStudyAnswer(area: subject.rawValue, itemID: presented.cardID, at: now, firstPass: fresh)
     }
     func markFamiliar(token: UUID, now: Date = Date()) { change { try $0.markFamiliar(token: token, now: now) } }
     func postpone(token: UUID, now: Date = Date()) { change { try $0.postpone(token: token, now: now) } }
