@@ -696,7 +696,7 @@ enum HandbookSchedulerPreference {
                     _ = try candidate.requeue(cardID: card, now: now)
                 }
             }
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 
     func start(now: Date = Date()) {
