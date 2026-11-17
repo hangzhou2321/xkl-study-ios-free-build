@@ -35,7 +35,9 @@ struct StudyHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if let restUntil {
+                    if flow.state.needsBreak {
+                        completedTimedSegment
+                    } else if let restUntil {
                         breakCard(until: restUntil)
                     } else if let next = nextAction {
                         nextCard(next)
@@ -43,7 +45,7 @@ struct StudyHomeView: View {
                         ContentUnavailableView("现在没有可继续的任务", systemImage: "checkmark.circle",
                                                description: Text("从底部打开任一科目查看进度。"))
                     }
-                    if restUntil == nil && (!performed.isEmpty || novelStore.active?.nextUnread != nil) {
+                    if !flow.state.needsBreak && restUntil == nil && (!performed.isEmpty || novelStore.active?.nextUnread != nil) {
                         breakActions
                     }
                     if !performed.isEmpty {
@@ -116,6 +118,16 @@ struct StudyHomeView: View {
             .accessibilityIdentifier("today-next-study")
         }
         .padding(20)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var completedTimedSegment: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("这 5 分钟结束了").font(.title2.weight(.semibold))
+            Button("结束这一段") { flow.finish() }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(20).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
     }
 
