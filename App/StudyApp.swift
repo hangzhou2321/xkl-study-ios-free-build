@@ -77,6 +77,8 @@ struct RootView: View {
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
     @StateObject private var effectiveTime = EffectiveStudyTimeStore()
+    @StateObject private var hourly = HourlyStudyTracker()
+    @State private var hourlyPendingArea: EffectiveStudyArea?
     @State private var importing = false
     @State private var selectedTab = 5
     @State private var examPracticing = false
@@ -114,11 +116,11 @@ struct RootView: View {
             StudyHomeView(store: store, exams: exams, math: mathExperience,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
                           handbookMechanics: handbookMechanics,
-                          flow: flow, effectiveTime: effectiveTime, novelStore: studyNovel,
+                          flow: flow, effectiveTime: effectiveTime, hourly: hourly,
                           importing: $importing, visible: selectedTab == 5 && scenePhase == .active,
                           lastArea: EffectiveStudyArea(rawValue: lastEffectiveStudyArea),
                           day: observedCalendarDay ?? Date(), launch: launch,
-                          launchMath: launchMathFromHome, readNovel: { openNovel(true) })
+                          launchMath: launchMathFromHome, openHour: openHour)
                 .tabItem { Label("今天", systemImage: "house") }
                 .tag(5)
     }
@@ -189,12 +191,29 @@ struct RootView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             if selectedTab != 4 && !handbookFullScreenActive { segmentBar }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let slot = visibleHourlySlot {
+                if hourly.active == nil {
+                    Button {
+                        hourly.dismissSettlement()
+                        selectedTab = 5
+                    } label: {
+                        Label("本轮封盘 · 已交付 \(slot.credited)/\(slot.target)", systemImage: "clock.badge.checkmark")
+                            .font(.footnote.monospacedDigit()).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }.buttonStyle(.plain).background(.bar)
+                } else { HourlyStudyHeader(slot: slot) }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let slot = visibleHourlySlot { HourlyStudyProgress(slot: slot) }
+        }
         .statusBarHidden(handbookFullScreenActive)
         .onAppear {
             refreshCalendars(force: true)
             trackStudyVisibility()
             syncExamPolicy()
             syncNovel()
+            hourly.scene(active: scenePhase == .active)
         }
     }
 
@@ -265,6 +284,7 @@ struct RootView: View {
         }
         .onChange(of: store.analysis?.conservativeEnabled) { _, _ in syncExamPolicy() }
         .onChange(of: scenePhase) { _, phase in
+            hourly.scene(active: phase == .active)
             if phase != .active {
                 // Clear a recent touch even when the previous visible area was nil.
                 visibleEffectiveArea = nil
@@ -277,8 +297,27 @@ struct RootView: View {
         }
     }
 
-    private var importContent: some View {
+    private var hourlyContent: some View {
         clockContent
+            .onReceive(NotificationCenter.default.publisher(for: HourlyStudyAnswer.committed)) {
+                guard scenePhase == .active,
+                      let answer = $0.userInfo?["answer"] as? HourlyStudyAnswer,
+                      let area = EffectiveStudyArea(rawValue: answer.area),
+                      visibleEffectiveArea == area else { return }
+                if let active = hourly.active, active.area == answer.area {
+                    hourly.record(answer)
+                } else { hourly.ordinaryInteraction(area: area, now: answer.at) }
+            }
+            .onOpenURL(perform: handleHourlyURL)
+            .sheet(item: $hourly.warmup, onDismiss: continueHourlyAfterWarmup) { card in
+                HourlyStudyWarmupView(card: card, touched: { hourly.warmupInteraction() }, continueStudy: {
+                    hourly.closeWarmup()
+                })
+            }
+    }
+
+    private var importContent: some View {
+        hourlyContent
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
             switch result {
             case .success(let url): store.importContent(from: url)
@@ -382,6 +421,7 @@ struct RootView: View {
 
     private func syncEffectiveVisibility() {
         let next = effectiveScreen.area
+        hourly.timeVisible(next)
         guard next != visibleEffectiveArea else { return }
         visibleEffectiveArea = next
         if let next, lastEffectiveStudyArea != next.rawValue { lastEffectiveStudyArea = next.rawValue }
@@ -430,6 +470,56 @@ struct RootView: View {
     private func beganProfessional(_ area: StudyArea) {
         flow.enterProfessionalPractice(area: area)
         trackStudyVisibility()
+    }
+
+    private var visibleHourlySlot: HourlyStudyPlan.Slot? {
+        guard let slot = hourly.active ?? hourly.settled,
+              visibleEffectiveArea?.rawValue == slot.area else { return nil }
+        return slot
+    }
+
+    private func openHour(_ window: HourlyStudyPlan.Window, _ requested: EffectiveStudyArea) {
+        let area = hourly.plan.slot(window)?.area.flatMap(EffectiveStudyArea.init(rawValue:)) ?? requested
+        let engine: HandbookWordEngine?
+        switch area {
+        case .computer: engine = handbookComputer.engine
+        case .power: engine = handbookPower.engine
+        case .circuit: engine = handbookCircuit.engine
+        case .mechanics: engine = handbookMechanics.engine
+        default: engine = nil
+        }
+        hourly.open(window, area: area, card: engine?.hourlyWarmup(seed: window.endingHour))
+        guard hourly.active?.start == window.start else { return }
+        if hourly.warmup != nil { hourlyPendingArea = area }
+        else { routeHourlyStudy(area) }
+    }
+
+    private func continueHourlyAfterWarmup() {
+        defer { hourlyPendingArea = nil }
+        guard let area = hourlyPendingArea, let slot = hourly.active, slot.area == area.rawValue,
+              slot.firstCardInteraction != nil, Date() < slot.end else { return }
+        routeHourlyStudy(area)
+    }
+
+    private func routeHourlyStudy(_ area: EffectiveStudyArea) {
+        if effectiveScreen.area == area { return }
+        if let route = StudyArea(rawValue: area.rawValue) { launch(route, .standard) }
+        else { launchMathFromHome() }
+        syncEffectiveVisibility()
+    }
+
+    private func handleHourlyURL(_ url: URL) {
+        guard url.scheme == "xklstudy", url.host == "hourly",
+              let stamp = Int(url.lastPathComponent) else { return }
+        let now = Date()
+        guard let window = HourlyStudyPlan.window(at: now), Int(window.start.timeIntervalSince1970) == stamp,
+              let slot = hourly.plan.slot(window), let key = slot.area,
+              let area = EffectiveStudyArea(rawValue: key) else {
+            if hourly.active == nil { selectedTab = 5 }
+            return
+        }
+        if hourly.warmup != nil { return }
+        openHour(window, area)
     }
 
     private func launchMathFromHome() {

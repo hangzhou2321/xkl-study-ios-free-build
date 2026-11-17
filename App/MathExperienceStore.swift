@@ -88,8 +88,18 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
         guard engine?.current?.id == sessionID else { error="题目会话已改变，请继续当前题。"; return false }; return change(action)
     }
     func start() { guard guide != nil else { error="尚未导入已验证的数学导学包。"; return }; if let id=engine?.current?.id { resume(sessionID:id) } else { advance() } }
-    func hint(sessionID: UUID) { sessionChange(sessionID) { try $0.hint(now:clock()) } }
-    func reveal(sessionID: UUID) { sessionChange(sessionID) { try $0.reveal(now:clock()) } }
+    func hint(sessionID: UUID) {
+        let now = clock()
+        if sessionChange(sessionID, { try $0.hint(now: now) }) {
+            HourlyStudyAnswer(area: "math", itemID: nil, at: now).post()
+        }
+    }
+    func reveal(sessionID: UUID) {
+        let now = clock()
+        if sessionChange(sessionID, { try $0.reveal(now: now) }) {
+            HourlyStudyAnswer(area: "math", itemID: nil, at: now).post()
+        }
+    }
     func details(sessionID: UUID) { sessionChange(sessionID) { try $0.details(now:clock()) } }
     func setExpanded(_ value: Bool, sessionID: UUID) { sessionChange(sessionID) { try $0.setExpanded(value,now:clock()) } }
     func openCard(_ id: String, sessionID: UUID?) {
@@ -99,7 +109,17 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
     private func currentPracticeAllowed() -> Bool {
         guard let q=engine?.current?.questionID, guide?.questions.contains(where: { $0.questionID == q && $0.practiceAllowed }) == true else { error=currentPracticeBlockedReason ?? "当前题缺少可练习的已验证导学。"; return false }; return true
     }
-    func grade(_ outcome: MathOutcome, sessionID: UUID) { guard currentPracticeAllowed() else { return }; if let reason=currentPracticeBlockedReason { error=reason; return }; if sessionChange(sessionID,{ try $0.grade(outcome,now:clock()) }) { advance() } }
+    func grade(_ outcome: MathOutcome, sessionID: UUID) {
+        guard currentPracticeAllowed() else { return }
+        if let reason = currentPracticeBlockedReason { error = reason; return }
+        let now = clock()
+        if sessionChange(sessionID, { try $0.grade(outcome, now: now) }) {
+            if let id = engine?.events.last?.questionID {
+                HourlyStudyAnswer(area: "math", itemID: "question:" + id, at: now).post()
+            }
+            advance()
+        }
+    }
     func familiar(sessionID: UUID) { guard currentPracticeAllowed() else { return }; if let reason=currentPracticeBlockedReason { error=reason; return }; if sessionChange(sessionID,{ try $0.markFamiliar(now:clock()) }) { advance() } }
     func restore(_ id: String) { if let reason=practiceBlockedReason(for:id) { error=reason; return }; change { try $0.restore(questionID:id,now:clock()) } }
     func spotCheck(_ id: String) {
@@ -124,7 +144,16 @@ private struct MathExperienceDisk: Codable { var format = "xkl-math-experience-v
         }
     }
     @discardableResult func revealCard(sessionID: UUID) -> Bool { change { if let c=$0.currentCard, $0.current != nil { try $0.openCard(c.cardID,now:clock()) }; try $0.revealCard(sessionID:sessionID,now:clock()) } }
-    @discardableResult func gradeCard(_ id: String, remembered: Bool, sessionID: UUID) -> Bool { change { if $0.current != nil { try $0.openCard(id,now:clock()) }; try $0.gradeCard(id,remembered:remembered,sessionID:sessionID,now:clock()) } }
+    @discardableResult func gradeCard(_ id: String, remembered: Bool, sessionID: UUID) -> Bool {
+        let committed = change {
+            if $0.current != nil { try $0.openCard(id, now: clock()) }
+            try $0.gradeCard(id, remembered: remembered, sessionID: sessionID, now: clock())
+        }
+        if committed, let at = engine?.events.last?.timestamp {
+            HourlyStudyAnswer(area: "math", itemID: "card:" + id, at: at).post()
+        }
+        return committed
+    }
     func exportCardRecords() throws -> URL {
         let url=directory.appendingPathComponent("card-records-export.json")
         guard let engine else { throw MathFailure.invalid("没有可导出的知识卡记录。") }

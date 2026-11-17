@@ -324,6 +324,10 @@ final class StudyStore: ObservableObject {
             try refresh()
             refreshActivity(reason:"task-state")
             refreshShadow()
+            let at = Date(timeIntervalSince1970: Double(point.wallMs) / 1_000)
+            for event in appended where event.graded || event.kind == 4 {
+                HourlyStudyAnswer(area: "vocabulary", itemID: event.graded ? String(event.word) : nil, at: at).post()
+            }
         } catch {
             // No visible card advancement occurs until the entire state + ownership
             // journal has reached the same atomic file.
@@ -643,6 +647,11 @@ final class StudyStore: ObservableObject {
     private var shadowFirstSequence: UInt32? {
         analysis.map { ContentRevision.comparisonFirstSequence(base:$0.shadowFirstSequence,revisions:contentRevisions) }
     }
+    var firstPassRemaining: Int? {
+        guard let engine, let deck, canLearn else { return nil }
+        return deck.words.lazy.filter { engine.packedCard(at: UInt32($0.id)) == 0 }.count
+    }
+
     func reviewCount(on date: Date) -> Int {
         guard !fatalStorageError, let day = try? ConceptCalendar.studyDay(date),
               let events = try? allEvents() else { return 0 }

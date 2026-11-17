@@ -646,19 +646,31 @@ final class ExamStore: ObservableObject {
         if legacyDualForTesting, isDualFSRS { changeDual { try $0.toggle(id, token: token) } }
         else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.toggle(id) } }
         else if isPocketRelearning { change { try $0.toggle(id) } }
+        if error == nil, selectedOptionIDs.contains(id) {
+            HourlyStudyAnswer(area: "publicQuestions", itemID: nil, at: clock()).post()
+        }
     }
     func selectAndSubmit(_ id: String, presentationID token: UUID?) {
         guard let token, token == presentationID, !isShowingResult else { return }
+        defer { hourlySubmitted(token) }
         if legacyDualForTesting, isDualFSRS { changeDual { try $0.selectAndSubmit(id, presentationID: token, now: clock()) } }
         else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.selectAndSubmit(id, presentationID: token, now: clock()) } }
         else if isPocketRelearning { change { try $0.selectAndSubmit(id, presentationID: token, now: clock()) } }
     }
     func submit(presentationID token: UUID? = nil) {
         guard let token, token == presentationID, !isShowingResult else { return }
+        defer { hourlySubmitted(token) }
         if legacyDualForTesting, isDualFSRS { changeDual { try $0.submitAutomatically(presentationID: token, now: clock()) } }
         else if isPocketRelearning, pocketDisk != nil { changePocket { engine, _, _ in try engine.submitAutomatically(presentationID: token, now: clock()) } }
         else if isPocketRelearning { change { try $0.submitAutomatically(presentationID: token, now: clock()) } }
     }
+    private func hourlySubmitted(_ token: UUID) {
+        guard error == nil, let attempt = latestAttempt, attempt.presentationID == token,
+              attempt.mode == "answer", !attempt.selectedOptions.isEmpty, attempt.grade != nil else { return }
+        HourlyStudyAnswer(area: "publicQuestions", itemID: attempt.questionID,
+                          at: attempt.gradedAt ?? attempt.answeredAt).post()
+    }
+
     func nextQuestion(presentationID token: UUID? = nil) {
         guard let token, token == presentationID, isShowingResult else { return }
         if legacyDualForTesting, isDualFSRS { changeDual { try $0.nextQuestion(presentationID: token, now: clock()) } }

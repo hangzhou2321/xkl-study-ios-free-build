@@ -672,8 +672,19 @@ enum HandbookSchedulerPreference {
         change { if $0.usesDualFSRS { try $0.start(now: now) } else { try $0.start(now: now, conservative: policy()) } }
     }
     func startRetry(now: Date = Date()) { change { try $0.startRetry(now: now) } }
-    func reveal(token: UUID, now: Date = Date()) { change { try $0.reveal(token: token, now: now) } }
-    func rate(remembered: Bool, token: UUID, now: Date = Date()) { change { try $0.rate(remembered: remembered, token: token, now: now) } }
+    func reveal(token: UUID, now: Date = Date()) {
+        change { try $0.reveal(token: token, now: now) }
+        if error == nil, !blocked, let presented = engine?.presentation, presented.id == token, presented.revealed {
+            HourlyStudyAnswer(area: subject.rawValue, itemID: nil, at: now).post()
+        }
+    }
+    func rate(remembered: Bool, token: UUID, now: Date = Date()) {
+        let before = engine?.presentation
+        change { try $0.rate(remembered: remembered, token: token, now: now) }
+        if error == nil, !blocked, let before, before.id == token, engine?.presentation?.id != token {
+            HourlyStudyAnswer(area: subject.rawValue, itemID: before.cardID, at: now).post()
+        }
+    }
     func markFamiliar(token: UUID, now: Date = Date()) { change { try $0.markFamiliar(token: token, now: now) } }
     func postpone(token: UUID, now: Date = Date()) { change { try $0.postpone(token: token, now: now) } }
     @discardableResult func requeue(cardID: String, now: Date = Date()) -> Bool {

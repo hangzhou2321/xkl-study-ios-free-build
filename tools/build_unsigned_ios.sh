@@ -24,7 +24,7 @@ for suite in test_engine test_exam_engine test_midnight_engine test_import test_
 done
 if [[ "${XKL_FOCUSED_CANDIDATE:-false}" == "true" ]]; then
   echo "FOCUSED CANDIDATE ONLY: full regression is a separate run"
-  swift test --jobs 2 --filter 'HandbookCardTests|HandbookSourceScopeTests|HandbookHighlightStoreTests|HandbookWordTests|ProfessionalRecallEngineTests|StudyNovelTests|StudyFlowTests'
+  swift test --jobs 2 --filter 'HandbookCardTests|HandbookSourceScopeTests|HandbookHighlightStoreTests|HandbookWordTests|ProfessionalRecallEngineTests|StudyNovelTests|StudyFlowTests|HourlyStudyPlanTests'
 else
   swift test --jobs 2
 fi
@@ -37,6 +37,16 @@ from pathlib import Path
 import zipfile
 app = Path('build/DerivedData/Build/Products/Release-iphoneos/XKLStudy.app')
 assert app.is_dir()
+extension = app / 'PlugIns/StudyPaceWidget.appex'
+assert (extension / 'StudyPaceWidget').is_file(), 'Live Activity widget missing from app'
+import plistlib
+with (app / 'Info.plist').open('rb') as fp:
+    host = plistlib.load(fp)
+with (extension / 'Info.plist').open('rb') as fp:
+    widget = plistlib.load(fp)
+assert host['NSSupportsLiveActivities'] and widget['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.widgetkit-extension'
+assert widget['CFBundleIdentifier'].startswith(host['CFBundleIdentifier'] + '.')
+assert all(host[key] == widget[key] for key in ('CFBundleVersion', 'CFBundleShortVersionString'))
 with zipfile.ZipFile('build/XKLStudy-unsigned.ipa', 'w', zipfile.ZIP_DEFLATED) as archive:
     for item in sorted(app.rglob('*')):
         if item.is_file():

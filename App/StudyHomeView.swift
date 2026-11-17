@@ -11,19 +11,18 @@ struct StudyHomeView: View {
     @ObservedObject var handbookMechanics: HandbookWordStore
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var effectiveTime: EffectiveStudyTimeStore
-    @ObservedObject var novelStore: StudyNovelStore
+    @ObservedObject var hourly: HourlyStudyTracker
     @Binding var importing: Bool
     let visible: Bool
     let lastArea: EffectiveStudyArea?
     let day: Date
     let launch: (StudyArea, StudySegmentMode) -> Void
     let launchMath: () -> Void
-    let readNovel: () -> Void
+    let openHour: (HourlyStudyPlan.Window, EffectiveStudyArea) -> Void
 
     @State private var actions: [StudyHomeAction] = []
-    @State private var performed: [EffectiveStudyArea: String] = [:]
     @State private var chosenArea: EffectiveStudyArea?
-    @State private var restUntil: TimeInterval?
+    @State private var firstPassByArea: [EffectiveStudyArea: Int] = [:]
 
     private var nextAction: StudyHomeAction? {
         if let chosen = actions.first(where: { $0.area == chosenArea }) { return chosen }
@@ -35,22 +34,21 @@ struct StudyHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if flow.state.needsBreak {
-                        completedTimedSegment
-                    } else if let restUntil {
-                        breakCard(until: restUntil)
-                    } else if let next = nextAction {
-                        nextCard(next)
-                    } else {
-                        ContentUnavailableView("现在没有可继续的任务", systemImage: "checkmark.circle",
-                                               description: Text("从底部打开任一科目查看进度。"))
+                    if flow.state.needsBreak { completedTimedSegment }
+                    if !actions.isEmpty {
+                        Picker("配速科目", selection: Binding(get: { nextAction?.area }, set: { chosenArea = $0 })) {
+                            ForEach(actions, id: \.area) { action in
+                                Text(action.area.title).tag(Optional(action.area))
+                            }
+                        }
+                        .pickerStyle(.menu)
                     }
-                    if !flow.state.needsBreak && restUntil == nil && (!performed.isEmpty || novelStore.active?.nextUnread != nil) {
-                        breakActions
+                    HourlyStudyBoard(tracker: hourly, subject: flow.state.needsBreak ? nil : nextAction?.area,
+                                     unit: nextAction?.area == .publicQuestions || nextAction?.area == .math ? "题" : "张",
+                                     unseen: nextAction.flatMap { firstPassByArea[$0.area] }) { window in
+                        if let area = nextAction?.area { openHour(window, area) }
                     }
-                    if !performed.isEmpty {
-                        doneList
-                    }
+                    if let next = nextAction, !flow.state.needsBreak { nextCard(next) }
                     EffectiveStudyTimeSummary(store: effectiveTime)
                         .padding(20)
                         .background(Color(uiColor: .secondarySystemGroupedBackground),
@@ -83,25 +81,11 @@ struct StudyHomeView: View {
     private func nextCard(_ action: StudyHomeAction) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("现在做一件事").font(.subheadline).foregroundStyle(.secondary)
+                Text("自由学习").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
-                if actions.count > 1 || action.area != .math {
-                    Menu {
-                        if actions.count > 1 {
-                            Section("换科目") {
-                                ForEach(actions, id: \.area) { item in
-                                    Button(item.area.title) { chosenArea = item.area }
-                                }
-                            }
-                        }
-                        if let area = StudyArea(rawValue: action.area.rawValue) {
-                            Button("先学 5 分钟", systemImage: "timer") {
-                                chosenArea = nil
-                                launch(area, .fiveMinutes)
-                            }.disabled(flow.state.needsBreak)
-                        }
-                    } label: {
-                        Text(actions.count > 1 ? "换科目" : "更多")
+                if let area = StudyArea(rawValue: action.area.rawValue) {
+                    Button("先学 5 分钟", systemImage: "timer") {
+                        launch(area, .fiveMinutes)
                     }.font(.subheadline)
                 }
             }
@@ -129,52 +113,6 @@ struct StudyHomeView: View {
         }
         .padding(20).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-    }
-
-    private var breakActions: some View {
-        HStack(spacing: 14) {
-            if !performed.isEmpty {
-                Button("休息 2 分钟", systemImage: "timer") {
-                    restUntil = ProcessInfo.processInfo.systemUptime + 120
-                }
-            }
-            if novelStore.active?.nextUnread != nil {
-                Button("读已解锁的一章", systemImage: "book", action: readNovel)
-            }
-        }.buttonStyle(.bordered)
-    }
-
-    private func breakCard(until end: TimeInterval) -> some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let left = max(0, Int(ceil(end - ProcessInfo.processInfo.systemUptime)))
-            VStack(alignment: .leading, spacing: 12) {
-                Text(left == 0 ? "休息结束" : "休息一下").font(.title2.weight(.semibold))
-                if left > 0 {
-                    Text("还剩 \(left / 60):\(String(format: "%02d", left % 60))")
-                        .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                }
-                Button(left == 0 ? "回到下一步" : "结束休息") { restUntil = nil; refresh() }
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-        }
-    }
-
-    private var doneList: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("今天已做").font(.headline)
-            ForEach(EffectiveStudyArea.allCases.filter { performed[$0] != nil }, id: \.rawValue) { area in
-                HStack {
-                    Label(area.title, systemImage: "checkmark")
-                    Spacer()
-                    Text(verbatim: performed[area] ?? "").foregroundStyle(.secondary)
-                }.font(.subheadline)
-            }
-        }
-        .padding(20)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-        .accessibilityIdentifier("today-done-list")
     }
 
     private func begin(_ action: StudyHomeAction) {
@@ -217,19 +155,14 @@ struct StudyHomeView: View {
     private func refresh() {
         let date = Date()
         var options: [StudyHomeAction] = []
-        var done: [EffectiveStudyArea: String] = [:]
-
-        let words = store.reviewCount(on: date)
-        if words > 0 { done[.vocabulary] = "\(words) 次作答" }
+        var firstPass: [EffectiveStudyArea: Int] = [:]
+        firstPass[.vocabulary] = store.firstPassRemaining
         if let deck = store.deck, store.canLearn,
            store.info.has_task != 0 || store.dueTodayCount > 0 || Int(store.info.completed) + Int(store.info.familiar) < deck.words.count {
             options.append(.init(area: .vocabulary, hasPosition: store.info.has_task != 0, due: store.dueTodayCount))
         }
 
-        if let day = try? ConceptCalendar.studyDay(date) {
-            let answers = exams.novelAnswerHistory.lazy.filter { $0.day == UInt32(day) }.count
-            if answers > 0 { done[.publicQuestions] = "\(answers) 次作答" }
-        }
+        if exams.bank != nil, !exams.storageBlocked { firstPass[.publicQuestions] = exams.unseenQuestionCount }
         let examPosition = exams.currentQuestion != nil || exams.isShowingResult
         if exams.bank != nil, !exams.storageBlocked,
            examPosition || exams.totalRemaining > 0 || exams.dueTodayCount > 0 || exams.unseenQuestionCount > 0 {
@@ -237,18 +170,15 @@ struct StudyHomeView: View {
         }
 
         if let engine = math.engine, !math.blocked {
-            let today = Calendar.current.startOfDay(for: date)
-            let undone = Set(engine.events.lazy.filter { $0.kind == "undo" }.compactMap(\.target))
-            let grades = engine.events.lazy.filter {
-                $0.timestamp >= today && $0.timestamp <= date && !undone.contains($0.id)
-            }
-            let problems = grades.filter { $0.kind == "grade" }.count
-            let cards = grades.filter { $0.kind == "card-grade" }.count
-            if problems > 0 || cards > 0 {
-                done[.math] = [
-                    problems > 0 ? "\(problems) 次做题自评" : nil,
-                    cards > 0 ? "\(cards) 次背卡自评" : nil
-                ].compactMap { $0 }.joined(separator: " · ")
+            if let guide = math.guide {
+                let eligible = Set(engine.baseline.content.questions.filter(\.eligible).map(\.id))
+                    .intersection(guide.questions.filter(\.practiceAllowed).map(\.questionID))
+                let retracted = Set(engine.events.lazy.filter { $0.kind == "undo" }.compactMap(\.target))
+                let old = engine.baseline.events.lazy.filter { $0.kind == "grade" || $0.kind == "familiar" }.map(\.questionID)
+                let records = engine.events.lazy.filter {
+                    ($0.kind == "grade" || $0.kind == "familiar") && !retracted.contains($0.id)
+                }.compactMap(\.questionID)
+                firstPass[.math] = eligible.subtracting(Set(old).union(records)).count
             }
             if math.guide != nil, math.practiceQuestionCount > 0 {
                 let saved = engine.current != nil && math.currentPracticeBlockedReason == nil
@@ -261,12 +191,12 @@ struct StudyHomeView: View {
         for area in EffectiveStudyArea.allCases {
             guard let store = handbook(for: area), !store.blocked, let engine = store.engine else { continue }
             let stats = engine.stats(on: date)
-            if stats.ratedToday > 0 { done[area] = "\(stats.ratedToday) 次背卡自评" }
+            firstPass[area] = engine.firstPassRemaining
             if engine.presentation != nil || stats.remainingToday > 0 || stats.due > 0 || stats.unseen > 0 {
                 options.append(.init(area: area, hasPosition: engine.presentation != nil, due: stats.due))
             }
         }
         actions = options
-        performed = done
+        firstPassByArea = firstPass
     }
 }

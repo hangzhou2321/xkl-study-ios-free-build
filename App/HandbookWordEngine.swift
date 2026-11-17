@@ -222,6 +222,36 @@ struct HandbookWordState: Codable, Equatable {
         }
         return result
     }
+    var firstPassRemaining: Int {
+        if let dualFSRS {
+            let state = dualFSRS.state
+            let assessed = Set(state.lastRating.keys).union(state.familiar)
+                .union(state.legacyRatings.lazy.filter { !$0.retracted }.map(\.cardID))
+            return Set(dualFSRS.scheduledIDs).subtracting(assessed).count
+        }
+        let assessed = Set(record.attempts.map(\.cardID))
+        let seen = Set(zip(record.cardIDs, originalIDs).compactMap { assessed.contains($0.0) ? $0.1 : nil })
+            .union(familiarCardIDs)
+        return Set(activeOriginalIDs).subtracting(seen).count
+    }
+
+    func hourlyWarmup(seed: Int) -> HandbookCard? {
+        var known = familiarCardIDs
+        if let dualFSRS {
+            known.formUnion(dualFSRS.state.lastRating.filter { $0.value.remembered }.keys)
+        } else {
+            var last = [String: Bool]()
+            for attempt in record.attempts { last[attempt.cardID] = attempt.remembered }
+            known.formUnion(zip(record.cardIDs, originalIDs).compactMap { last[$0.0] == true ? $0.1 : nil })
+        }
+        let options = package.cards.filter {
+            known.contains($0.id) && $0.prompt.count <= 28 && $0.answerSummary.count <= 16
+                && !$0.answerSummary.contains("\n") && !$0.prompt.contains("\n")
+        }
+        let matching = options.filter { isInMainScope($0.id) }
+        return matching.isEmpty ? nil : matching[seed % matching.count]
+    }
+
     var nextDueAt: Date? {
         if let dualFSRS { return dualFSRS.nextDueAt }
         let values = activePackedValues()
