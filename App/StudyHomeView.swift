@@ -216,7 +216,8 @@ struct StudyHomeView: View {
             guard let store = handbook(for: area), !store.blocked, let engine = store.engine else { continue }
             let stats = engine.stats(on: date)
             firstPass[area] = engine.firstPassRemaining
-            if engine.presentation != nil || stats.remainingToday > 0 || stats.due > 0 || stats.unseen > 0 {
+            let short = engine.shortBookScope
+            if engine.presentation != nil || stats.remainingToday > 0 || stats.due > 0 || stats.unseen > 0 || short.active != short.all {
                 options.append(.init(area: area, hasPosition: engine.presentation != nil, due: stats.due))
             }
         }

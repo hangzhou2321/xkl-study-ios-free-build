@@ -262,6 +262,19 @@ struct HandbookCardPackage: Codable, Equatable {
     /// Only portions that are red in the source; nil remains valid for older packs.
     var sourceRedSpans: [SourceRedSpan]? = nil
     var examRedSpans: [ExamRedSpan]? = nil
+    func isShortBookCard(_ card: HandbookCard) -> Bool {
+        (subject == .computer || subject == .power)
+            && card.id.hasPrefix("sf2-\(subject.rawValue)-")
+            && (card.sourceReferences ?? []).contains { $0.sourceID == "BAODIAN2" }
+    }
+    var supportsCombinedQueue: Bool {
+        guard mainCardIDs != nil else { return false }
+        switch subject {
+        case .computer: return revision.compare("1.35.8", options: .numeric) != .orderedAscending
+        case .power: return revision.compare("1.35.9.1", options: .numeric) != .orderedAscending
+        default: return false
+        }
+    }
     var usesExamRecall: Bool { format == "xkl-handbook-cards-v3-exam" }
     var usesMechanicsSprint: Bool { format == "xkl-handbook-cards-v4-mechanics-sprint" }
     var usesFocusedOutline: Bool { usesExamRecall || usesMechanicsSprint }

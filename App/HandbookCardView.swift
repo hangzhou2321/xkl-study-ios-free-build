@@ -497,10 +497,16 @@ struct HandbookCardView: View {
 
     private func home(_ engine: HandbookWordEngine) -> some View {
         let stats = engine.stats(on: displayDate)
+        let shortBook = engine.shortBookScope
         return VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("按知识点，把这一册背清楚").font(.system(.title, design: .rounded).weight(.bold))
                 Text(verbatim: handbookDisplayText(engine.package.title)).font(.subheadline).foregroundStyle(.secondary)
+                if !shortBook.all.isEmpty, let base = engine.package.mainCardIDs {
+                    let large = base.filter { !shortBook.all.contains($0) }.count
+                    Text("大小卡一起背 · 大卡 \(large) 张 · 小卡 \(shortBook.all.count) 张")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .firstTextBaseline) {
@@ -538,7 +544,7 @@ struct HandbookCardView: View {
             if let novelStore {
                 StudyNovelEntry(store: novelStore, compact: false, open: onOpenNovel)
             }
-            if engine.package.mainCardIDs != nil, engine.otherScopeHistory.cards > 0 {
+            if engine.package.mainCardIDs != nil, shortBook.all.isEmpty, engine.otherScopeHistory.cards > 0 {
                 let old = engine.otherScopeHistory
                 Button {
                     openOutline(showOld: true)
@@ -597,6 +603,9 @@ struct HandbookCardView: View {
                     ProgressView(value: Double(stats.ratedToday), total: Double(max(1, stats.ratedToday + stats.remainingToday)))
                         .tint(.blue).accessibilityLabel("今日已自评\(stats.ratedToday)次")
                 }
+            }
+            if engine.package.supportsCombinedQueue && engine.package.isShortBookCard(card) {
+                Text("小卡").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             }
             if let onLookup {
                 HStack(alignment: .firstTextBaseline) {
@@ -824,17 +833,18 @@ struct HandbookCardView: View {
     }
 
     @ViewBuilder private func chapterOutline(_ package: HandbookCardPackage) -> some View {
-        if package.mainCardIDs != nil {
-            Section {
-                Toggle("显示旧卡及补充", isOn: $outlineShowOld)
-            } footer: {
-                Text(package.usesMechanicsSprint ? "旧卡仍可查阅。" : "旧卡及其学习记录仍在，可按需重新加入队列。")
-            }
-        }
+        let short = store.engine?.shortBookScope.active ?? []
         if let main = package.mainCardIDs {
-            let byID = Dictionary(uniqueKeysWithValues: package.cards.map { ($0.id, $0) })
-            let cards = main.compactMap { byID[$0] }.filter { outlineMatches($0) }
-            if package.usesFocusedOutline {
+            let ids = Set(main).union(short)
+            if ids.count < package.cards.count {
+                Section {
+                    Toggle("显示归档卡及补充", isOn: $outlineShowOld)
+                } footer: {
+                    Text(package.usesMechanicsSprint ? "归档卡仍可查阅。" : "归档卡的学习记录可在卡片详情里查看。")
+                }
+            }
+            let cards = package.cards.filter { ids.contains($0.id) && outlineMatches($0) }
+            if package.usesFocusedOutline || !short.isEmpty {
                 ForEach(package.chapters, id: \.id) { chapter in
                     let matching = cards.filter { $0.chapterID == chapter.id }
                     if !matching.isEmpty {
@@ -856,7 +866,7 @@ struct HandbookCardView: View {
             }
             if outlineShowOld {
                 Section("旧卡与补充") {
-                    ForEach(package.cards.filter { !main.contains($0.id) && outlineMatches($0) }, id: \.id) { card in
+                    ForEach(package.cards.filter { !ids.contains($0.id) && outlineMatches($0) }, id: \.id) { card in
                         outlineRow(package, card: card)
                     }
                 }
@@ -874,6 +884,9 @@ struct HandbookCardView: View {
 
     private func mainlineMembership(_ card: HandbookCard, in package: HandbookCardPackage) -> Bool? {
         guard package.subject == .power || package.usesMechanicsSprint else { return nil }
+        if package.supportsCombinedQueue && package.isShortBookCard(card) && store.engine?.isInMainScope(card.id) == true {
+            return true
+        }
         return package.mainCardIDs?.contains(card.id)
     }
 
@@ -915,6 +928,8 @@ struct HandbookCardView: View {
                 Text(verbatim: handbookDisplayText(card.title))
                 if archivedReference {
                     Text("旧卡或补充 · 参考").font(.caption).foregroundStyle(.secondary)
+                } else if package.supportsCombinedQueue && package.isShortBookCard(card) {
+                    Text("小卡").font(.caption).foregroundStyle(.secondary)
                 }
                 if let label = package.frequencyLabel(for: card) {
                     Text(verbatim: label).font(.caption).foregroundStyle(.secondary)

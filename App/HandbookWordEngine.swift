@@ -177,6 +177,23 @@ struct HandbookWordState: Codable, Equatable {
         }
         originalIDs = next; package = incoming; refreshCard()
     }
+    /// The short-book cards already have permanent IDs and parked states. Admit
+    /// them without changing the package's main/red-marked syllabus.
+    var shortBookScope: (all: Set<String>, active: Set<String>) {
+        guard dualFSRS == nil, package.supportsCombinedQueue else { return ([], []) }
+        let all = Set(package.cards.filter(package.isShortBookCard).map(\.id))
+        return (all, all.intersection(activeOriginalIDs))
+    }
+
+    func includeShortBook(now: Date) throws {
+        let scope = shortBookScope
+        guard scope.active != scope.all else { return }
+        let desired = Set(activeOriginalIDs).union(scope.all)
+        try core.reconcile(to: Self.catalog(package, ids: originalIDs, active: desired),
+                           retaining: Self.catalog(package, ids: originalIDs).cards, now: now)
+        refreshCard()
+    }
+
     private var activeOriginalIDs: [String] {
         let aliases = Set(core.activeCardIDs)
         return originalIDs.indices.compactMap { index in

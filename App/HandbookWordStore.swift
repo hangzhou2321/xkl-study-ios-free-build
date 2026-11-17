@@ -641,11 +641,17 @@ enum HandbookSchedulerPreference {
         let sync = try JSONDecoder().decode(SyncState.self, from: english.syncStateJSON)
         return try english.validatedAnalysis(engine: PocketEngine(snapshot: sync.snapshot)).conservativeEnabled
     }
-    private func change(_ action: (HandbookWordEngine) throws -> Void) {
+    private func change(archiveBeforeChange: Bool = false, _ action: (HandbookWordEngine) throws -> Void) {
         guard !blocked, let current = engine, var next = disk else { return }
         do {
             try guardCurrent(); let candidate = try current.fork()
             try action(candidate); next.state = candidate.state
+            if archiveBeforeChange && current.state != next.state {
+                let previous = try read(currentURL), hash = Self.recordHash(previous)
+                guard hash == durableSHA256 else { throw ExamError.invalid("背卡记录已变化，请重新进入课程。") }
+                try immutable(previous, directory.appendingPathComponent("revisions/\(hash).json"))
+                if !next.revisions.contains(hash) { next.revisions.append(hash) }
+            }
             let bytes = try encode(next)
             let fingerprint = Self.recordHash(bytes)
             if fingerprint == durableSHA256 { error = nil; return }
@@ -669,7 +675,13 @@ enum HandbookSchedulerPreference {
                 isDualMigrationPending = false
             } catch { fail(error); return }
         }
-        change { if $0.usesDualFSRS { try $0.start(now: now) } else { try $0.start(now: now, conservative: policy()) } }
+        let scope = engine?.shortBookScope
+        let expanding = scope.map { $0.active != $0.all } ?? false
+        change(archiveBeforeChange: expanding) { candidate in
+            if expanding { try candidate.includeShortBook(now: now) }
+            if candidate.usesDualFSRS { try candidate.start(now: now) }
+            else { try candidate.start(now: now, conservative: policy()) }
+        }
     }
     func startRetry(now: Date = Date()) { change { try $0.startRetry(now: now) } }
     func reveal(token: UUID, now: Date = Date()) {
