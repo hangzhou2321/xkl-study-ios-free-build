@@ -87,6 +87,37 @@ final class CardLookupSessionTests: XCTestCase {
         }
     }
 
+    @MainActor func testLegacyLookupRecoveryRequeuesMatchingCardWithoutForgingAnAttempt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-recover-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let docs = root.appendingPathComponent("Documents")
+        let studyDate = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
+        let store = HandbookWordStore(subject: .power, baseDirectory: root, documentsDirectory: docs, now: studyDate)
+        store.importData(try JSONEncoder().encode(syntheticPackage(.power)))
+        store.start(now: studyDate)
+        let shown = try XCTUnwrap(store.engine?.presentation)
+        store.reveal(token: shown.id, now: studyDate + 10)
+        store.rate(remembered: true, token: shown.id, now: studyDate + 11)
+        let original = try XCTUnwrap(store.engine?.record.attempts.first)
+        XCTAssertNil(store.engine?.presentation)
+        let inbox = docs.appendingPathComponent("LookupRelearningInbox")
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(LookupRecoveryInbox(format: "xkl-lookup-recovery-v1", entries: [
+            .init(subject: "power", cardID: shown.cardID, attemptID: original.id),
+            .init(subject: "power", cardID: shown.cardID, attemptID: UUID())
+        ]))
+        try data.write(to: inbox.appendingPathComponent("requests.json"))
+        store.start(now: studyDate + 12)
+        XCTAssertNil(store.error)
+        XCTAssertEqual(store.engine?.presentation?.cardID, shown.cardID)
+        XCTAssertEqual(store.engine?.record.attempts, [original])
+        let reopened = HandbookWordStore(subject: .power, baseDirectory: root, documentsDirectory: docs)
+        let before = reopened.engine?.record.contentChanges?.count
+        reopened.start(now: studyDate + 13)
+        XCTAssertEqual(reopened.engine?.record.attempts, [original])
+        XCTAssertEqual(reopened.engine?.record.contentChanges?.count, before)
+    }
+
     private func syntheticPackage(_ subject: ConceptSubject) -> HandbookCardPackage {
         .init(id: "synthetic-lookup", subject: subject, title: "Synthetic", revision: "1.0",
               source: .init(title: "Synthetic", fileName: "synthetic.pdf", sha256: String(repeating: "a", count: 64),

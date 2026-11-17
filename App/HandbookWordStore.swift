@@ -17,6 +17,7 @@ private struct HandbookWordDisk: Codable {
     var cutoverV1SHA256: String? = nil
     /// Explicit re-enablement is tied to the immutable legacy-mode marker.
     var reenabledFromLegacyMarkerSHA256: String? = nil
+    var recoveredLookupAttempts: [UUID]? = nil
 }
 
 /// One immutable file per explicit original-question submission. These events
@@ -641,11 +642,16 @@ enum HandbookSchedulerPreference {
         let sync = try JSONDecoder().decode(SyncState.self, from: english.syncStateJSON)
         return try english.validatedAnalysis(engine: PocketEngine(snapshot: sync.snapshot)).conservativeEnabled
     }
-    private func change(archiveBeforeChange: Bool = false, _ action: (HandbookWordEngine) throws -> Void) {
+    private func change(archiveBeforeChange: Bool = false, recovering: [UUID] = [],
+                        _ action: (HandbookWordEngine) throws -> Void) {
         guard !blocked, let current = engine, var next = disk else { return }
         do {
             try guardCurrent(); let candidate = try current.fork()
             try action(candidate); next.state = candidate.state
+            if !recovering.isEmpty {
+                let all = Set(next.recoveredLookupAttempts ?? []).union(recovering)
+                next.recoveredLookupAttempts = all.sorted { $0.uuidString < $1.uuidString }
+            }
             if archiveBeforeChange && current.state != next.state {
                 let previous = try read(currentURL), hash = Self.recordHash(previous)
                 guard hash == durableSHA256 else { throw ExamError.invalid("背卡记录已变化，请重新进入课程。") }
@@ -663,6 +669,36 @@ enum HandbookSchedulerPreference {
             error = nil
         } catch { self.error = error.localizedDescription }
     }
+    private func recoverLookupRequests(now: Date) {
+        guard subject == .computer || subject == .power,
+              let current = engine, !blocked, !current.usesDualFSRS,
+              let disk else { return }
+        let file = documents.appendingPathComponent("LookupRelearningInbox/requests.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        do {
+            let header = try file.resourceValues(forKeys: [.fileSizeKey])
+            guard let size = header.fileSize, size <= 64 * 1024 else { throw LookupRecoveryInbox.InvalidRequest() }
+            let requested = try LookupRecoveryInbox.load(Data(contentsOf: file))
+            let previous = Set(disk.recoveredLookupAttempts ?? [])
+            let rows = requested.entries.filter { $0.subject == subject.rawValue && !previous.contains($0.attemptID) }
+            guard !rows.isEmpty else { return }
+            let state = current.state
+            let aliasByCard = Dictionary(uniqueKeysWithValues: zip(state.originalCardIDs, state.word.cardIDs))
+            let byAttempt = Dictionary(uniqueKeysWithValues: state.word.attempts.map { ($0.id, $0) })
+            let valid = rows.filter { row in
+                guard let old = byAttempt[row.attemptID], let alias = aliasByCard[row.cardID] else { return false }
+                return old.remembered && old.cardID == alias
+            }
+            guard !valid.isEmpty else { return }
+            let cards = Set(valid.map(\.cardID))
+            change(archiveBeforeChange: true, recovering: valid.map(\.attemptID)) { candidate in
+                for card in state.originalCardIDs where cards.contains(card) {
+                    _ = try candidate.requeue(cardID: card, now: now)
+                }
+            }
+        } catch { error = error.localizedDescription }
+    }
+
     func start(now: Date = Date()) {
         if prefersDualFSRS, isDualMigrationPending, !blocked, let saved = disk, let current = engine,
            (saved.state.word.deferredCards ?? [:]).isEmpty {
@@ -675,6 +711,7 @@ enum HandbookSchedulerPreference {
                 isDualMigrationPending = false
             } catch { fail(error); return }
         }
+        recoverLookupRequests(now: now)
         let scope = engine?.shortBookScope
         let expanding = scope.map { $0.active != $0.all } ?? false
         change(archiveBeforeChange: expanding) { candidate in

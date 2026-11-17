@@ -74,3 +74,28 @@ struct CardLookupSession: Codable, Equatable, Identifiable {
         return clean.count <= 200 && clean.rangeOfCharacter(from: .alphanumerics) != nil
     }
 }
+
+/// Explicit requests for old assisted grades identified from a separate audit.
+struct LookupRecoveryInbox: Codable {
+    struct Entry: Codable, Equatable {
+        let subject: String
+        let cardID: String
+        let attemptID: UUID
+    }
+    let format: String
+    let entries: [Entry]
+
+    static func load(_ data: Data) throws -> Self {
+        guard data.count <= 64 * 1024 else { throw InvalidRequest() }
+        let file = try JSONDecoder().decode(Self.self, from: data)
+        guard file.format == "xkl-lookup-recovery-v1", (1...250).contains(file.entries.count),
+              Set(file.entries.map(\.attemptID)).count == file.entries.count,
+              file.entries.allSatisfy({ ($0.subject == "computer" || $0.subject == "power")
+                  && (1...200).contains($0.cardID.count) }) else { throw InvalidRequest() }
+        return file
+    }
+
+    struct InvalidRequest: LocalizedError {
+        var errorDescription: String? { "这份旧查卡恢复清单无法读取。" }
+    }
+}
