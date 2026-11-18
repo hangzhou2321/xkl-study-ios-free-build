@@ -268,7 +268,7 @@ struct HandbookCardPackage: Codable, Equatable {
             && (card.sourceReferences ?? []).contains { $0.sourceID == "BAODIAN2" }
     }
     var supportsCombinedQueue: Bool {
-        guard mainCardIDs != nil else { return false }
+        guard mainCardIDs != nil, !usesPowerLectureMainline else { return false }
         switch subject {
         case .computer: return revision.compare("1.35.8", options: .numeric) != .orderedAscending
         case .power: return revision.compare("1.35.9.1", options: .numeric) != .orderedAscending
@@ -277,8 +277,10 @@ struct HandbookCardPackage: Codable, Equatable {
     }
     var usesExamRecall: Bool { format == "xkl-handbook-cards-v3-exam" }
     var usesMechanicsSprint: Bool { format == "xkl-handbook-cards-v4-mechanics-sprint" }
-    var usesFocusedOutline: Bool { usesExamRecall || usesMechanicsSprint }
+    var usesPowerLectureMainline: Bool { format == "xkl-handbook-cards-v5-power-lecture" }
+    var usesFocusedOutline: Bool { usesExamRecall || usesMechanicsSprint || usesPowerLectureMainline }
     var showsFullAnswerInStudy: Bool {
+        if usesPowerLectureMainline { return false }
         // From 1.35.9.1, the power course schedules each part of its long recall cards.
         guard subject == .power && usesExamRecall else { return true }
         return revision.compare("1.35.9.1", options: .numeric) == .orderedAscending
@@ -301,8 +303,10 @@ struct HandbookCardPackage: Codable, Equatable {
         try value.validate(); return value
     }
     func validate() throws {
-        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source", "xkl-handbook-cards-v3-exam"].contains(format) || usesMechanicsSprint,
+        guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source", "xkl-handbook-cards-v3-exam"].contains(format)
+                || usesMechanicsSprint || usesPowerLectureMainline,
               !usesMechanicsSprint || subject == .mechanics,
+              !usesPowerLectureMainline || subject == .power,
               (requiredBasePackageHash == nil || ExamContent.isHash(requiredBasePackageHash!)),
               (format == "xkl-handbook-cards-v1" || (requiredBasePackageHash != nil && mainCardIDs != nil)),
               handbookText(id, 200), handbookText(title, 600), handbookText(revision, 100),
@@ -346,6 +350,9 @@ struct HandbookCardPackage: Codable, Equatable {
             throw ExamError.invalid("原书颜色标记数量或来源无效。")
         }
         let guides = Dictionary(uniqueKeysWithValues: (memoryGuides ?? []).map { ($0.cardID, $0) })
+        if usesPowerLectureMainline, !(mainCardIDs ?? []).allSatisfy({ guides[$0] != nil }) {
+            throw ExamError.invalid("电力精简主线缺少回忆答面。")
+        }
         var documents: [String: HandbookHighlightDocument] = [:]
         if usesMechanicsSprint {
             guard (mainCardIDs ?? []).allSatisfy({ id in
@@ -365,10 +372,10 @@ struct HandbookCardPackage: Codable, Equatable {
             return HandbookHighlightState.validCharacterRange(range, in: field.text) && Range(range, in: field.text) != nil
         }
         let tested = examRedSpans ?? []
-        if usesExamRecall {
+        if usesExamRecall || usesPowerLectureMainline {
             let main = Set(mainCardIDs ?? [])
-            guard subject == .power, !tested.isEmpty, tested.count <= 100_000,
-                  Set(tested.map { $0.span.cardID }) == main,
+            guard subject == .power, tested.count <= 100_000,
+                  !usesExamRecall || (!tested.isEmpty && Set(tested.map { $0.span.cardID }) == main),
                   tested.allSatisfy({ item in
                       let field = item.span.fieldID
                       return field.hasPrefix("guide.rows.") && field.hasSuffix(".answer")

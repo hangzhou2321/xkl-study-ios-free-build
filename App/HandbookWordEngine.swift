@@ -165,7 +165,11 @@ struct HandbookWordState: Codable, Equatable {
             // First cutover applies the supplied mainline. Later updates retain
             // cards the learner explicitly added outside the former mainline.
             let overrides: Set<String>
-            if let previousMain = package.mainCardIDs {
+            if incoming.usesPowerLectureMainline && !package.usesPowerLectureMainline {
+                // The incoming course explicitly sets a new scope. Reconciliation
+                // parks excluded cards with their scheduled state and history.
+                overrides = []
+            } else if let previousMain = package.mainCardIDs {
                 overrides = Set(activeOriginalIDs).subtracting(previousMain)
             } else { overrides = [] }
             let active = Set(main).union(overrides)

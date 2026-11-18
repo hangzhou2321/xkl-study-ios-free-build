@@ -59,6 +59,42 @@ final class CombinedHandbookQueueTests: XCTestCase {
         }
     }
 
+    @MainActor func testPowerLectureScopeParksCombinedCardsWithHistory() async throws {
+        let engine = try HandbookWordEngine(package: sample(subject: .power, joinedEdition: false), now: now)
+        try engine.start(now: now)
+        let earlier = try XCTUnwrap(engine.presentation)
+        try engine.reveal(token: earlier.id, now: now)
+        try engine.rate(remembered: true, token: earlier.id, now: now)
+        try engine.updatePackage(sample(subject: .power, joinedEdition: true), now: now)
+        try engine.includeShortBook(now: now)
+        XCTAssertEqual(engine.stats(on: now).total, 4)
+        let prior = engine.state
+
+        var compact = engine.package
+        compact.format = "xkl-handbook-cards-v5-power-lecture"
+        compact.revision = "1.35.10"
+        compact.requiredBasePackageHash = engine.package.hash
+        compact.mainCardIDs = ["long-a"]
+        compact.memoryGuides = [.init(cardID: "long-a", explanation: nil,
+                                     rows: [.init(cue: "Recall", answer: "Synthetic rule")], mnemonic: nil)]
+        try engine.updatePackage(compact, now: now)
+        XCTAssertEqual(engine.state.originalCardIDs, prior.originalCardIDs)
+        XCTAssertEqual(engine.record.attempts, prior.word.attempts)
+        XCTAssertEqual(engine.stats(on: now).total, 1)
+        XCTAssertFalse(engine.isInMainScope(earlier.cardID))
+        XCTAssertFalse(compact.showsFullAnswerInStudy)
+        XCTAssertTrue(engine.shortBookScope.all.isEmpty)
+        let after = engine.state
+        try engine.updatePackage(compact, now: now + 60)
+        XCTAssertEqual(engine.state, after)
+        let reopened = try HandbookWordEngine(state: after)
+        try reopened.includeShortBook(now: now + 60)
+        XCTAssertEqual(reopened.state, after)
+        _ = try reopened.requeue(cardID: earlier.cardID, now: now + 60)
+        XCTAssertEqual(reopened.record.attempts, prior.word.attempts)
+        XCTAssertFalse(reopened.isFirstPass(earlier.cardID))
+    }
+
     #if os(macOS)
     @MainActor func testStoreArchivesCurrentBytesBeforeMakingTwoSizesStudyable() async throws {
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
