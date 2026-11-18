@@ -627,6 +627,7 @@ struct HandbookCardView: View {
                                  frequencyLabel: engine.package.frequencyLabel(for: card),
                                  memoryGuide: engine.currentMemoryGuide,
                                  showsFullAnswer: engine.package.showsFullAnswerInStudy,
+                                 revealsFieldsIndividually: engine.package.usesPowerLectureMainline && mainline == true,
                                  useFullRecallQuestion: mainline == true && !engine.package.usesFocusedOutline,
                                  isArchivedReference: mainline == false,
                                  questionAction: subject == .computer && !engine.package.questions(for: card).isEmpty ? {
@@ -1253,6 +1254,7 @@ private struct HandbookCardFace: View {
     var frequencyLabel: String? = nil
     var memoryGuide: HandbookCardPackage.MemoryGuide? = nil
     var showsFullAnswer = true
+    var revealsFieldsIndividually = false
     var useFullRecallQuestion = false
     var isArchivedReference = false
     /// Compact top-right entry preserves the full card width on small screens.
@@ -1303,7 +1305,8 @@ private struct HandbookCardFace: View {
                     .accessibilityIdentifier("handbook-card-prompt")
             }
             if let guide = memoryGuide {
-                HandbookMemoryGuideView(guide: guide, revealed: revealed)
+                HandbookMemoryGuideView(guide: guide, revealed: revealed,
+                                        revealsFieldsIndividually: revealsFieldsIndividually)
                 if revealed && showsFullAnswer {
                     Text("按本卡核心自评；完整内容与做题表现另行核对。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -1391,8 +1394,10 @@ private struct HandbookCardFace: View {
 private struct HandbookMemoryGuideView: View {
     let guide: HandbookCardPackage.MemoryGuide
     let revealed: Bool
+    var revealsFieldsIndividually = false
     @ScaledMetric(relativeTo: .body) private var rowSize: CGFloat = 18
     @State private var helpExpanded = false
+    @State private var openFields: Set<Int> = []
     #if DEBUG
     @Environment(\.handbookCardPreview) private var preview
     #endif
@@ -1416,6 +1421,33 @@ private struct HandbookMemoryGuideView: View {
             }
         }
     }
+
+    private var individualFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(guide.rows.enumerated()), id: \.offset) { index, row in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        HandbookMarkedText(source: row.cue, fieldID: "guide.rows.\(index).cue")
+                            .font(.system(size: rowSize, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        if !revealed {
+                            Button(openFields.contains(index) ? "遮住" : "揭晓") {
+                                if !openFields.insert(index).inserted { openFields.remove(index) }
+                            }.buttonStyle(.bordered)
+                                .accessibilityLabel(openFields.contains(index) ? "遮住\(row.cue)" : "揭晓\(row.cue)")
+                                .accessibilityIdentifier("handbook-reveal-field-\(index)")
+                        }
+                    }
+                    if revealed || openFields.contains(index) {
+                        HandbookMarkedText(source: row.answer, fieldID: "guide.rows.\(index).answer")
+                            .font(.system(size: rowSize)).lineSpacing(5)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
     @ViewBuilder private var explanation: some View {
         if let text = guide.explanation, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             HandbookMarkedText(source: text, fieldID: "guide.explanation").font(.body).fixedSize(horizontal: false, vertical: true)
@@ -1429,7 +1461,10 @@ private struct HandbookMemoryGuideView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if revealed {
+            if revealsFieldsIndividually {
+                individualFields
+                    .accessibilityIdentifier(revealed ? "handbook-guide-answers" : "handbook-guide-cues")
+            } else if revealed {
                 explanation
                 rows(showAnswers: true).accessibilityIdentifier("handbook-guide-answers")
                 mnemonic
