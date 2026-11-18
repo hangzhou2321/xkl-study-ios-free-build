@@ -5,13 +5,13 @@ import XCTest
 final class CombinedHandbookQueueTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_793_000_000)
 
-    private func sample(subject: ConceptSubject, joinedEdition: Bool) -> HandbookCardPackage {
+    private func sample(subject: ConceptSubject, joinedEdition: Bool, revision: String? = nil) -> HandbookCardPackage {
         let source = HandbookCardPackage.Source(title: "Synthetic", fileName: "synthetic.pdf",
             sha256: String(repeating: "b", count: 64), pdfPageCount: 1, includedPages: [1])
         let short = "sf2-\(subject.rawValue)"
         let ids = [short + "-a", "long-a", short + "-b", "long-b", "unrelated"]
         var result = HandbookCardPackage(id: "synthetic-combined", subject: subject, title: "Synthetic",
-            revision: joinedEdition ? "1.35.9.1" : "1.0", source: source,
+            revision: revision ?? (joinedEdition ? "1.35.9.1" : "1.0"), source: source,
             chapters: [.init(id: "c", title: "Synthetic")],
             cards: ids.map {
                 .init(id: $0, sourceGroupIDs: [$0], topicNumber: 1, title: "Synthetic", prompt: "Recall",
@@ -70,9 +70,8 @@ final class CombinedHandbookQueueTests: XCTestCase {
         XCTAssertEqual(engine.stats(on: now).total, 4)
         let prior = engine.state
 
-        var compact = engine.package
+        var compact = sample(subject: .power, joinedEdition: true, revision: "1.35.10")
         compact.format = "xkl-handbook-cards-v5-power-lecture"
-        compact.revision = "1.35.10"
         compact.requiredBasePackageHash = engine.package.hash
         compact.mainCardIDs = ["long-a"]
         compact.memoryGuides = [.init(cardID: "long-a", explanation: nil,
