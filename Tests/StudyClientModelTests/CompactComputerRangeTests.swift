@@ -4,12 +4,12 @@ import XCTest
 
 final class CompactComputerRangeTests: XCTestCase {
     private let day = Date(timeIntervalSince1970: 1_793_000_000)
-    private func fixture() -> HandbookCardPackage {
+    private func fixture(_ revision: String = "1.35.10") -> HandbookCardPackage {
         let src = HandbookCardPackage.Source(title: "Synthetic", fileName: "test.pdf",
             sha256: String(repeating: "b", count: 64), pdfPageCount: 1, includedPages: [1])
         let ids = ["sf2-computer-duplicate", "main", "sf2-computer-unique"]
         var p = HandbookCardPackage(id: "synthetic-range", subject: .computer, title: "Synthetic",
-            revision: "1.35.10", source: src, chapters: [.init(id: "a", title: "Synthetic")],
+            revision: revision, source: src, chapters: [.init(id: "a", title: "Synthetic")],
             cards: ids.map {
                 .init(id: $0, sourceGroupIDs: [$0], topicNumber: 1, title: "Synthetic", prompt: "Recall?",
                     answerSummary: "Synthetic", blocks: [], sourcePages: [1], examples: [],
@@ -20,15 +20,15 @@ final class CompactComputerRangeTests: XCTestCase {
         return p
     }
     private func compact(_ p: HandbookCardPackage) -> HandbookCardPackage {
-        var v = p
+        var v = fixture("1.35.11")
         v.format = "xkl-handbook-cards-v6-computer-compact"
         v.requiredBasePackageHash = p.hash
-        v.revision = "1.35.11"
+
         v.mainCardIDs = ["main", "sf2-computer-unique"]
         return v
     }
 
-    @MainActor func testParkRatedDuplicateThenRestoreItsMemoryWithoutNewGrade() throws {
+    @MainActor func testParkRatedDuplicateThenRestoreItsMemoryWithoutNewGrade() async throws {
         let p = fixture(), next = compact(p)
         let e = try HandbookWordEngine(package: p, now: day)
         try e.start(now: day)
@@ -58,7 +58,7 @@ final class CompactComputerRangeTests: XCTestCase {
         XCTAssertEqual(reopened.record.attempts, history)
     }
 
-    @MainActor func testRemovingAnOnScreenDuplicatePreservesCheckpointWithoutGrading() throws {
+    @MainActor func testRemovingAnOnScreenDuplicatePreservesCheckpointWithoutGrading() async throws {
         let p = fixture(), e = try HandbookWordEngine(package: p, now: day)
         try e.start(now: day);let shown = try XCTUnwrap(e.presentation)
         XCTAssertEqual(shown.cardID,"sf2-computer-duplicate")
