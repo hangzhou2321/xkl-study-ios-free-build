@@ -502,7 +502,9 @@ struct HandbookCardView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("按知识点，把这一册背清楚").font(.system(.title, design: .rounded).weight(.bold))
                 Text(verbatim: handbookDisplayText(engine.package.title)).font(.subheadline).foregroundStyle(.secondary)
-                if !shortBook.all.isEmpty, let base = engine.package.mainCardIDs {
+                if let scope = engine.compactComputerRange {
+                    compactRangePicker(scope)
+                } else if !shortBook.all.isEmpty, let base = engine.package.mainCardIDs {
                     let large = base.filter { !shortBook.all.contains($0) }.count
                     Text("大小卡一起背 · 大卡 \(large) 张 · 小卡 \(shortBook.all.count) 张")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -572,6 +574,36 @@ struct HandbookCardView: View {
             scheduleNote
         }.padding(.top, 20)
     }
+    private func compactRangePicker(_ scope: (compact: Int, all: Int, active: Int, includesAll: Bool)) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label("背诵范围", systemImage: "rectangle.stack")
+                    .font(.subheadline.weight(.medium))
+                    .accessibilityHidden(true)
+                Spacer(minLength: 4)
+                Picker("背诵范围", selection: Binding(
+                    get: { scope.includesAll },
+                    set: { includeAll in
+                        guard includeAll != scope.includesAll else { return }
+                        store.setCompactComputerRange(includeAll: includeAll, now: Date())
+                    }
+                )) {
+                    Text("精简范围 · \(scope.compact) 张").tag(false)
+                    Text("全部大小卡 · \(scope.all) 张").tag(true)
+                }
+                .pickerStyle(.menu).labelsHidden()
+                .accessibilityLabel("背诵范围")
+                .disabled(store.blocked)
+                .accessibilityIdentifier("handbook-computer-compact-range")
+            }
+            .frame(minHeight: 44)
+            Text(scope.includesAll
+                 ? "包含所有大小卡，切回精简范围仍保留学习记录。"
+                 : "主卡已覆盖的 \(scope.all - scope.compact) 张小卡暂不重复背，历史保留。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
     private func countLabel(_ label: String, _ value: Int) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(String(value)).font(.title2.weight(.semibold)).monospacedDigit()

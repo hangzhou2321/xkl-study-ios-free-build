@@ -144,6 +144,9 @@ struct HandbookWordState: Codable, Equatable {
         guard let index = originalIDs.firstIndex(of: cardID), index < record.cardIDs.count else {
             throw ExamError.invalid("卡片不存在，原记录保留。")
         }
+        if package.usesComputerCompactScope && !isInMainScope(cardID) {
+            throw ExamError.invalid("这张卡在完整范围内；请先切到完整范围，再将它加入复习。")
+        }
         let changed = try core.requeue(cardID: record.cardIDs[index], now: now)
         refreshCard()
         return changed
@@ -165,7 +168,13 @@ struct HandbookWordState: Codable, Equatable {
             // First cutover applies the supplied mainline. Later updates retain
             // cards the learner explicitly added outside the former mainline.
             let overrides: Set<String>
-            if incoming.usesPowerLectureMainline && !package.usesPowerLectureMainline {
+            if incoming.usesComputerCompactScope {
+                // The old course automatically added all short cards on start: that
+                // membership was not an explicit decision to study the duplicates.
+                // On later compact-edition upgrades honor the actual selected range.
+                overrides = package.usesComputerCompactScope && Set(activeOriginalIDs) == Set(originalIDs)
+                    ? Set(next) : []
+            } else if incoming.usesPowerLectureMainline && !package.usesPowerLectureMainline {
                 // The incoming course explicitly sets a new scope. Reconciliation
                 // parks excluded cards with their scheduled state and history.
                 overrides = []
@@ -189,7 +198,27 @@ struct HandbookWordState: Codable, Equatable {
         return (all, all.intersection(activeOriginalIDs))
     }
 
+    var compactComputerRange: (compact: Int, all: Int, active: Int, includesAll: Bool)? {
+        guard dualFSRS == nil, package.usesComputerCompactScope, let main = package.mainCardIDs else { return nil }
+        let active = activeOriginalIDs.count
+        return (main.count, originalIDs.count, active, active == originalIDs.count)
+    }
+
+    func setCompactComputerRange(includeAll: Bool, now: Date = Date()) throws {
+        guard compactComputerRange != nil, let main = package.mainCardIDs else {
+            throw ExamError.invalid("当前课程不支持精简范围。")
+        }
+        let desired = Set(includeAll ? originalIDs : main)
+        guard Set(activeOriginalIDs) != desired else { return }
+        // reconcile saves the outgoing slots, their current packed/stage states and
+        // the old snapshot; removing a displayed card is never a grade or a skip.
+        try core.reconcile(to: Self.catalog(package, ids: originalIDs, active: desired),
+                           retaining: Self.catalog(package, ids: originalIDs).cards, now: now)
+        refreshCard()
+    }
+
     func includeShortBook(now: Date) throws {
+        guard !package.usesComputerCompactScope else { return }
         let scope = shortBookScope
         guard scope.active != scope.all else { return }
         let desired = Set(activeOriginalIDs).union(scope.all)
@@ -269,7 +298,7 @@ struct HandbookWordState: Codable, Equatable {
         let seen = Set(zip(record.cardIDs, originalIDs).compactMap { assessed.contains($0.0) ? $0.1 : nil })
             .union(familiarCardIDs)
         let active = Set(activeOriginalIDs)
-        let scope = includingShortBook ? active.union(shortBookScope.all) : active
+        let scope = includingShortBook && !package.usesComputerCompactScope ? active.union(shortBookScope.all) : active
         return scope.subtracting(seen).count
     }
 

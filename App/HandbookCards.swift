@@ -278,6 +278,7 @@ struct HandbookCardPackage: Codable, Equatable {
     var usesExamRecall: Bool { format == "xkl-handbook-cards-v3-exam" }
     var usesMechanicsSprint: Bool { format == "xkl-handbook-cards-v4-mechanics-sprint" }
     var usesPowerLectureMainline: Bool { format == "xkl-handbook-cards-v5-power-lecture" }
+    var usesComputerCompactScope: Bool { format == "xkl-handbook-cards-v6-computer-compact" }
     var usesFocusedOutline: Bool { usesExamRecall || usesMechanicsSprint || usesPowerLectureMainline }
     var showsFullAnswerInStudy: Bool {
         if usesPowerLectureMainline { return false }
@@ -304,9 +305,10 @@ struct HandbookCardPackage: Codable, Equatable {
     }
     func validate() throws {
         guard ["xkl-handbook-cards-v1", "xkl-handbook-cards-v2-source", "xkl-handbook-cards-v3-exam"].contains(format)
-                || usesMechanicsSprint || usesPowerLectureMainline,
+                || usesMechanicsSprint || usesPowerLectureMainline || usesComputerCompactScope,
               !usesMechanicsSprint || subject == .mechanics,
               !usesPowerLectureMainline || subject == .power,
+              !usesComputerCompactScope || subject == .computer,
               (requiredBasePackageHash == nil || ExamContent.isHash(requiredBasePackageHash!)),
               (format == "xkl-handbook-cards-v1" || (requiredBasePackageHash != nil && mainCardIDs != nil)),
               handbookText(id, 200), handbookText(title, 600), handbookText(revision, 100),
@@ -343,6 +345,14 @@ struct HandbookCardPackage: Codable, Equatable {
                   !scope.isEmpty, Set(scope).count == scope.count,
                   Set(scope).isSubset(of: Set(byID.keys)) else {
                 throw ExamError.invalid("宝典主线卡片范围无效，原记录保留。")
+            }
+        }
+        if usesComputerCompactScope {
+            // Only source-book short cards may be parked by this course format.
+            let main = Set(mainCardIDs ?? [])
+            let extras = cards.filter { !main.contains($0.id) }
+            guard !extras.isEmpty, extras.allSatisfy(isShortBookCard) else {
+                throw ExamError.invalid("精简课包只能从默认范围移出短宝典卡。")
             }
         }
         let spans = (sourceRedSpans ?? []) + (sourceYellowSpans ?? []) + (sourceGreenSpans ?? []) + (sourceBlueSpans ?? [])

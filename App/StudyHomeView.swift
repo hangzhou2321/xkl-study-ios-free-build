@@ -237,7 +237,8 @@ struct StudyHomeView: View {
             let stats = engine.stats(on: date)
             firstPass[area] = engine.firstPassRemaining(includingShortBook: hourly.schedule != nil)
             let short = engine.shortBookScope
-            if engine.presentation != nil || stats.remainingToday > 0 || stats.due > 0 || stats.unseen > 0 || short.active != short.all {
+            if engine.presentation != nil || stats.remainingToday > 0 || stats.due > 0 || stats.unseen > 0 ||
+                (!engine.package.usesComputerCompactScope && short.active != short.all) {
                 options.append(.init(area: area, hasPosition: engine.presentation != nil, due: stats.due))
             }
         }

@@ -687,7 +687,9 @@ enum HandbookSchedulerPreference {
             let byAttempt = Dictionary(uniqueKeysWithValues: state.word.attempts.map { ($0.id, $0) })
             let valid = rows.filter { row in
                 guard let old = byAttempt[row.attemptID], let alias = aliasByCard[row.cardID] else { return false }
+                // Parked recap requests stay pending until the learner opts into that range.
                 return old.remembered && old.cardID == alias
+                    && (!current.package.usesComputerCompactScope || current.isInMainScope(row.cardID))
             }
             guard !valid.isEmpty else { return }
             let cards = Set(valid.map(\.cardID))
@@ -697,6 +699,11 @@ enum HandbookSchedulerPreference {
                 }
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    func setCompactComputerRange(includeAll: Bool, now: Date = Date()) {
+        guard let range = engine?.compactComputerRange, range.includesAll != includeAll else { return }
+        change(archiveBeforeChange: true) { try $0.setCompactComputerRange(includeAll: includeAll, now: now) }
     }
 
     func start(now: Date = Date()) {
@@ -713,7 +720,7 @@ enum HandbookSchedulerPreference {
         }
         recoverLookupRequests(now: now)
         let scope = engine?.shortBookScope
-        let expanding = scope.map { $0.active != $0.all } ?? false
+        let expanding = engine?.package.usesComputerCompactScope != true && (scope.map { $0.active != $0.all } ?? false)
         change(archiveBeforeChange: expanding) { candidate in
             if expanding { try candidate.includeShortBook(now: now) }
             if candidate.usesDualFSRS { try candidate.start(now: now) }
