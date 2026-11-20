@@ -118,20 +118,36 @@ def run():
     (out/'warmup.log').write_text(str(pp.returncode)+' '+pp.stdout+' '+pp.stderr);time.sleep(3)
     subprocess.run(['xcrun','simctl','terminate',u,BUNDLE],capture_output=True)
     history=[];last={};finished=threading.Event()
+    # XCTest may reinstall an app and rotate its data-container UUID. Monitor discovered
+    # real app containers rather than caching a pre-install simctl path. The host is a
+    # disposable simulator containing only our synthetic courses and bundle.
+    roots={data}; dirs=Path.home()/'Library/Developer/CoreSimulator/Devices'
+    def known_bases():
+        for meta in dirs.glob('*/data/Containers/Data/Application/*/.com.apple.mobile_container_manager.metadata.plist'):
+            try:
+                if str(plistlib.loads(meta.read_bytes()).get('MCMMetadataIdentifier',''))==BUNDLE:
+                    roots.add(meta.parent)
+            except (ValueError,OSError):pass
+        return [k for k in roots if k.is_dir()]
+    errors={}
     def monitor():
+        globalstamp=0; live=[]
         while not finished.is_set():
-            for sub in ('computer','power'):
-                for path in ('RefinedMemory','HandbookWordRecall'):
-                    f=data/'Library/Application Support'/path/sub/'current.json'
-                    try:
-                        if not f.is_file():continue
-                        stamp=f.stat().st_mtime_ns
-                        if last.get(str(f))==stamp:continue
-                        raw=f.read_bytes();j=json.loads(raw);rec=j.get('record') if path=='RefinedMemory' else j['state']['word']
-                        history.append(dict(t=time.time(),path=path,subject=sub,hash=hashlib.sha256(raw).hexdigest(),snap=hashlib.sha256(base64.b64decode(rec['snapshot'])).hexdigest(),submitted=len(rec['attempts']),presentation=rec.get('presentation')))
-                        last[str(f)]=stamp
-                    except (OSError,ValueError,KeyError):pass
-            finished.wait(.08)
+            if time.monotonic()-globalstamp>.6:
+                live=known_bases();globalstamp=time.monotonic()
+            for folder in live:
+                for sub in ('computer','power'):
+                    for path in ('RefinedMemory','HandbookWordRecall'):
+                        f=folder/'Library/Application Support'/path/sub/'current.json'
+                        try:
+                            if not f.is_file():continue
+                            stamp=f.stat().st_mtime_ns
+                            if last.get(str(f))==stamp:continue
+                            raw=f.read_bytes();j=json.loads(raw);rec=j['record'] if path=='RefinedMemory' else j['state']['word']
+                            history.append(dict(t=time.time(),container=folder.name,path=path,subject=sub,hash=hashlib.sha256(raw).hexdigest(),snap=hashlib.sha256(base64.b64decode(rec['snapshot'])).hexdigest(),submitted=len(rec['attempts']),presentation=rec.get('presentation')))
+                            last[str(f)]=stamp
+                        except (OSError,ValueError,KeyError) as error:errors[str(f)]=repr(error)
+            finished.wait(.06)
     th=threading.Thread(target=monitor,daemon=True);th.start()
     phase='testRealRoot'
     def ui(name,log):
@@ -153,6 +169,13 @@ def run():
         raise
     finally:
         finished.set();th.join();(out/'observations.json').write_text(json.dumps(history,indent=1))
+        (out/'monitor.json').write_text(json.dumps({'errors':errors,'containerUUIDs':[z.name for z in roots]}))
+        for folder in known_bases():
+            for kind in ('RefinedMemory','HandbookWordRecall'):
+                for k in ('computer','power'):
+                    f=folder/'Library/Application Support'/kind/k/'current.json'
+                    if f.is_file():
+                        target_dir=out/'final-state'/folder.name/kind/k;target_dir.mkdir(parents=True,exist_ok=True);shutil.copy2(f,target_dir/'current.json')
     cp=root/'Sources/CPocket';lib=out.parent/'libreadpocket.dylib';cmd('clang','-O1','-dynamiclib','-I'+str(cp/'include'),'-I'+str(cp/'internal'),*cp.rglob('*.c'),'-o',lib)
     dll=ctypes.CDLL(str(lib));dll.xkl_engine_restore.argtypes=[ctypes.c_void_p,ctypes.c_size_t];dll.xkl_engine_restore.restype=ctypes.c_void_p
     dll.xkl_engine_event.argtypes=[ctypes.c_void_p,ctypes.c_uint32,ctypes.c_void_p];dll.xkl_engine_event.restype=ctypes.c_bool
@@ -160,9 +183,9 @@ def run():
     for k in ('computer','power'):
         old=[x for x in history if x['path']=='HandbookWordRecall' and x['subject']==k and x['submitted']>=1]; assert old and len({x['hash'] for x in old})==1,(k,'legacy modified after seeded grade',old)
         events=[x for x in history if x['path']=='RefinedMemory' and x['subject']==k];assert any(x['submitted']==0 and x['presentation'] and x['presentation']['revealed'] for x in events)
-        file=data/'Library/Application Support/RefinedMemory'/k/'current.json';r=json.loads(file.read_bytes())['record']; at=r['attempts'];assert len(at)==1 and at[0]['remembered']==False
+        candidates=[v/'Library/Application Support/RefinedMemory'/k/'current.json' for v in known_bases()]; file=next(f for f in candidates if f.is_file() and len(json.loads(f.read_bytes())['record']['attempts'])==1);r=json.loads(file.read_bytes())['record']; at=r['attempts'];assert len(at)==1 and at[0]['remembered']==False
         assert r['presentation'] and not r['presentation']['revealed']; s=base64.b64decode(r['snapshot']);assert hashlib.sha256(s).hexdigest()==r['snapshotSHA256'];handle=dll.xkl_engine_restore(s,len(s));assert handle
-        ev=(ctypes.c_uint32*16)();a=at[0];assert dll.xkl_engine_event(handle,a['engineSequence']-1,ctypes.byref(ev)),a;assert ev[0]==a['engineSequence'] and ev[1] in (5,6) and r['cardIDs'][ev[3]]==a['cardID'] and ev[7]==a['beforeRevision'] and ev[8]==a['afterRevision']
+        ev=(ctypes.c_uint32*16)();a=at[0];assert dll.xkl_engine_event(handle,a['engineSequence']-1,ctypes.byref(ev)),a;assert ev[0]==a['engineSequence'] and ev[1]==6 and r['cardIDs'][ev[3]]==a['cardID'] and ev[7]==a['beforeRevision'] and ev[8]==a['afterRevision']
         result[k]=dict(legacySnapshot=old[0]['snap'],legacyGraded=old[0]['submitted'],legacyArchiveUnchanged=True,sawRevealWithoutGrading=True,newWrongGrades=len(at),nativeEvent=list(ev),newPending=r['presentation'],courseSHA=sha(app/'RefinedMemory'/(k+'.json')))
     assert all(sha(root/'App'/n)==v for n,v in h.items());(out/'receipt.json').write_text(json.dumps(dict(release=target,sources=h,os=latest,device=d['name'],subjects=result,synthetic=True,route=phase,reusedExactSyntheticHost=reused),ensure_ascii=False,indent=1))
 if __name__=='__main__':run()
