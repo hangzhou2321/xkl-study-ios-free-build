@@ -27,7 +27,7 @@ struct ProfessionalCoursesView: View {
 
     var refinedComputer: RefinedMemoryStore? = nil
     var refinedPower: RefinedMemoryStore? = nil
-    @Binding var requestedOriginalSubject: ConceptSubject? = .constant(nil)
+    var requestedOriginalSubject: Binding<ConceptSubject?> = .constant(nil)
     @AppStorage("professional.refined.computer") private var usesRefinedComputer = true
     @AppStorage("professional.refined.power") private var usesRefinedPower = true
     @State private var originalPracticeSubject: ConceptSubject?
@@ -138,10 +138,10 @@ struct ProfessionalCoursesView: View {
             }
         }
         .onChange(of: subject) { _, _ in showsHandbook = false }
-        .onChange(of: requestedOriginalSubject, initial: true) { _, requested in
+        .onChange(of: requestedOriginalSubject.wrappedValue, initial: true) { _, requested in
             guard let requested, requested == .circuit || requested == .mechanics else { return }
             originalPracticeSubject = requested
-            requestedOriginalSubject = nil
+            requestedOriginalSubject.wrappedValue = nil
         }
         .sheet(item: $originalPracticeSubject, onDismiss: {
             onOverlayChanged(false)
