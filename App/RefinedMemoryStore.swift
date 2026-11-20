@@ -136,6 +136,7 @@ final class RefinedMemoryStore: ObservableObject {
     private var namespace: String { "refined-" + subject.rawValue + ":" }
 
     init(subject: ConceptSubject, baseDirectory: URL? = nil, courseData: Data? = nil, supplementData: Data? = nil,
+         recentSupplementData: Data? = nil,
          previousSupplementData: Data? = nil,
          earlierSupplementData: Data? = nil,
          wordingData: Data? = nil,
@@ -162,6 +163,7 @@ final class RefinedMemoryStore: ObservableObject {
             var parsed = original, deck = originalDeck, appendOrder = originalDeck
             var ordered = original.cards.flatMap { group in group.rows.map { (group,$0) } }
             var extra = supplementData
+            var recent = recentSupplementData
             var previous = previousSupplementData
             var earlier = earlierSupplementData
             var previousRegistries: [String:RecallDeck] = [:]
@@ -177,7 +179,11 @@ final class RefinedMemoryStore: ObservableObject {
                let url = Bundle.main.url(forResource:subject.rawValue+"-earlier-additions",withExtension:"json",subdirectory:"RefinedMemory") {
                 earlier = try Self.read(url,limit:4*1024*1024)
             }
-            guard (previous == nil && earlier == nil) || extra != nil else {
+            if courseData == nil, recent == nil,
+               let url = Bundle.main.url(forResource:subject.rawValue+"-recent-additions",withExtension:"json",subdirectory:"RefinedMemory") {
+                recent = try Self.read(url,limit:4*1024*1024)
+            }
+            guard (recent == nil && previous == nil && earlier == nil) || extra != nil else {
                 throw ExamError.invalid("缺少新版本增补课程。")
             }
             if let extra {
@@ -225,7 +231,7 @@ final class RefinedMemoryStore: ObservableObject {
                 appendOrder = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:originalDeck.cards+appended)
                 let stableItems = Dictionary(uniqueKeysWithValues:appendOrder.cards.map { ($0.id,$0) })
                 deck = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:merged.cards.compactMap { stableItems[$0.id] })
-                for prior in [previous,earlier].compactMap({ $0 }) {
+                for prior in [recent,previous,earlier].compactMap({ $0 }) {
                     let count = try Self.validatePrevious(prior, current:extra, subject:subject, base:originalSHA,
                                                           revisionRefs:unique)
                     previousRegistries[StudySHA256.hex(prior)] = RecallDeck(subject:subject,bankID:originalDeck.bankID,
