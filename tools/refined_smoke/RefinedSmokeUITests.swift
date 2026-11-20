@@ -10,7 +10,8 @@ final class RefinedSmokeUITests: XCTestCase {
   try must(app.segmentedControls.buttons[s].firstMatch,s).tap()
  }
  func edition(_ name:String)throws{try must(app.segmentedControls.buttons[name].firstMatch,name).tap()}
- func launch() {app.launchArguments=["-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"];app.launch()}
+ var thinHost=false
+ func launch() {app.launchEnvironment["DYLD_FALLBACK_LIBRARY_PATH"]="SIMULATOR_18_5_SWIFT_ABSOLUTE";app.launchArguments=["-AppleLanguages","(zh-Hans)","-AppleLocale","zh_CN"]+(thinHost ? ["--refined-synthetic-course"] : []);app.launch()}
  func checkQuestion(_ key:String)throws->String{
   let q=try must(app.staticTexts["refined-current-question"].firstMatch,"one question")
   XCTAssertEqual(app.staticTexts.matching(identifier:"refined-current-question").count,1)
@@ -18,7 +19,9 @@ final class RefinedSmokeUITests: XCTestCase {
   let matched=names.filter{name in app.staticTexts.allElementsBoundByIndex.contains(where:{$0.label==name})}
   XCTAssertEqual(matched,[q.label]);XCTAssertTrue(names.contains(q.label));return q.label
  }
- func testFourSubjectMemory()throws{
+ func testRealRoot()throws{try exercise()}
+ func testSameCourseView()throws{thinHost=true;try exercise()}
+ private func exercise()throws{
   continueAfterFailure=false
   addUIInterruptionMonitor(withDescription:"Bluetooth"){a in
    for s in ["Don’t Allow","Don't Allow","不允许","拒绝"] where a.buttons[s].exists {a.buttons[s].tap();return true};return false
