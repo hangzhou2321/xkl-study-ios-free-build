@@ -351,9 +351,9 @@ final class RefinedMemoryStore: ObservableObject {
                 committedSHA = StudySHA256.hex(bytes)
                 engine = fresh
             }
-            if let slots = engine?.record.cardIDs, slots != learningDeck.cards.map(\.id) {
+            if let slots = engine?.record.cardIDs, slots != deck.cards.map(\.id) {
                 let byID = Dictionary(uniqueKeysWithValues:slots.enumerated().map { ($0.element,UInt16($0.offset)) })
-                teachingSlots = try learningDeck.cards.map { item in
+                teachingSlots = try deck.cards.map { item in
                     guard let slot = byID[item.id] else { throw ExamError.invalid("原学习记录和教学小问不能对应。") }
                     return slot
                 }
