@@ -7,8 +7,8 @@
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.38.1</string>
-    <key>CFBundleVersion</key><string>81</string>
+    <key>CFBundleShortVersionString</key><string>1.39.0</string>
+    <key>CFBundleVersion</key><string>82</string>
     <key>NSSupportsLiveActivities</key><true/>
     <key>CFBundleURLTypes</key><array><dict>
         <key>CFBundleURLName</key><string>local.xkl.study.pace</string>

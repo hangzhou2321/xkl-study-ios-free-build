@@ -25,6 +25,8 @@ struct ProfessionalCoursesView: View {
     var onOpenNovel: (Bool) -> Void = { _ in }
     var onLookup: ((ConceptSubject, HandbookCard, HandbookCardPresentation) -> Bool)? = nil
 
+    @State private var originalPracticeSubject: ConceptSubject?
+
     var body: some View {
         VStack(spacing: 0) {
             if !(recalling && fullScreenEnabled.wrappedValue) {
@@ -46,13 +48,29 @@ struct ProfessionalCoursesView: View {
             .modifier(HandbookSubjectPickerGeometry())
             #endif
             }
+            if (subject == .circuit || subject == .mechanics) && !practicing && !recalling {
+                Button {
+                    originalPracticeSubject = subject
+                } label: {
+                    Label("解题课程与全部原题", systemImage: "book.pages")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
+                .accessibilityIdentifier("original-practice-course")
+            }
             HandbookCardView(subject: subject, baseDirectory: handbookBaseDirectory,
                              injectedStore: selectedHandbook,
                              originalQuestionStore: selectedQuestions,
                              legacyStore: selectedLegacy, studying: $recalling,
                              fullScreenEnabled: fullScreenEnabled,
-                             onStart: onStart, onOverlayChanged: onOverlayChanged,
-                             onEffectiveOverlayChanged: onEffectiveOverlayChanged,
+                             onStart: onStart, onOverlayChanged: { visible in
+                                 if originalPracticeSubject == nil { onOverlayChanged(visible) }
+                             },
+                             onEffectiveOverlayChanged: { learning, blocked in
+                                 if originalPracticeSubject == nil { onEffectiveOverlayChanged(learning, blocked) }
+                             },
                              novelStore: subject == .computer || subject == .power ? novelStore : nil,
                              onOpenNovel: onOpenNovel, onLookup: onLookup)
                 #if DEBUG
@@ -60,6 +78,15 @@ struct ProfessionalCoursesView: View {
                 #endif
                 .disabled(contentDisabled)
                 .id(subject.rawValue)
+        }
+        .sheet(item: $originalPracticeSubject, onDismiss: {
+            onOverlayChanged(false)
+            onEffectiveOverlayChanged(false, false)
+        }) { courseSubject in
+            OriginalPracticeView(subject: courseSubject, onLearningChanged: { learning in
+                onEffectiveOverlayChanged(learning, false)
+            })
+            .onAppear { onOverlayChanged(true) }
         }
     }
 

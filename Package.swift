@@ -7,7 +7,8 @@ var modelSources = ["PocketEngine.swift", "StudyModels.swift", "StudyHistory.swi
 modelSources += ["HandbookCards.swift", "HandbookRecallCue.swift", "HandbookWordEngine.swift", "HandbookDualFSRS.swift", "HandbookHighlights.swift"]
 modelSources += ["PublicQuestionDualFSRS.swift", "PublicDualLegacyCapture.swift", "PublicPocketMigration.swift"]
 modelSources += ["StudyNovel.swift", "HourlyStudyPlan.swift", "CardLookupSession.swift", "FirstPassSchedule.swift", "DeadlinePace.swift"]
-var modelExcludes = ["StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
+modelSources += ["OriginalPracticeStorage.swift"]
+var modelExcludes = ["OriginalPracticeView.swift", "StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
     "Info.plist", "Assets.xcassets", "ExamStore.swift", "ExamView.swift", "ConceptStore.swift", "ConceptView.swift",
     "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift", "MathExperienceStore.swift", "MathExperienceView.swift", "MathRichTextView.swift", "MathRenderer", "ProfessionalStudyPlanView.swift", "ProfessionalRecallStore.swift", "ProfessionalRecallView.swift", "KnowledgeLearningStore.swift", "KnowledgeLearningView.swift"]
 modelExcludes += ["HandbookWordStore.swift", "HandbookCardStore.swift", "HandbookHighlightStore.swift", "HandbookHighlightView.swift", "HandbookCardView.swift", "HandbookCardPreview.swift", "KnowledgeExposureLedger.swift", "ProfessionalQuestionStore.swift", "ProfessionalQuestionView.swift", "ProfessionalQuestionPreview.swift"]
