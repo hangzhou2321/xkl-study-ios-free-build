@@ -256,6 +256,42 @@ final class RefinedMemoryStoreTests: XCTestCase {
         XCTAssertEqual(grown.familiarRefs,base.familiarRefs);XCTAssertTrue(grown.engine?.record.attempts.isEmpty == true)
     }
 
+    @MainActor func testNextEditionRestoresPreviouslyGroupedSlotsAndPolishesAnAddedQuestion() async throws {
+        let root=try workspace(), raw=try twoGroups()
+        let early=try supplement(for:raw)
+        var prior=try XCTUnwrap(JSONSerialization.jsonObject(with:early) as? [String:Any])
+        let earlyRows=try XCTUnwrap(prior["additions"] as? [[String:Any]])
+        let added=try XCTUnwrap(earlyRows.first?["row"] as? [String:Any])
+        let ref=try XCTUnwrap(added["ref"] as? String)
+        let oldQ=try XCTUnwrap(added["q"] as? String)
+        let oldA=try XCTUnwrap(added["a"] as? String)
+        let clarification=["ref":ref,"oldQ":oldQ,"oldA":oldA,"q":oldQ,"a":oldA+"，先核条件。","source":"合成示例"]
+        prior["revisions"]=[clarification]
+        let previous=try JSONSerialization.data(withJSONObject:prior,options:.sortedKeys)
+        let last:[String:Any] = ["group":"unit","row":["ref":"unit#latest","q":"怎么判断","a":"看已知条件","kind":"判断","how":"B","note":"","colors":[]]]
+        var new=prior
+        new["additions"]=earlyRows+[last]
+        let current=try JSONSerialization.data(withJSONObject:new,options:.sortedKeys)
+        let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:previous,
+                                   previousSupplementData:early,now:now);ready(old)
+        old.start(now:now)
+        let activity=try XCTUnwrap(old.presentation)
+        old.reveal(token:activity.id,now:now)
+        let saved=try XCTUnwrap(old.engine).record
+        XCTAssertTrue(saved.cardIDs.firstIndex(of:"refined-power:"+ref)! < saved.cardIDs.firstIndex(of:"refined-power:other#1")!)
+        let replacement=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:current,
+                                           previousSupplementData:previous,earlierSupplementData:early,now:now)
+        ready(replacement)
+        XCTAssertEqual(replacement.presentation,old.presentation)
+        XCTAssertEqual(replacement.engine?.record.cardIDs,saved.cardIDs+["refined-power:unit#latest"])
+        XCTAssertEqual(replacement.entries.first(where:{$0.id==ref})?.row.a,oldA+"，先核条件。")
+        let reopened=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:current,
+                                        previousSupplementData:previous,earlierSupplementData:early,now:now)
+        ready(reopened)
+        XCTAssertEqual(reopened.presentation,old.presentation)
+        XCTAssertEqual(reopened.engine?.record.cardIDs,replacement.engine?.record.cardIDs)
+    }
+
     @MainActor func testVerifiedPreviousSupplementResumesItsRecordedSlotsAndGrades() async throws {
         let root=try workspace(), raw=try twoGroups()
         func overlay(_ rows:[[String:Any]]) throws -> Data {
