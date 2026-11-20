@@ -9,7 +9,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 45
     env:
-      RELEASE_SHA: e717b31e587a60629fcf880c2d77574e8b69c406
+      RELEASE_SHA: 44d1e2b356966cca0700a49329ffd63636253e41
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -33,6 +33,13 @@ jobs:
           fixture=Path('smoke/tools/originals_ui/OriginalPractice')
           assert {x.name for x in fixture.iterdir()}=={'course.html','main.html'}
           PY
+      - name: Read, resize and reopen the exact storage implementation on Darwin
+        run: |
+          set -euo pipefail
+          mkdir -p build/verified-ui
+          xcrun swiftc -parse-as-library app/App/OriginalPracticeStorage.swift smoke/tools/originals_ui/StoreReadback.swift -o build/darwin-readback
+          build/darwin-readback | tee build/verified-ui/darwin-readback.log
+          grep -q PASS_DARWIN_STORAGE build/verified-ui/darwin-readback.log
       - name: Test real native course entry and WK bridge, then check simulator container
         run: python3 smoke/tools/originals_ui/run.py app "$RELEASE_SHA" build/verified-ui
       - name: Upload receipt, synthetic XCTest attachments and build log
