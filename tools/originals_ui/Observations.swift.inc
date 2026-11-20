@@ -19,7 +19,7 @@ private enum WKOnlyDiagnostic {
                 guard let c=controller,let w=c.diagnosticWeb else {event("missingController",["offset":offset]);return}
                 let f=Bundle.main.bundleURL.appendingPathComponent("OriginalPractice/course.html")
                 event("nativeSnapshot",["offset":offset,"url":w.url?.absoluteString ?? "(nil)","isLoading":w.isLoading,
-                    "bounds":NSStringFromCGRect(w.bounds),"scrollSize":NSStringFromCGSize(w.scrollView.contentSize),"onScreen":w.window != nil,
+                    "bounds":[w.bounds.origin.x, w.bounds.origin.y, w.bounds.width, w.bounds.height],"scrollSize":[w.scrollView.contentSize.width, w.scrollView.contentSize.height],"onScreen":w.window != nil,
                     "progress":w.estimatedProgress,"userInteraction":w.isUserInteractionEnabled,"notice":c.diagnosticNotice,
                     "fileExists":FileManager.default.fileExists(atPath:f.path),"fileBytes":(try? Data(contentsOf:f).count) ?? -1,
                     "bundle":f.path,"documentReady":c.diagnosticReady])

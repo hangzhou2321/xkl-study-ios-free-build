@@ -7,6 +7,11 @@ ROOT=Path(sys.argv[1]).resolve(strict=True);EXPECTED=sys.argv[2];OUT=Path(sys.ar
 assert sys.platform=='darwin' and capture('git','-C',ROOT,'rev-parse','HEAD')==EXPECTED and not capture('git','-C',ROOT,'status','--porcelain')
 sys.path.insert(0,str(ROOT/'tools'));from capture_professional_question_previews import select_device,simulator_webkit_workaround
 # In the CI checkout only, observe callback state. The production guards, storage, scheme and UI controllers stay in place.
+# Catch target SDK differences in the diagnostic-only observers before the expensive whole-app build.
+sdk=capture('xcrun','--sdk','iphonesimulator','--show-sdk-path')
+probe=OUT.parent/'diagnostic-observer-preflight.swift'
+probe.write_text('import UIKit\nimport WebKit\n@MainActor private final class PracticeController: UIViewController { private var web: WKWebView?; private var documentReady=false; private let notice=UILabel() }\n'+(HERE/'Observations.swift.inc').read_text())
+cmd('xcrun','swiftc','-typecheck','-swift-version','5','-D','DEBUG','-sdk',sdk,'-target',platform.machine()+'-apple-ios17.0-simulator',probe)
 files=['StudyApp.swift','OriginalPracticeView.swift']; orig={f:(ROOT/'App'/f).read_text() for f in files}
 def sub(s,a,b):
     assert s.count(a)==1,(a,s.count(a));return s.replace(a,b)
