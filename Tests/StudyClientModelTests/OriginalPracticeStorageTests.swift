@@ -34,6 +34,21 @@ final class OriginalPracticeStorageTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf:file),before)
         }
     }
+    func testHotReaderSeesAtomicReplacementsOfAlternatingSizes() throws {
+        try temporary { dir in
+            let writer = try OriginalPracticeStorage(directory: dir)
+            let hotReader = try OriginalPracticeStorage(directory: dir)
+            let key = "real-bank-offline-v1:item/size-transition"
+            for i in 0..<12 {
+                let current = i.isMultiple(of: 2) ? String(repeating: "大", count: 8192) + String(i) : "短" + String(i)
+                try writer.apply(key: key, value: current)
+                // This throwing read cannot fall back to the last known good snapshot.
+                _ = try hotReader.bootstrapScript()
+                XCTAssertEqual(hotReader.values[key], current)
+            }
+        }
+    }
+
     func testCrossInstanceMergeAndConflictProtection() throws {
         try temporary { dir in
             let a=try OriginalPracticeStorage(directory:dir),b=try OriginalPracticeStorage(directory:dir)

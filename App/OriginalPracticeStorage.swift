@@ -85,12 +85,21 @@ final class OriginalPracticeStorage {
         return keyRegex.firstMatch(in:key,range:r)?.range == r
     }
     private static func read(_ file:URL) throws -> [String:String] {
-        let props = try file.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey,.isSymbolicLinkKey])
-        guard props.isRegularFile == true && props.isSymbolicLink != true,
-              let sz=props.fileSize, sz>0 && sz<=maxFileBytes else { throw Failure.damaged }
-        let raw = try Data(contentsOf:file)
-        guard raw.count == sz, let a=try? JSONDecoder().decode(Archive.self,from:raw), a.version == 1,
-              a.entries.count <= maxKeys, a.entries.allSatisfy({allowed($0.key) && $0.value.utf8.count <= maxValueBytes})
+        // An atomic save replaces the inode. Read metadata and bytes from the same open
+        // descriptor instead of reusing Foundation URL resource values across saves.
+        let fd = open(file.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard fd >= 0 else { throw Failure.damaged }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(fd, &info) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              info.st_size > 0 && info.st_size <= maxFileBytes else { throw Failure.damaged }
+        let raw = try handle.readToEnd() ?? Data()
+        guard raw.count == info.st_size else { throw Failure.damaged }
+        let a = try JSONDecoder().decode(Archive.self, from: raw)
+        guard a.version == 1 && a.entries.count <= maxKeys,
+              a.entries.allSatisfy({ allowed($0.key) && $0.value.utf8.count <= maxValueBytes })
         else { throw Failure.damaged }
         return a.entries
     }
