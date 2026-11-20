@@ -256,6 +256,36 @@ final class RefinedMemoryStoreTests: XCTestCase {
         XCTAssertEqual(grown.familiarRefs,base.familiarRefs);XCTAssertTrue(grown.engine?.record.attempts.isEmpty == true)
     }
 
+    @MainActor func testWordingRevisionDoesNotRewriteTheStudyRecord() async throws {
+        let root=try workspace(), raw=try twoGroups()
+        let extra=try supplement(for:raw)
+        let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+        ready(old)
+        old.start(now:now)
+        let shown=try XCTUnwrap(old.current)
+        let token=try XCTUnwrap(old.presentation).id
+        old.reveal(token:token,now:now)
+        let before=try Data(contentsOf:pointer(root,"power"))
+        let fix=["ref":shown.id,"oldQ":shown.row.q,"oldA":shown.row.a,"q":shown.row.q,
+                  "a":shown.row.a+"。附一处定义。","source":"合成讲义"]
+        func patch(anchor:String) throws -> Data {
+            try JSONSerialization.data(withJSONObject:["subject":"power","baseSHA256":anchor,
+                "additions":[],"revisions":[fix]],options:.sortedKeys)
+        }
+        let invalid=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,
+                                       wordingData:try patch(anchor:StudySHA256.hex(raw)),now:now)
+        XCTAssertTrue(invalid.blocked)
+        XCTAssertEqual(try Data(contentsOf:pointer(root,"power")),before)
+        let updated=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,
+                                       wordingData:try patch(anchor:StudySHA256.hex(extra)),now:now)
+        ready(updated)
+        XCTAssertEqual(try Data(contentsOf:pointer(root,"power")),before)
+        XCTAssertEqual(updated.presentation,old.presentation)
+        XCTAssertEqual(updated.current?.row.a,fix["a"])
+        XCTAssertEqual(updated.current?.row.colors.map(\.text),shown.row.colors.map(\.text))
+        XCTAssertTrue(updated.supplementRefs.contains(shown.id))
+    }
+
     @MainActor func testNextEditionRestoresPreviouslyGroupedSlotsAndPolishesAnAddedQuestion() async throws {
         let root=try workspace(), raw=try twoGroups()
         let early=try supplement(for:raw)

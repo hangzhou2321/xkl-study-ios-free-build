@@ -135,6 +135,7 @@ final class RefinedMemoryStore: ObservableObject {
     init(subject: ConceptSubject, baseDirectory: URL? = nil, courseData: Data? = nil, supplementData: Data? = nil,
          previousSupplementData: Data? = nil,
          earlierSupplementData: Data? = nil,
+         wordingData: Data? = nil,
          now: Date = Date(), writer: @escaping (Data,URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.writer = writer
         let base = baseDirectory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -229,6 +230,37 @@ final class RefinedMemoryStore: ObservableObject {
                 }
                 supplementRefs = Set(supplement.additions.map { $0.row.ref }).union(unique)
                 courseSHA = StudySHA256.hex(extra)
+            }
+            var wording = wordingData
+            if courseData == nil, wording == nil,
+               let url = Bundle.main.url(forResource:subject.rawValue+"-wording",withExtension:"json",subdirectory:"RefinedMemory") {
+                wording = try Self.read(url,limit:4*1024*1024)
+            }
+            if let wording {
+                // These edits clarify existing prompts. A learner's proven slot, grade, and due date
+                // belong to that prompt and must not change when textbook wording becomes more precise.
+                let patch = try JSONDecoder().decode(RefinedMemoryCourse.Supplement.self,from:wording)
+                let fixes = patch.revisions ?? []
+                let refs = Set(fixes.map(\.ref))
+                guard patch.subject == subject.rawValue, patch.baseSHA256 == courseSHA, patch.additions.isEmpty,
+                      !fixes.isEmpty, refs.count == fixes.count,
+                      refs.isSubset(of:Set(ordered.map { $0.1.ref })) else {
+                    throw ExamError.invalid("卡面修订与本机课程不匹配。")
+                }
+                let byRef = Dictionary(uniqueKeysWithValues:fixes.map { ($0.ref,$0) })
+                ordered = try ordered.map { group, row in
+                    guard let edit = byRef[row.ref] else { return (group,row) }
+                    let display = try edit.applied(to:row)
+                    let evidence = RefinedMemoryCourse.Evidence(label:"本次修订",detail:edit.source)
+                    return (.init(key:group.key,title:group.title,chapter:group.chapter,evidence:evidence,rows:[display]),display)
+                }
+                let rowsByGroup = Dictionary(grouping:ordered,by: { $0.0.key })
+                parsed = RefinedMemoryCourse(subject:parsed.subject,baseSHA256:parsed.baseSHA256,cards:parsed.cards.map { group in
+                    .init(key:group.key,title:group.title,chapter:group.chapter,evidence:group.evidence,
+                          rows:(rowsByGroup[group.key] ?? []).map { $0.1 })
+                })
+                _ = try parsed.validatedDeck(for:subject)
+                supplementRefs.formUnion(refs)
             }
             entries = ordered.enumerated()
                 .map { Entry(group:$0.element.0,row:$0.element.1,position:$0.offset+1) }
