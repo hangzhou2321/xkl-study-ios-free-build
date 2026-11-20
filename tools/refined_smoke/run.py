@@ -74,7 +74,7 @@ def run():
     for n in ('RefinedMemoryStore.swift','RefinedMemoryView.swift'):assert n in (root/'XKLStudy.xcodeproj/project.pbxproj').read_text()
     add_test(root)
     infos=json.loads(capture('xcrun','simctl','list','-j','devices','available'))['devices'];only=[(tuple(map(int,k.split('iOS-')[-1].split('-'))),d) for k,ds in infos.items() if 'iOS-' in k for d in ds if d['name'].startswith('iPhone')]
-    latest=max(x[0] for x in only);devices=[v for r,v in only if r==latest];d=next((v for v in devices if v['name'] in ['iPhone 16','iPhone 17']),devices[0]);u=d['udid']
+    latest=(18,5);assert any(rt==latest for rt,_ in only),list(infos);devices=[v for r,v in only if r==latest];d=next((v for v in devices if v['name'] in ['iPhone 16','iPhone 17']),devices[0]);u=d['udid']
     subprocess.run(['xcrun','simctl','boot',u]);dd=out.parent/'refined-ui-derived';common=['xcodebuild','-project',str(root/'XKLStudy.xcodeproj'),'-scheme','RefinedSynthetic','-configuration','Debug','-destination','platform=iOS Simulator,id='+u,'-derivedDataPath',str(dd),'ARCHS='+platform.machine(),'ONLY_ACTIVE_ARCH=YES','-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1']
     def build(args,file):
         with (out/file).open('w') as log:rc=subprocess.run(args,cwd=root,stdout=log,stderr=subprocess.STDOUT).returncode

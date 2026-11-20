@@ -9,7 +9,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 40
     env:
-      RELEASE: f7ecb0fe44e8c0b47fa4279e1bb40dfc6f84d0e6
+      RELEASE: 2f39ef2a920b54894cee6a6012879bd71fbbb60d
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Fetch exact release source into throwaway simulator checkout
