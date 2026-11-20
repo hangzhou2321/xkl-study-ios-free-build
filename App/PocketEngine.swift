@@ -74,11 +74,17 @@ final class PocketEngine {
     }
 
     func start(day: UInt32, preservingRevealedAnswer: Bool = false,
-               preservingShownStepAcrossDay: Bool = false) throws {
+               preservingShownStepAcrossDay: Bool = false, teachingSlots: [UInt16]? = nil) throws {
         let before = try info
         let restoreReveal = preservingRevealedAnswer && before.has_task != 0
             && before.revealed != 0 && (before.day == day || preservingShownStepAcrossDay)
-        guard xkl_engine_start(handle, day, now) else { throw StudyError.engine("无法开始任务，请检查日期或记录容量。") }
+        let started: Bool
+        if let teachingSlots, before.has_task == 0 {
+            started = teachingSlots.withUnsafeBufferPointer {
+                xkl_engine_start_refined(handle,day,now,$0.baseAddress,UInt32($0.count))
+            }
+        } else { started = xkl_engine_start(handle,day,now) }
+        guard started else { throw StudyError.engine("无法开始任务，请检查日期或记录容量。") }
         if restoreReveal { try reveal() }
     }
 

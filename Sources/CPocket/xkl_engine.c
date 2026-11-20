@@ -230,15 +230,54 @@ static uint32_t global_sequence(const xkl_engine_t *e, uint32_t local) { return 
 static uint32_t global_presentation(const xkl_engine_t *e, uint32_t local) {
     return e->volume_mode && local == 2u ? e->carry_presentation : global_sequence(e,local);
 }
+static bool commit_start(xkl_engine_t *e, pocket_word_state_t *next, int64_t at) {
+    pocket_word_recording_init(&e->recording, &e->log);
+    if (!pocket_word_recording_boot(&e->recording, &e->state, at) ||
+        !pocket_word_recording_commit(&e->recording, &e->state, next, POCKET_EVENT_START, at, card_read, state_store, e) ||
+        !pocket_word_recording_present(&e->recording, &e->state, at)) return false;
+    e->booted = true; e->last_at = at; return true;
+}
 bool xkl_engine_start(xkl_engine_t *e, uint32_t day, int64_t at) {
     if (!room(e, 3) || day < 18000 || day > 50000 || at < 0 || e->state.revision == UINT32_MAX) return false;
     pocket_word_state_t next = e->state;
     if (!pocket_word_start(&next, day, card_read, e)) return false;
-    pocket_word_recording_init(&e->recording, &e->log);
-    if (!pocket_word_recording_boot(&e->recording, &e->state, at) ||
-        !pocket_word_recording_commit(&e->recording, &e->state, &next, POCKET_EVENT_START, at, card_read, state_store, e) ||
-        !pocket_word_recording_present(&e->recording, &e->state, at)) return false;
-    e->booted = true; e->last_at = at; return true;
+    return commit_start(e, &next, at);
+}
+static bool read_without_new(uint16_t id, uint32_t *packed, void *ctx) {
+    if (!card_read(id, packed, ctx)) return false;
+    pocket_card_t card = pocket_unpack_card(*packed);
+    if (!card.learned && !card.familiar)
+        *packed = pocket_pack_card((pocket_card_t){.due_day = UINT32_MAX, .learned = 1}) | POCKET_IMPORTED_KNOWN;
+    return true;
+}
+bool xkl_engine_start_refined(xkl_engine_t *e, uint32_t day, int64_t at,
+                              const uint16_t *slots, uint32_t count) {
+    if (!room(e, 3) || day < 18000 || day > 50000 || at < 0 || e->state.revision == UINT32_MAX ||
+        !slots || !count || count > XKL_WORD_COUNT) return false;
+    if (e->state.body.length) return xkl_engine_start(e, day, at);
+    pocket_word_state_t next = e->state;
+    if (!pocket_word_start(&next, day, read_without_new, e)) return false;
+    pocket_word_body_t *b = &next.body;
+    bool seen[XKL_WORD_COUNT] = {false};
+    unsigned lesson = POCKET_LESSON_COUNT;
+    for (unsigned rank = 0; rank < count; ++rank) {
+        const uint16_t id = slots[rank];
+        if (id >= count || seen[id]) return false;
+        seen[id] = true;
+        pocket_card_t card = pocket_unpack_card(e->cards[id]);
+        if (card.learned || card.familiar) continue;
+        if (lesson == POCKET_LESSON_COUNT) lesson = rank / POCKET_LESSON_SIZE;
+        if (rank / POCKET_LESSON_SIZE != lesson || b->length >= POCKET_ACTIVE_MAX) continue;
+        // A fresh task has only one stage-zero token per cached due question.
+        // Store selected new IDs in the queue itself, so no remapped cursor or
+        // transient rank table is needed to reopen even an interrupted task.
+        unsigned slot = b->length;
+        b->active[slot] = (pocket_word_cached_t){e->cards[id], id, 0, 1};
+        b->queue[b->length++] = (pocket_token_t){(uint8_t)slot, 0};
+        ++b->new_loaded; ++b->new_total;
+    }
+    if (b->new_total) b->lesson = (uint16_t)(lesson + 1);
+    return commit_start(e, &next, at);
 }
 bool xkl_engine_reveal(xkl_engine_t *e, int64_t at) {
     if (!clock_ok(e, at) || !room(e, e->recording.revealed ? 0 : 1)) return false;

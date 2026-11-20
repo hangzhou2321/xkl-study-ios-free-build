@@ -53,9 +53,6 @@ struct RefinedMemoryView: View {
                         Button("回卡片首页", systemImage: "house") { setStudying(false) }
                     }
                     Button("全部小问", systemImage: "list.bullet") { directory = .all }
-                    if !store.supplementRefs.isEmpty {
-                        Button("本次补问", systemImage: "text.badge.plus") { directory = .supplement }
-                    }
                     Button("已熟记", systemImage: "checkmark.circle") { directory = .familiar }
                     if let onReturnToOriginal {
                         Button("返回原卡", systemImage: "arrow.uturn.backward") { report(false); onReturnToOriginal() }
@@ -218,7 +215,7 @@ private struct RefinedDirectory: View {
             Section {
                 Picker("范围", selection: $mode) {
                     Text("全部小问").tag(RefinedDirectoryMode.all)
-                    if !store.supplementRefs.isEmpty { Text("本次补问").tag(RefinedDirectoryMode.supplement) }
+                    if !store.supplementRefs.isEmpty { Text("本次调整").tag(RefinedDirectoryMode.supplement) }
                     Text("已熟记").tag(RefinedDirectoryMode.familiar)
                 }.pickerStyle(.segmented)
                 if !message.isEmpty { Text(message).font(.footnote).foregroundStyle(.secondary) }
@@ -228,15 +225,22 @@ private struct RefinedDirectory: View {
             if entries.isEmpty {
                 Text(search.isEmpty && mode == .familiar ? "还没有标为熟记的小问。" : "没有匹配的小问。").foregroundStyle(.secondary)
             } else {
-                ForEach(entries, id: \.id) { item in
-                    NavigationLink {
-                        RefinedReference(store: store, item: item, didRequeue: { message = $0 })
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.group.title).font(.caption).foregroundStyle(.secondary)
-                            Text(item.row.q).font(.body)
-                            if store.familiarRefs.contains(item.id) {
-                                Label("已熟记", systemImage: "checkmark.circle").font(.caption)
+                let groups = Dictionary(grouping:entries,by: { $0.group.key })
+                let familiar = store.familiarRefs
+                ForEach(store.course?.cards ?? []) { group in
+                    if let items = groups[group.key] {
+                        Section(RefinedFace.chapter(group.chapter) + " · " + group.title) {
+                            ForEach(items) { item in
+                                NavigationLink {
+                                    RefinedReference(store: store, item: item, didRequeue: { message = $0 })
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.row.q).font(.body)
+                                        if familiar.contains(item.id) {
+                                            Label("已熟记", systemImage: "checkmark.circle").font(.caption)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -295,7 +299,8 @@ private struct RefinedFace: View {
             HStack(spacing: 8) {
                 Text(how).font(.caption.weight(.medium)).padding(.vertical, 3).padding(.horizontal, 8)
                     .background(Color.accentColor.opacity(0.10), in: Capsule())
-                Text(item.group.evidence.label == "新增考点" ? "本次 · 新增考点" : "上版 · \(item.group.evidence.label)")
+                Text(item.group.evidence.label == "新增考点" ? "本次 · 新增考点" :
+                        (item.group.evidence.label == "本次修订" ? "本次修订" : "上版 · \(item.group.evidence.label)"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(RefinedText.render(item.row, answer: false))
@@ -318,7 +323,7 @@ private struct RefinedFace: View {
                     Text(item.group.evidence.detail).font(.footnote).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
                 } label: {
-                    Text(item.group.evidence.label == "新增考点" ? "本次新增 · 考点说明" : "上版卡组依据 · \(item.group.evidence.label)")
+                    Text(["新增考点","本次修订"].contains(item.group.evidence.label) ? "本问依据" : "上版卡组依据 · \(item.group.evidence.label)")
                         .font(.footnote)
                 }
             }

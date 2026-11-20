@@ -29,6 +29,68 @@ final class RefinedMemoryStoreTests: XCTestCase {
                                "additions":[["group":group,"row":row,"source":"合成讲义第1页"]]]
         return try JSONSerialization.data(withJSONObject:extra,options:.sortedKeys)
     }
+    private func twoGroups() throws -> Data {
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with:data("电力系统")) as? [String:Any])
+        var groups = try XCTUnwrap(json["cards"] as? [[String:Any]])
+        let row:[String:Any] = ["ref":"other#1","q":"另组的条件","a":"角度","kind":"判断","how":"A","note":"","colors":[]]
+        groups.append(["key":"other","title":"第二组","chapter":"下一章","evidence":["label":"示例","detail":"合成内容"],"rows":[row]])
+        json["cards"]=groups
+        return try JSONSerialization.data(withJSONObject:json,options:.sortedKeys)
+    }
+    @MainActor func testDirectoryAndActualFirstLearningStayInTeachingOrderAfterMigrationAndReopen() async throws {
+        let raw=try twoGroups(),extra=try supplement(for:raw)
+        let expected=["unit#1","unit#3","unit#extra-a","unit#brief","other#1"]
+        for hasPreviousCourse in [false,true] {
+            let root=try workspace()
+            if hasPreviousCourse {
+                let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now);ready(old)
+            }
+            var current=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+            ready(current);XCTAssertEqual(current.entries.map(\.id),expected)
+            let slots=hasPreviousCourse ? ["unit#1","unit#3","unit#extra-a","other#1","unit#brief"] : expected
+            XCTAssertEqual(current.engine?.record.cardIDs,slots.map { "refined-power:"+$0 })
+            current.start(now:now);ready(current)
+            for (index,ref) in expected.enumerated() {
+                XCTAssertEqual(current.current?.id,ref)
+                let token=try XCTUnwrap(current.presentation).id
+                if index==3 {
+                    current.reveal(token:token,now:now)
+                    current=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+                    ready(current);XCTAssertEqual(current.presentation?.id,token);XCTAssertTrue(current.presentation?.revealed == true)
+                }
+                current.markFamiliar(token:token,now:now);ready(current)
+                XCTAssertEqual(current.familiarRefs,Set(expected.prefix(index+1)))
+                XCTAssertEqual(current.firstPassRemaining,expected.count-index-1)
+            }
+        }
+    }
+    @MainActor func testMatchedRevisionKeepsTheOriginalIdentityAndRelocatesOriginalBookMark() async throws {
+        let raw=try data("电力系统"), root=try workspace()
+        let original=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now);ready(original)
+        original.start(now:now);let shown=try XCTUnwrap(original.presentation)
+        original.reveal(token:shown.id,now:now)
+        let row=try XCTUnwrap(original.current).row
+        let currentURL=pointer(root,"power"), before=try Data(contentsOf:currentURL)
+        func overlay(old:String,answer:String) throws -> Data {
+            let revision=["ref":row.ref,"oldQ":row.q,"oldA":old,"q":row.q,"a":answer,"source":"合成课本第2页"]
+            let document:[String:Any]=["subject":"power","baseSHA256":StudySHA256.hex(raw),"additions":[],"revisions":[revision]]
+            return try JSONSerialization.data(withJSONObject:document,options:.sortedKeys)
+        }
+        for bad in [try overlay(old:"错版",answer:"先检查边界"),try overlay(old:row.a,answer:"改看其他"),
+                    try overlay(old:row.a,answer:"原边界和新边界")] {
+            let skipped=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:bad,now:now)
+            XCTAssertTrue(skipped.blocked);XCTAssertEqual(try Data(contentsOf:currentURL),before)
+        }
+        let valid=try overlay(old:row.a,answer:"先检查边界")
+        let revised=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:valid,now:now)
+        ready(revised);XCTAssertEqual(revised.presentation,original.presentation)
+        XCTAssertEqual(revised.current?.row.a,"先检查边界");XCTAssertEqual(revised.current?.row.colors.first?.location,3)
+        XCTAssertEqual(revised.current?.group.evidence.detail,"合成课本第2页")
+        XCTAssertEqual(revised.engine?.record,original.engine?.record)
+        XCTAssertEqual(revised.engine?.deck.cards.first?.card.answer,row.a)
+        revised.grade(remembered:false,token:shown.id,now:now);ready(revised)
+        XCTAssertEqual(revised.engine?.record.attempts.count,1)
+    }
     @MainActor private func ready(_ s:RefinedMemoryStore,file:StaticString=#filePath,line:UInt=#line) {
         XCTAssertFalse(s.blocked,s.error ?? "",file:file,line:line);XCTAssertNil(s.error,file:file,line:line)
         XCTAssertNotNil(s.engine,file:file,line:line)

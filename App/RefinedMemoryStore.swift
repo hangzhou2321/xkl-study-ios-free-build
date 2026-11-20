@@ -46,6 +46,27 @@ struct RefinedMemoryCourse: Decodable {
     let cards: [Group]
 
     struct Supplement: Decodable {
+        struct Revision: Decodable {
+            let ref, oldQ, oldA, q, a, source: String
+
+            func applied(to original: Row) throws -> Row {
+                guard ref == original.ref, oldQ == original.q, oldA == original.a, q != oldQ || a != oldA,
+                      !source.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+                    throw ExamError.invalid("精简修订与原问不一致。")
+                }
+                let colors = try original.colors.map { mark -> Mark in
+                    if mark.isValid(question:q,answer:a) { return mark }
+                    let field = (mark.field == "q" ? q : a) as NSString
+                    let found = field.range(of:mark.text,options:.literal)
+                    guard found.location != NSNotFound, found == field.range(of:mark.text,options:[.literal,.backwards]) else {
+                        throw ExamError.invalid("精简修订的原书颜色不能唯一定位。")
+                    }
+                    return Mark(field:mark.field,text:mark.text,color:mark.color,location:found.location,start:nil)
+                }
+                return Row(ref:ref,q:q,a:a,kind:original.kind,how:original.how,note:original.note,colors:colors,
+                           core:original.core,recognize:original.recognize,editKind:original.editKind)
+            }
+        }
         struct Addition: Decodable {
             let group: String
             let row: Row
@@ -53,6 +74,7 @@ struct RefinedMemoryCourse: Decodable {
         }
         let subject, baseSHA256: String
         let additions: [Addition]
+        let revisions: [Revision]?
     }
 
     func validatedDeck(for expected: ConceptSubject) throws -> RecallDeck {
@@ -104,6 +126,7 @@ final class RefinedMemoryStore: ObservableObject {
     private(set) var entries: [Entry] = []
     private(set) var supplementRefs = Set<String>()
     private var index: [String:Int] = [:]
+    private var teachingSlots: [UInt16]?
     private var courseSHA = "", committedSHA = ""
     private let directory: URL, currentURL: URL
     private let writer: (Data, URL) throws -> Void
@@ -130,7 +153,7 @@ final class RefinedMemoryStore: ObservableObject {
             let originalDeck = try original.validatedDeck(for:subject)
             let originalSHA = StudySHA256.hex(raw)
             courseSHA = originalSHA
-            var parsed = original, deck = originalDeck
+            var parsed = original, deck = originalDeck, appendOrder = originalDeck
             var ordered = original.cards.flatMap { group in group.rows.map { (group,$0) } }
             var extra = supplementData
             if courseData == nil, extra == nil,
@@ -139,20 +162,34 @@ final class RefinedMemoryStore: ObservableObject {
             }
             if let extra {
                 let supplement = try JSONDecoder().decode(RefinedMemoryCourse.Supplement.self,from:extra)
+                let revisions = supplement.revisions ?? []
                 guard supplement.subject == subject.rawValue, supplement.baseSHA256 == originalSHA,
-                      !supplement.additions.isEmpty else { throw ExamError.invalid("增补小问与本机原课程不符。") }
+                      !supplement.additions.isEmpty || !revisions.isEmpty else { throw ExamError.invalid("增补小问与本机原课程不符。") }
                 let groups = Dictionary(uniqueKeysWithValues:original.cards.map { ($0.key,$0) })
                 let additions = Dictionary(grouping:supplement.additions,by:\.group)
-                for addition in supplement.additions {
-                    guard let group = groups[addition.group] else { throw ExamError.invalid("增补小问的原卡组不存在。") }
-                    let source = RefinedMemoryCourse.Evidence(label:"新增考点",detail:addition.source ?? "本次基础、强化增补。")
-                    let displayGroup = RefinedMemoryCourse.Group(key:group.key,title:group.title,chapter:group.chapter,
-                                                                 evidence:source,rows:[addition.row])
-                    ordered.append((displayGroup,addition.row))
+                guard additions.keys.allSatisfy({ groups[$0] != nil }) else { throw ExamError.invalid("增补小问的原卡组不存在。") }
+                let unique = Set(revisions.map(\.ref))
+                guard unique.count == revisions.count, unique.isSubset(of:Set(ordered.map { $0.1.ref })) else {
+                    throw ExamError.invalid("精简修订含重复编号或找不到原问。")
                 }
+                let edits = Dictionary(uniqueKeysWithValues:revisions.map { ($0.ref,$0) })
+                ordered = try original.cards.flatMap { group in
+                    try group.rows.map { row -> (RefinedMemoryCourse.Group,RefinedMemoryCourse.Row) in
+                        guard let edit = edits[row.ref] else { return (group,row) }
+                        let display = try edit.applied(to:row)
+                        let evidence = RefinedMemoryCourse.Evidence(label:"本次修订",detail:edit.source)
+                        return (.init(key:group.key,title:group.title,chapter:group.chapter,evidence:evidence,rows:[display]),display)
+                    } + (additions[group.key] ?? []).map { addition in
+                        let source = RefinedMemoryCourse.Evidence(label:"新增考点",detail:addition.source ?? "本次基础、强化增补。")
+                        let displayGroup = RefinedMemoryCourse.Group(key:group.key,title:group.title,chapter:group.chapter,
+                                                                     evidence:source,rows:[addition.row])
+                        return (displayGroup,addition.row)
+                    }
+                }
+                let displayed = Dictionary(grouping:ordered,by: { $0.0.key })
                 parsed = RefinedMemoryCourse(subject:original.subject,baseSHA256:original.baseSHA256,cards:original.cards.map { group in
                     .init(key:group.key,title:group.title,chapter:group.chapter,evidence:group.evidence,
-                          rows:group.rows + (additions[group.key] ?? []).map(\.row))
+                          rows:(displayed[group.key] ?? []).map { $0.1 })
                 })
                 // Validate the whole catalogue (including old/new ref collisions) before assigning numeric slots.
                 let merged = try parsed.validatedDeck(for:subject)
@@ -161,8 +198,10 @@ final class RefinedMemoryStore: ObservableObject {
                     guard let item = byID[namespace+value.row.ref] else { throw ExamError.invalid("增补小问编号无效。") }
                     return item
                 }
-                deck = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:originalDeck.cards+appended)
-                supplementRefs = Set(supplement.additions.map { $0.row.ref })
+                let originalItems = Dictionary(uniqueKeysWithValues:originalDeck.cards.map { ($0.id,$0) })
+                deck = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:merged.cards.map { originalItems[$0.id] ?? $0 })
+                appendOrder = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:originalDeck.cards+appended)
+                supplementRefs = Set(supplement.additions.map { $0.row.ref }).union(unique)
                 courseSHA = StudySHA256.hex(extra)
             }
             entries = ordered.enumerated()
@@ -181,11 +220,12 @@ final class RefinedMemoryStore: ObservableObject {
                     throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。")
                 }
                 if saved.courseSHA256 == courseSHA {
-                    engine = try ProfessionalRecallEngine(deck:deck,record:saved.record)
+                    let savedDeck = saved.record.cardIDs == deck.cards.map(\.id) ? deck : appendOrder
+                    engine = try ProfessionalRecallEngine(deck:savedDeck,record:saved.record)
                     committedSHA = StudySHA256.hex(existing)
                 } else if extra != nil, saved.courseSHA256 == originalSHA {
                     let updated = try ProfessionalRecallEngine(deck:originalDeck,record:saved.record)
-                    try updated.reconcile(to:deck,now:now)
+                    try updated.reconcile(to:appendOrder,now:now)
                     let backup = directory.appendingPathComponent("before-additions-"+StudySHA256.hex(existing)+".json")
                     if !names.contains(backup.lastPathComponent) { try writer(existing,backup) }
                     guard try Self.read(backup) == existing, try Self.read(currentURL) == existing else {
@@ -205,6 +245,13 @@ final class RefinedMemoryStore: ObservableObject {
                 committedSHA = StudySHA256.hex(bytes)
                 engine = fresh
             }
+            if let slots = engine?.record.cardIDs, slots != deck.cards.map(\.id) {
+                let byID = Dictionary(uniqueKeysWithValues:slots.enumerated().map { ($0.element,UInt16($0.offset)) })
+                teachingSlots = try deck.cards.map { item in
+                    guard let slot = byID[item.id] else { throw ExamError.invalid("原学习记录和教学小问不能对应。") }
+                    return slot
+                }
+            }
             course = parsed
         } catch {
             self.error = error.localizedDescription; blocked = true
@@ -217,13 +264,15 @@ final class RefinedMemoryStore: ObservableObject {
     }
     var familiarRefs: Set<String> {
         guard let engine else { return [] }
-        return Set(engine.familiarCardIndices.compactMap { entries.indices.contains($0) ? entries[$0].id : nil })
+        return Set(engine.familiarCardIndices.compactMap { slot in
+            index[engine.record.cardIDs[slot]].map { entries[$0].id }
+        })
     }
     var firstPassRemaining: Int {
         guard let engine else { return 0 }
         let done = Set(engine.record.attempts.map(\.cardID))
-        let familiar = Set(engine.familiarCardIndices)
-        return entries.enumerated().reduce(0) { $0 + (familiar.contains($1.offset) || done.contains(namespace+$1.element.id) ? 0 : 1) }
+        let familiar = familiarRefs
+        return entries.reduce(0) { $0 + (familiar.contains($1.id) || done.contains(namespace+$1.id) ? 0 : 1) }
     }
     var canPostpone: Bool { engine?.canPostpone ?? false }
     func stats(on date: Date = Date()) -> ProfessionalRecallStats? {
@@ -285,7 +334,9 @@ final class RefinedMemoryStore: ObservableObject {
             self.error=error.localizedDescription; return false
         }
     }
-    func start(now: Date = Date()) { change { try $0.start(day:UInt32(ConceptCalendar.studyDay(now)),now:now) } }
+    func start(now: Date = Date()) {
+        change { try $0.start(day:UInt32(ConceptCalendar.studyDay(now)),now:now,teachingSlots:teachingSlots) }
+    }
     func reveal(token: UUID, now: Date = Date()) { change { try $0.reveal(token:token,now:now) } }
     func grade(remembered: Bool, token: UUID, now: Date = Date()) {
         guard let e=engine, let p=presentation, p.id == token else { return }

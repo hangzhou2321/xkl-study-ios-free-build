@@ -122,6 +122,11 @@ bool xkl_engine_rebase_empty_question_day(xkl_engine_t *engine, uint32_t day, in
 xkl_engine_t *xkl_engine_restore(const uint8_t *blob, size_t length);
 void xkl_engine_free(xkl_engine_t *engine);
 bool xkl_engine_start(xkl_engine_t *engine, uint32_t day, int64_t uptime_us);
+/* Refined-course admission only. slots is a permutation of the original numeric
+ * IDs. An existing task resumes unchanged. A new task puts due work first and
+ * admits unseen questions in the first unfinished teaching lesson. */
+bool xkl_engine_start_refined(xkl_engine_t *engine, uint32_t day, int64_t uptime_us,
+                              const uint16_t *slots, uint32_t count);
 bool xkl_engine_reveal(xkl_engine_t *engine, int64_t uptime_us);
 /* Explicit professional-card UI action only; vocabulary never calls this.
  * Move every remaining token of the visible word behind the other queued

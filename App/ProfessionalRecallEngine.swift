@@ -370,7 +370,7 @@ final class ProfessionalRecallEngine {
         return try Self(deck: deck, record: record)
     }
 
-    func start(day: UInt32, now: Date = Date()) throws {
+    func start(day: UInt32, now: Date = Date(), teachingSlots: [UInt16]? = nil) throws {
         guard day >= (try engine.info.day) else { throw ExamError.invalid("手机日期早于上次背卡日期，原记录已保留。") }
         if try engine.info.has_task == 0, !(record.deferredCards ?? [:]).isEmpty {
             try transaction { try activateDeferred(now: now) }
@@ -382,7 +382,8 @@ final class ProfessionalRecallEngine {
             let old = record.presentation
             let restoreImportedReveal = before.log_records == 0 && record.migration.resumedAnswerVisible
                 && old?.cardID == record.migration.resumedCardID
-            try engine.start(day: day, preservingRevealedAnswer: true, preservingShownStepAcrossDay: true)
+            try engine.start(day: day, preservingRevealedAnswer: true, preservingShownStepAcrossDay: true,
+                             teachingSlots:teachingSlots)
             if restoreImportedReveal { try engine.reveal() }
             try present(keeping: before.has_task != 0 ? old : nil)
             started = true

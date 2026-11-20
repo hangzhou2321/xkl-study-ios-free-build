@@ -85,15 +85,17 @@ struct ProfessionalCoursesView: View {
             .modifier(HandbookSubjectPickerGeometry())
             #endif
             }
-            if canChooseEdition && (!recalling || !fullScreenEnabled.wrappedValue || prefersRefined) {
-                Picker("背卡版本", selection: Binding(get: { prefersRefined }, set: selectEdition)) {
-                    Text("新版精讲").tag(true)
-                    Text("原卡与进度").tag(false)
+            if canChooseEdition && !prefersRefined {
+                HStack(spacing: 12) {
+                    Button { selectEdition(true) } label: {
+                        Label("回到学习主线", systemImage: "arrow.uturn.backward")
+                            .font(.subheadline.weight(.medium)).frame(minHeight: 44)
+                    }
+                    .accessibilityIdentifier("professional-mainline-return")
+                    Spacer(minLength: 4)
+                    Text("原卡与进度").font(.footnote).foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
                 .padding(.horizontal, 20)
-                .padding(.vertical, 4)
-                .accessibilityIdentifier("memory-course-edition")
             }
             if hasProblemCourse && !practicing && !recalling {
                 VStack(alignment: .leading, spacing: 5) {
