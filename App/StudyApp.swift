@@ -79,7 +79,6 @@ struct RootView: View {
     @StateObject private var refinedPower = RefinedMemoryStore(subject: .power)
     @AppStorage("professional.refined.computer") private var useRefinedComputer = true
     @AppStorage("professional.refined.power") private var useRefinedPower = true
-    @State private var requestedOriginalSubject: ConceptSubject?
     @StateObject private var studyNovel = StudyNovelStore()
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
@@ -166,12 +165,11 @@ struct RootView: View {
                                     objectiveComputer: professionalComputer, objectivePower: professionalPower,
                                     handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
                                     handbookMechanics: handbookMechanics,
-                                    contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling),
+                                    contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling || originalProblemVisible),
                                     segmentBar: AnyView(segmentBar),
                                     fullScreenEnabled: handbookFullScreenBinding,
                                     novelStore: studyNovel, onOpenNovel: openNovel, onLookup: startCardLookup,
-                                    refinedComputer: refinedComputer, refinedPower: refinedPower,
-                                    requestedOriginalSubject: $requestedOriginalSubject)
+                                    refinedComputer: refinedComputer, refinedPower: refinedPower)
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
@@ -740,7 +738,6 @@ struct RootView: View {
             subject = course
             professionalPracticing = false
             professionalRecalling = false
-            requestedOriginalSubject = course
         }
         flow.begin(area: area, mode: mode)
         guard flow.error == nil, flow.state.activeArea == area else { selectedTab = 5; return }

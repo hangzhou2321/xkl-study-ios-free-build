@@ -27,11 +27,8 @@ struct ProfessionalCoursesView: View {
 
     var refinedComputer: RefinedMemoryStore? = nil
     var refinedPower: RefinedMemoryStore? = nil
-    var requestedOriginalSubject: Binding<ConceptSubject?> = .constant(nil)
     @AppStorage("professional.refined.computer") private var usesRefinedComputer = true
     @AppStorage("professional.refined.power") private var usesRefinedPower = true
-    @State private var originalPracticeSubject: ConceptSubject?
-    @State private var showsHandbook = false
 
     private var hasProblemCourse: Bool { subject == .circuit || subject == .mechanics }
 
@@ -97,35 +94,13 @@ struct ProfessionalCoursesView: View {
                 }
                 .padding(.horizontal, 20)
             }
-            if hasProblemCourse && !practicing && !recalling {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(subject.shortTitle + "解题课").font(.title2.bold())
-                    Text("先做讲义例题。遇到不会的步骤，可从题目回到对应的方法卡。")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                Button {
-                    originalPracticeSubject = subject
-                } label: {
-                    Label("解题课程与全部原题", systemImage: "book.pages")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 6)
-                .accessibilityIdentifier("original-practice-course")
-                Button {
-                    showsHandbook.toggle()
-                } label: {
-                    Label(showsHandbook ? "收起讲义背卡" : "原讲义背卡与进度",
-                          systemImage: showsHandbook ? "chevron.up" : "chevron.down")
-                }
-                .font(.subheadline)
-                .padding(.vertical, 8)
-            }
-            if canChooseEdition, prefersRefined, let refinedStore {
+            if hasProblemCourse {
+                OriginalPracticeView(subject: subject, singleQueue: true, onLearningChanged: { learning in
+                    onEffectiveOverlayChanged(learning, false)
+                })
+                .disabled(contentDisabled)
+                .id("problem-queue-" + subject.rawValue)
+            } else if canChooseEdition, prefersRefined, let refinedStore {
                 RefinedMemoryView(subject: subject, store: refinedStore, studying: $recalling,
                                   onStart: onStart,
                                   onLearningChanged: { onEffectiveOverlayChanged($0, false) },
@@ -133,26 +108,9 @@ struct ProfessionalCoursesView: View {
                                   onReadChapter: novelStore?.active == nil ? nil : { onOpenNovel(true) })
                     .disabled(contentDisabled)
                     .id("refined-" + subject.rawValue)
-            } else if !hasProblemCourse || showsHandbook || recalling || practicing {
-                handbook
             } else {
-                Spacer(minLength: 0)
+                handbook
             }
-        }
-        .onChange(of: subject) { _, _ in showsHandbook = false }
-        .onChange(of: requestedOriginalSubject.wrappedValue, initial: true) { _, requested in
-            guard let requested, requested == .circuit || requested == .mechanics else { return }
-            originalPracticeSubject = requested
-            requestedOriginalSubject.wrappedValue = nil
-        }
-        .sheet(item: $originalPracticeSubject, onDismiss: {
-            onOverlayChanged(false)
-            onEffectiveOverlayChanged(false, false)
-        }) { courseSubject in
-            OriginalPracticeView(subject: courseSubject, onLearningChanged: { learning in
-                onEffectiveOverlayChanged(learning, false)
-            })
-            .onAppear { onOverlayChanged(true) }
         }
     }
 
@@ -163,10 +121,10 @@ struct ProfessionalCoursesView: View {
                          legacyStore: selectedLegacy, studying: $recalling,
                          fullScreenEnabled: fullScreenEnabled,
                          onStart: onStart, onOverlayChanged: { visible in
-                             if originalPracticeSubject == nil { onOverlayChanged(visible) }
+                             onOverlayChanged(visible)
                          },
                          onEffectiveOverlayChanged: { learning, blocked in
-                             if originalPracticeSubject == nil { onEffectiveOverlayChanged(learning, blocked) }
+                             onEffectiveOverlayChanged(learning, blocked)
                          },
                          novelStore: subject == .computer || subject == .power ? novelStore : nil,
                          onOpenNovel: onOpenNovel, onLookup: onLookup)

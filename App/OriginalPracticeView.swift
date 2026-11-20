@@ -6,11 +6,12 @@ import UIKit
 @MainActor
 struct OriginalPracticeView: View {
     let subject: ConceptSubject
+    var singleQueue = false
     var onLearningChanged: (Bool) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        PracticeHost(subject: subject, leave: { dismiss() }, learning: onLearningChanged)
+        PracticeHost(subject: subject, singleQueue: singleQueue, leave: { dismiss() }, learning: onLearningChanged)
             .id(subject.rawValue)
             .interactiveDismissDisabled(true)
             .navigationBarBackButtonHidden(true)
@@ -21,11 +22,12 @@ struct OriginalPracticeView: View {
 @MainActor
 private struct PracticeHost: UIViewControllerRepresentable {
     let subject: ConceptSubject
+    let singleQueue: Bool
     let leave: () -> Void
     let learning: (Bool) -> Void
 
     func makeUIViewController(context: Context) -> PracticeController {
-        PracticeController(subject: subject, leave: leave, learning: learning)
+        PracticeController(subject: subject, singleQueue: singleQueue, leave: leave, learning: learning)
     }
 
     func updateUIViewController(_ controller: PracticeController, context: Context) {}
@@ -54,10 +56,10 @@ private final class PracticeResources: NSObject, WKURLSchemeHandler {
         super.init()
     }
 
-    func home(_ subject: ConceptSubject) -> URL? {
+    func home(_ subject: ConceptSubject, singleQueue: Bool = false) -> URL? {
         guard subject == .mechanics || subject == .circuit else { return nil }
         var u = URLComponents()
-        u.scheme = Self.scheme; u.host = "bundle"; u.path = "/course.html"
+        u.scheme = Self.scheme; u.host = "bundle"; u.path = singleQueue ? "/single-practice.html" : "/course.html"
         u.queryItems = [URLQueryItem(name: "nativeSubject", value: subject.rawValue)]
         return u.url
     }
@@ -139,6 +141,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
     }
     private enum Move { case next, back, home }
     private let subject: ConceptSubject
+    private let singleQueue: Bool
     private let leave: () -> Void
     private let learning: (Bool) -> Void
     private let resources = PracticeResources()
@@ -158,8 +161,8 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
     private var documentReady = false
     private var cardOpen = false
 
-    init(subject: ConceptSubject, leave: @escaping () -> Void, learning: @escaping (Bool) -> Void) {
-        self.subject = subject; self.leave = leave; self.learning = learning
+    init(subject: ConceptSubject, singleQueue: Bool, leave: @escaping () -> Void, learning: @escaping (Bool) -> Void) {
+        self.subject = subject; self.singleQueue = singleQueue; self.leave = leave; self.learning = learning
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("Use init(subject:leave:)") }
@@ -185,6 +188,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
         NSLayoutConstraint.activate([layout.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
             layout.trailingAnchor.constraint(equalTo: safe.trailingAnchor), layout.topAnchor.constraint(equalTo: safe.topAnchor),
             layout.bottomAnchor.constraint(equalTo: safe.bottomAnchor),tools.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)])
+        if singleQueue { layout.removeArrangedSubview(tools); tools.removeFromSuperview() }
         notice.textAlignment = .center; notice.numberOfLines = 0; notice.textColor = .label
         notice.font = .preferredFont(forTextStyle: .body); notice.backgroundColor = .systemBackground
         notice.adjustsFontForContentSizeCategory = true
@@ -202,7 +206,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
             w.allowsLinkPreview = false; w.allowsBackForwardNavigationGestures = false
             w.navigationDelegate = self; w.uiDelegate = self
             web = w; install(w)
-            guard let url = resources.home(subject) else { fail("这门课没有原题练习入口。", terminal: true); return }
+            guard let url = resources.home(subject, singleQueue: singleQueue) else { fail("这门课没有原题练习入口。", terminal: true); return }
             open(Place(url: url), move: .home)
         } catch { fail("无法读取原题练习记录，未开始本次练习。\n\(error.localizedDescription)", terminal: true) }
     }
@@ -302,7 +306,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
               message.frameInfo.isMainFrame, let source = message.frameInfo.request.url,
               let file = resources.page(source), ["html","htm"].contains(file.pathExtension.lowercased()) else { return }
         if message.name == "originalPracticeLearning" {
-            guard file.lastPathComponent == "course.html", let here = position?.url,
+            guard ["course.html","single-practice.html"].contains(file.lastPathComponent), let here = position?.url,
                   resources.page(here) == file, let value = message.body as? Bool else { return }
             cardOpen = value
             if documentReady { setLearning(value) }
@@ -349,7 +353,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
             guard let self, navigation === self.activeNavigation, !self.blocked else { return }
             if (value as? Bool) == true {
                 webView.isUserInteractionEnabled = true; self.documentReady = true
-                self.setLearning(f.lastPathComponent == "course.html" ? self.cardOpen : true)
+                self.setLearning(["course.html","single-practice.html"].contains(f.lastPathComponent) ? self.cardOpen : true)
             }
             else { self.fail("原题练习的记录保护未能启动，已停止作答。请退出后重开。", terminal: true) }
         }
