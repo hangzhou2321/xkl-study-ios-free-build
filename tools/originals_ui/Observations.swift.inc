@@ -30,7 +30,7 @@ private enum WKOnlyDiagnostic {
         }
     }
 }
-@MainActor fileprivate extension PracticeController {
+@MainActor private extension PracticeController {
     var diagnosticWeb: WKWebView? { web }
     var diagnosticReady: Bool { documentReady }
     var diagnosticNotice: String { notice.isHidden ? "" : (notice.text ?? "") }
