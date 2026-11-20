@@ -116,6 +116,10 @@ final class RefinedMemoryStore: ObservableObject {
         let group: RefinedMemoryCourse.Group, row: RefinedMemoryCourse.Row, position: Int
         var id: String { row.ref }
     }
+    private struct ReferenceScope: Decodable {
+        let subject, courseSHA256: String
+        let refs: [String]
+    }
     private struct Disk: Codable {
         let format: String, subject: ConceptSubject, courseSHA256: String
         let record: ProfessionalRecallRecord
@@ -139,7 +143,7 @@ final class RefinedMemoryStore: ObservableObject {
          recentSupplementData: Data? = nil,
          previousSupplementData: Data? = nil,
          earlierSupplementData: Data? = nil,
-         wordingData: Data? = nil,
+         wordingData: Data? = nil, referenceScopeData: Data? = nil,
          now: Date = Date(), writer: @escaping (Data,URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.writer = writer
         let base = baseDirectory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -271,6 +275,33 @@ final class RefinedMemoryStore: ObservableObject {
                 _ = try parsed.validatedDeck(for:subject)
                 supplementRefs.formUnion(refs)
             }
+            var scopeData = referenceScopeData
+            if courseData == nil, scopeData == nil,
+               let url = Bundle.main.url(forResource:subject.rawValue+"-reference-scope",withExtension:"json",subdirectory:"RefinedMemory") {
+                scopeData = try Self.read(url,limit:1_048_576)
+            }
+            if let scopeData {
+                let scope = try JSONDecoder().decode(ReferenceScope.self,from:scopeData)
+                let refs = Set(scope.refs)
+                guard scope.subject == subject.rawValue, scope.courseSHA256 == courseSHA,
+                      refs.count == scope.refs.count,
+                      refs.isSubset(of:Set(ordered.map { $0.1.ref })) else {
+                    throw ExamError.invalid("参考内容目录与本机课程不符。")
+                }
+                ordered.removeAll { refs.contains($0.1.ref) }
+                let grouped = Dictionary(grouping:ordered,by: { $0.0.key })
+                parsed = RefinedMemoryCourse(subject:parsed.subject,baseSHA256:parsed.baseSHA256,
+                    cards:parsed.cards.compactMap { group in
+                        grouped[group.key].map {
+                            .init(key:group.key,title:group.title,chapter:group.chapter,evidence:group.evidence,rows:$0.map { $0.1 })
+                        }
+                    })
+                _ = try parsed.validatedDeck(for:subject)
+                supplementRefs.subtract(refs)
+            }
+            let activeIDs = Set(ordered.map { namespace+$0.1.ref })
+            let learningDeck = RecallDeck(subject:subject,bankID:deck.bankID,cards:deck.cards.filter { activeIDs.contains($0.id) })
+            let activeAppendOrder = RecallDeck(subject:subject,bankID:deck.bankID,cards:appendOrder.cards.filter { activeIDs.contains($0.id) })
             entries = ordered.enumerated()
                 .map { Entry(group:$0.element.0,row:$0.element.1,position:$0.offset+1) }
             index = Dictionary(uniqueKeysWithValues:entries.enumerated().map { (namespace+$0.element.id,$0.offset) })
@@ -286,40 +317,43 @@ final class RefinedMemoryStore: ObservableObject {
                 guard saved.format == Self.format, saved.subject == subject else {
                     throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。")
                 }
-                if saved.courseSHA256 == courseSHA {
-                    let savedDeck = try Self.inSavedOrder(deck, record:saved.record)
-                    engine = try ProfessionalRecallEngine(deck:savedDeck,record:saved.record)
-                    committedSHA = StudySHA256.hex(existing)
-                } else {
-                    let oldDeck: RecallDeck
-                    if extra != nil, saved.courseSHA256 == originalSHA { oldDeck = originalDeck }
-                    else if let prior = previousRegistries[saved.courseSHA256] { oldDeck = prior }
-                    else { throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。") }
-                    let savedDeck = try Self.inSavedOrder(oldDeck, record:saved.record)
-                    let updated = try ProfessionalRecallEngine(deck:savedDeck,record:saved.record)
-                    try updated.reconcile(to:appendOrder,now:now)
-                    let backup = directory.appendingPathComponent("before-additions-"+StudySHA256.hex(existing)+".json")
+                let sameCourse = saved.courseSHA256 == courseSHA
+                let oldDeck: RecallDeck
+                if sameCourse { oldDeck = deck }
+                else if extra != nil, saved.courseSHA256 == originalSHA { oldDeck = originalDeck }
+                else if let prior = previousRegistries[saved.courseSHA256] { oldDeck = prior }
+                else { throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。") }
+                let savedDeck = try Self.inSavedOrder(oldDeck,record:saved.record)
+                let updated = try ProfessionalRecallEngine(deck:savedDeck,record:saved.record)
+                let changedScope = scopeData != nil && Set(updated.activeCardIDs) != activeIDs
+                if !sameCourse || changedScope {
+                    try updated.reconcile(to:activeAppendOrder,retaining:appendOrder.cards,now:now)
+                    let label = sameCourse ? "before-scope-" : "before-additions-"
+                    let backup = directory.appendingPathComponent(label+StudySHA256.hex(existing)+".json")
                     if !names.contains(backup.lastPathComponent) { try writer(existing,backup) }
                     guard try Self.read(backup) == existing, try Self.read(currentURL) == existing else {
-                        throw ExamError.invalid("增补前的精讲记录未能核对。")
+                        throw ExamError.invalid("调整课程前的精讲记录未能核对。")
                     }
                     let bytes = try encode(updated.record)
                     try replaceCurrent(with:bytes,previous:existing)
                     committedSHA = StudySHA256.hex(bytes)
-                    engine = updated
-                }
+                } else { committedSHA = StudySHA256.hex(existing) }
+                engine = updated
             } else {
                 guard names.isEmpty else { throw ExamError.invalid("已有新版学习目录但缺少完整记录，未新建或覆盖。") }
                 let fresh = try ProfessionalRecallEngine.fresh(deck:deck,now:now)
+                if activeIDs.count != deck.cards.count {
+                    try fresh.reconcile(to:learningDeck,retaining:deck.cards,now:now)
+                }
                 let bytes = try encode(fresh.record)
                 try writer(bytes,currentURL)
                 guard try Self.read(currentURL) == bytes else { throw ExamError.invalid("新版初始记录写后核验失败。") }
                 committedSHA = StudySHA256.hex(bytes)
                 engine = fresh
             }
-            if let slots = engine?.record.cardIDs, slots != deck.cards.map(\.id) {
+            if let slots = engine?.record.cardIDs, slots != learningDeck.cards.map(\.id) {
                 let byID = Dictionary(uniqueKeysWithValues:slots.enumerated().map { ($0.element,UInt16($0.offset)) })
-                teachingSlots = try deck.cards.map { item in
+                teachingSlots = try learningDeck.cards.map { item in
                     guard let slot = byID[item.id] else { throw ExamError.invalid("原学习记录和教学小问不能对应。") }
                     return slot
                 }
