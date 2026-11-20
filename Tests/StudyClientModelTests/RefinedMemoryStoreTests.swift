@@ -255,5 +255,46 @@ final class RefinedMemoryStoreTests: XCTestCase {
         XCTAssertEqual(grown.current?.id,"unit#brief");XCTAssertEqual(grown.presentation?.revealed,false)
         XCTAssertEqual(grown.familiarRefs,base.familiarRefs);XCTAssertTrue(grown.engine?.record.attempts.isEmpty == true)
     }
+
+    @MainActor func testVerifiedPreviousSupplementResumesItsRecordedSlotsAndGrades() async throws {
+        let root=try workspace(), raw=try twoGroups()
+        func overlay(_ rows:[[String:Any]]) throws -> Data {
+            try JSONSerialization.data(withJSONObject:["subject":"power","baseSHA256":StudySHA256.hex(raw),"additions":rows],options:.sortedKeys)
+        }
+        func addition(_ suffix:String)->[String:Any] {
+            ["group":"unit","source":"合成证据","proof":["sourcePage":3],
+             "row":["ref":"unit#"+suffix,"q":"检查"+suffix,"a":"比较条件","kind":"判断","how":"B","note":"","colors":[]] as [String:Any]]
+        }
+        let first=addition("before"), second=addition("after"), oldExtra=try overlay([first]), newExtra=try overlay([first,second])
+        let original=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now);ready(original)
+        let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:oldExtra,now:now);ready(old)
+        old.start(now:now)
+        old.markFamiliar(token:try XCTUnwrap(old.presentation).id,now:now)
+        let next=try XCTUnwrap(old.presentation)
+        old.reveal(token:next.id,now:now);old.grade(remembered:false,token:next.id,now:now);ready(old)
+        let pending=try XCTUnwrap(old.presentation)
+        old.reveal(token:pending.id,now:now)
+        let file=pointer(root,"power"), before=try Data(contentsOf:file), oldRecord=try XCTUnwrap(old.engine).record
+        var changedSource=first;changedSource["proof"]=["sourcePage":4]
+        var alteredBytes=oldExtra;alteredBytes.append(0x0a)
+        for (resource,prior) in [(try overlay([changedSource,second]),oldExtra),(try overlay([second,first]),oldExtra),
+                                 (try overlay([second]),oldExtra),(newExtra,alteredBytes)] {
+            let refused=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:resource,previousSupplementData:prior,now:now)
+            XCTAssertTrue(refused.blocked);XCTAssertEqual(try Data(contentsOf:file),before)
+        }
+        let updated=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:newExtra,previousSupplementData:oldExtra,now:now)
+        ready(updated)
+        XCTAssertEqual(updated.engine?.record.cardIDs,oldRecord.cardIDs+["refined-power:unit#after"])
+        XCTAssertEqual(updated.presentation,old.presentation);XCTAssertEqual(updated.familiarRefs,old.familiarRefs)
+        XCTAssertEqual(updated.engine?.record.attempts,oldRecord.attempts);XCTAssertEqual(updated.firstPassRemaining,old.firstPassRemaining+1)
+        XCTAssertEqual(updated.engine?.record.contentChanges?.last?.beforeSnapshot,oldRecord.snapshot)
+        let backup=file.deletingLastPathComponent().appendingPathComponent("before-additions-"+StudySHA256.hex(before)+".json")
+        XCTAssertEqual(try Data(contentsOf:backup),before)
+        let checkpoint=try Data(contentsOf:file)
+        let reopened=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:newExtra,previousSupplementData:oldExtra,now:now)
+        ready(reopened);XCTAssertEqual(try Data(contentsOf:file),checkpoint)
+        reopened.grade(remembered:true,token:pending.id,now:now);ready(reopened)
+        XCTAssertEqual(reopened.engine?.record.attempts.count,oldRecord.attempts.count+1)
+    }
 }
 #endif

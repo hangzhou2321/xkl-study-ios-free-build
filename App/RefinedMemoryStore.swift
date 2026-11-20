@@ -133,6 +133,7 @@ final class RefinedMemoryStore: ObservableObject {
     private var namespace: String { "refined-" + subject.rawValue + ":" }
 
     init(subject: ConceptSubject, baseDirectory: URL? = nil, courseData: Data? = nil, supplementData: Data? = nil,
+         previousSupplementData: Data? = nil,
          now: Date = Date(), writer: @escaping (Data,URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.writer = writer
         let base = baseDirectory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -156,10 +157,17 @@ final class RefinedMemoryStore: ObservableObject {
             var parsed = original, deck = originalDeck, appendOrder = originalDeck
             var ordered = original.cards.flatMap { group in group.rows.map { (group,$0) } }
             var extra = supplementData
+            var previous = previousSupplementData
+            var previousRegistry: (sha:String, deck:RecallDeck)?
             if courseData == nil, extra == nil,
                let url = Bundle.main.url(forResource:subject.rawValue+"-additions",withExtension:"json",subdirectory:"RefinedMemory") {
                 extra = try Self.read(url,limit:4*1024*1024)
             }
+            if courseData == nil, previous == nil,
+               let url = Bundle.main.url(forResource:subject.rawValue+"-previous-additions",withExtension:"json",subdirectory:"RefinedMemory") {
+                previous = try Self.read(url,limit:4*1024*1024)
+            }
+            guard previous == nil || extra != nil else { throw ExamError.invalid("缺少新版本增补课程。") }
             if let extra {
                 let supplement = try JSONDecoder().decode(RefinedMemoryCourse.Supplement.self,from:extra)
                 let revisions = supplement.revisions ?? []
@@ -201,6 +209,11 @@ final class RefinedMemoryStore: ObservableObject {
                 let originalItems = Dictionary(uniqueKeysWithValues:originalDeck.cards.map { ($0.id,$0) })
                 deck = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:merged.cards.map { originalItems[$0.id] ?? $0 })
                 appendOrder = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:originalDeck.cards+appended)
+                if let previous {
+                    let count = try Self.validatePrevious(previous, current:extra, subject:subject, base:originalSHA)
+                    previousRegistry = (StudySHA256.hex(previous),RecallDeck(subject:subject,bankID:originalDeck.bankID,
+                        cards:originalDeck.cards + appended.prefix(count)))
+                }
                 supplementRefs = Set(supplement.additions.map { $0.row.ref }).union(unique)
                 courseSHA = StudySHA256.hex(extra)
             }
@@ -223,8 +236,12 @@ final class RefinedMemoryStore: ObservableObject {
                     let savedDeck = saved.record.cardIDs == deck.cards.map(\.id) ? deck : appendOrder
                     engine = try ProfessionalRecallEngine(deck:savedDeck,record:saved.record)
                     committedSHA = StudySHA256.hex(existing)
-                } else if extra != nil, saved.courseSHA256 == originalSHA {
-                    let updated = try ProfessionalRecallEngine(deck:originalDeck,record:saved.record)
+                } else {
+                    let oldDeck: RecallDeck
+                    if extra != nil, saved.courseSHA256 == originalSHA { oldDeck = originalDeck }
+                    else if let prior = previousRegistry, saved.courseSHA256 == prior.sha { oldDeck = prior.deck }
+                    else { throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。") }
+                    let updated = try ProfessionalRecallEngine(deck:oldDeck,record:saved.record)
                     try updated.reconcile(to:appendOrder,now:now)
                     let backup = directory.appendingPathComponent("before-additions-"+StudySHA256.hex(existing)+".json")
                     if !names.contains(backup.lastPathComponent) { try writer(existing,backup) }
@@ -235,7 +252,7 @@ final class RefinedMemoryStore: ObservableObject {
                     try replaceCurrent(with:bytes,previous:existing)
                     committedSHA = StudySHA256.hex(bytes)
                     engine = updated
-                } else { throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。") }
+                }
             } else {
                 guard names.isEmpty else { throw ExamError.invalid("已有新版学习目录但缺少完整记录，未新建或覆盖。") }
                 let fresh = try ProfessionalRecallEngine.fresh(deck:deck,now:now)
@@ -277,6 +294,22 @@ final class RefinedMemoryStore: ObservableObject {
     var canPostpone: Bool { engine?.canPostpone ?? false }
     func stats(on date: Date = Date()) -> ProfessionalRecallStats? {
         try? engine?.stats(on:UInt32(ConceptCalendar.studyDay(date)))
+    }
+
+    private static func validatePrevious(_ previous:Data, current:Data, subject:ConceptSubject, base:String) throws -> Int {
+        // Compare entire private rows, including any provenance fields unknown to this binary.
+        // Formatting is immaterial here. The saved journal must separately match the exact
+        // hash of the previous resource, and its stable slot sequence is verified on restore.
+        let document = try JSONDecoder().decode(RefinedMemoryCourse.Supplement.self,from:previous)
+        guard document.subject == subject.rawValue, document.baseSHA256 == base,
+              document.revisions?.isEmpty != false, !document.additions.isEmpty,
+              let before = try JSONSerialization.jsonObject(with:previous) as? [String:Any],
+              let after = try JSONSerialization.jsonObject(with:current) as? [String:Any],
+              let old = before["additions"] as? [NSDictionary], let next = after["additions"] as? [NSDictionary],
+              next.starts(with:old,by:{ $0.isEqual($1) }) else {
+            throw ExamError.invalid("上版增补与本版原有小问不逐项相符。")
+        }
+        return old.count
     }
 
     private static func read(_ url:URL, limit:Int = 128*1024*1024) throws -> Data {
