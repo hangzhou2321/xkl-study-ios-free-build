@@ -1,0 +1,26 @@
+name: Four-subject synthetic native memory UI
+on:
+  push:
+    branches: ["codex/b83-refined-native-smoke"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      RELEASE: f7ecb0fe44e8c0b47fa4279e1bb40dfc6f84d0e6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Fetch exact release source into throwaway simulator checkout
+        run: |
+          git fetch --no-tags --depth=1 origin "$RELEASE"
+          git worktree add --detach "$RUNNER_TEMP/release" "$RELEASE"
+      - name: Exercise actual SwiftUI subject and edition switches with synthetic bundles
+        run: python3 -u tools/refined_smoke/run.py "$RUNNER_TEMP/release" "$RELEASE" "$RUNNER_TEMP/refined-output"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-memory-simulator
+          path: ${{ runner.temp }}/refined-output
+          retention-days: 2
