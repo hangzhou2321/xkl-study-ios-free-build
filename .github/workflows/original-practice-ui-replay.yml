@@ -1,0 +1,32 @@
+name: Replay full original-practice app on Apple Simulator
+on:
+  push:
+    branches: [codex/native-originals-full-app-replay-b82]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  full-app-ui-replay:
+    timeout-minutes: 40
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: tests
+          sparse-checkout: tools/originals_ui
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: source
+          ref: 8f2fdc67696ece384f8f6abca0a7227155e84bb0
+          persist-credentials: false
+      - name: Install pinned full synthetic Debug app; use real taps, native Back and cold launch on both subjects
+        env:
+          ARTIFACT_TOKEN: ${{ github.token }}
+        run: python3 tests/tools/originals_ui/replay.py source build/verified-replay
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: full-app-originals-synthetic-ui-replay
+          path: build/verified-replay/
+          retention-days: 3
