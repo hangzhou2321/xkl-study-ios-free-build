@@ -10,6 +10,10 @@ struct StudyHomeView: View {
     @ObservedObject var handbookPower: HandbookWordStore
     @ObservedObject var handbookCircuit: HandbookWordStore
     @ObservedObject var handbookMechanics: HandbookWordStore
+    @ObservedObject var refinedComputer: RefinedMemoryStore
+    @ObservedObject var refinedPower: RefinedMemoryStore
+    let useRefinedComputer: Bool
+    let useRefinedPower: Bool
     @ObservedObject var flow: StudyFlowStore
     @ObservedObject var effectiveTime: EffectiveStudyTimeStore
     @ObservedObject var hourly: HourlyStudyTracker
@@ -34,7 +38,7 @@ struct StudyHomeView: View {
 
     private var cardsRemaining: [String: Int] {
         var subjects = Dictionary(uniqueKeysWithValues: firstPassByArea.compactMap { (area, count) in
-            [.computer, .power, .circuit, .mechanics].contains(area) ? (area.rawValue, count) : nil
+            [.computer, .power].contains(area) ? (area.rawValue, count) : nil
         })
         if math.guide != nil { subjects["math"] = math.formulaFirstPassIDs.count }
         return subjects
@@ -44,6 +48,12 @@ struct StudyHomeView: View {
         if let chosen = actions.first(where: { $0.area == chosenArea }) { return chosen }
         let last = lastArea ?? flow.state.lastArea.flatMap { EffectiveStudyArea(rawValue: $0.rawValue) }
         return StudyHomeAction.next(in: actions, lastArea: last)
+    }
+
+    private var paceArea: EffectiveStudyArea? {
+        guard !flow.state.needsBreak, let area = nextAction?.area,
+              area != .circuit, area != .mechanics else { return nil }
+        return area
     }
 
     var body: some View {
@@ -59,7 +69,7 @@ struct StudyHomeView: View {
                         }
                         .pickerStyle(.menu)
                     }
-                    HourlyStudyBoard(tracker: hourly, subject: flow.state.needsBreak ? nil : nextAction?.area,
+                    HourlyStudyBoard(tracker: hourly, subject: paceArea,
                                      unit: nextAction?.area == .publicQuestions || nextAction?.area == .math ? "题" : "张",
                                      unseen: nextAction.flatMap { firstPassByArea[$0.area] },
                                      remainingFirstPass: cardsRemaining, enabled: !flow.state.needsBreak,
@@ -69,6 +79,16 @@ struct StudyHomeView: View {
                                          choosingWindow = window
                                      })
                     if let next = nextAction, !flow.state.needsBreak { nextCard(next) }
+                    if !flow.state.needsBreak {
+                        HStack {
+                            Button("电路解题课") { launch(.circuit, .standard) }
+                            Spacer()
+                            Button("力学解题课") { launch(.mechanics, .standard) }
+                        }
+                        .font(.subheadline).buttonStyle(.bordered)
+                        Text("电路、力学的原题进度在解题课内查看，不计入背卡首轮张数。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     EffectiveStudyTimeSummary(store: effectiveTime)
                         .padding(20)
                         .background(Color(uiColor: .secondarySystemGroupedBackground),
@@ -118,6 +138,10 @@ struct StudyHomeView: View {
         .onChange(of: visible) { _, active in
             if active { refresh() }
         }
+        .onChange(of: useRefinedComputer) { _, _ in if visible { refresh() } }
+        .onChange(of: useRefinedPower) { _, _ in if visible { refresh() } }
+        .onChange(of: refinedComputer.presentation?.id) { _, _ in if visible { refresh() } }
+        .onChange(of: refinedPower.presentation?.id) { _, _ in if visible { refresh() } }
         .onChange(of: day) { _, _ in if visible { refresh() } }
         .onChange(of: hourly.schedule?.deadline) { _, _ in if visible { refresh() } }
     }
@@ -173,17 +197,28 @@ struct StudyHomeView: View {
         switch action.area {
         case .vocabulary: return action.hasPosition ? "继续当前单词" : "先背 1 个单词"
         case .publicQuestions, .math: return action.hasPosition ? "继续当前题" : "先做 1 题"
-        case .computer, .power, .circuit, .mechanics: return action.hasPosition ? "继续当前卡片" : "先背 1 张卡"
+        case .circuit, .mechanics: return "进入解题课"
+        case .computer, .power: return action.hasPosition ? "继续当前卡片" : "先背 1 张卡"
         }
     }
 
     private func detail(for action: StudyHomeAction) -> String? {
+        if action.area == .circuit || action.area == .mechanics { return "讲义例题、原题与纸上练习" }
+        if let refined = selectedRefined(action.area) {
+            return refined.engine?.currentItem?.card.prompt ?? (action.due > 0 ? "新版逐问背卡 · 先复习到期内容" : "新版逐问背卡")
+        }
         if action.hasPosition {
             if let card = handbook(for: action.area)?.engine?.currentCard { return card.title }
             if action.area == .vocabulary, let word = store.currentWord { return word.word }
             if action.area == .publicQuestions && exams.isShowingResult { return "接着看刚才的解析" }
         }
         return action.due > 0 ? "先复习到期内容" : nil
+    }
+
+    private func selectedRefined(_ area: EffectiveStudyArea) -> RefinedMemoryStore? {
+        if area == .computer && useRefinedComputer { return refinedComputer }
+        if area == .power && useRefinedPower { return refinedPower }
+        return nil
     }
 
     private func handbook(for area: EffectiveStudyArea) -> HandbookWordStore? {
@@ -233,6 +268,20 @@ struct StudyHomeView: View {
         }
 
         for area in EffectiveStudyArea.allCases {
+            if area == .circuit || area == .mechanics {
+                // The native shelf opens the bundled question course. Its WebKit history
+                // is measured there; archived handbook card counts are a different unit.
+                options.append(.init(area: area, hasPosition: false, due: 0))
+                continue
+            }
+            if let refined = selectedRefined(area) {
+                guard !refined.blocked, let stats = refined.stats(on: date) else { continue }
+                firstPass[area] = refined.firstPassRemaining
+                if refined.presentation != nil || stats.due > 0 || stats.unintroduced > 0 {
+                    options.append(.init(area: area, hasPosition: refined.presentation != nil, due: stats.due))
+                }
+                continue
+            }
             guard let store = handbook(for: area), !store.blocked, let engine = store.engine else { continue }
             let stats = engine.stats(on: date)
             firstPass[area] = engine.firstPassRemaining(includingShortBook: hourly.schedule != nil)

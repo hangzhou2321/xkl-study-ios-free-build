@@ -8,13 +8,15 @@ modelSources += ["HandbookCards.swift", "HandbookRecallCue.swift", "HandbookWord
 modelSources += ["PublicQuestionDualFSRS.swift", "PublicDualLegacyCapture.swift", "PublicPocketMigration.swift"]
 modelSources += ["StudyNovel.swift", "HourlyStudyPlan.swift", "CardLookupSession.swift", "FirstPassSchedule.swift", "DeadlinePace.swift"]
 modelSources += ["OriginalPracticeStorage.swift"]
-var modelExcludes = ["OriginalPracticeView.swift", "StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
+var modelExcludes = ["RefinedMemoryView.swift", "RefinedMemoryStore.swift", "OriginalPracticeView.swift", "StudyApp.swift", "StudyStore.swift", "BluetoothLink.swift", "DurableFile.swift",
     "Info.plist", "Assets.xcassets", "ExamStore.swift", "ExamView.swift", "ConceptStore.swift", "ConceptView.swift",
     "StudyFlow.swift", "StudyHomeView.swift", "ConceptGuidanceView.swift", "ConceptDiagramView.swift", "ConceptSyllabusTreeView.swift", "RecallStore.swift", "RecallView.swift", "MathStore.swift", "MathView.swift", "MathReader.swift", "MathExperienceStore.swift", "MathExperienceView.swift", "MathRichTextView.swift", "MathRenderer", "ProfessionalStudyPlanView.swift", "ProfessionalRecallStore.swift", "ProfessionalRecallView.swift", "KnowledgeLearningStore.swift", "KnowledgeLearningView.swift"]
 modelExcludes += ["HandbookWordStore.swift", "HandbookCardStore.swift", "HandbookHighlightStore.swift", "HandbookHighlightView.swift", "HandbookCardView.swift", "HandbookCardPreview.swift", "KnowledgeExposureLedger.swift", "ProfessionalQuestionStore.swift", "ProfessionalQuestionView.swift", "ProfessionalQuestionPreview.swift"]
 modelExcludes += ["EffectiveStudyTime.swift", "EffectiveStudyScreen.swift", "EffectiveStudyTimeView.swift", "EffectiveStudyTimePreview.swift", "StudyActivityObserver.swift"]
 modelExcludes += ["StudyNovelStore.swift", "StudyNovelView.swift", "HourlyStudyUI.swift", "StudyPaceActivity.swift", "StudyPaceActivityAttributes.swift", "CardLookupView.swift"]
 #if os(macOS)
+modelSources += ["RefinedMemoryStore.swift"]
+modelExcludes.removeAll { $0 == "RefinedMemoryStore.swift" }
 // Exercise real import/persistence against temporary directories on the build host.
 modelSources += ["HandbookCardStore.swift", "HandbookWordStore.swift", "HandbookHighlightStore.swift"]
 modelExcludes.removeAll { ["HandbookCardStore.swift", "HandbookWordStore.swift", "HandbookHighlightStore.swift"].contains($0) }

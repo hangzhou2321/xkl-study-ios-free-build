@@ -75,6 +75,11 @@ struct RootView: View {
     @StateObject private var handbookPower = HandbookWordStore(subject: .power)
     @StateObject private var handbookCircuit = HandbookWordStore(subject: .circuit)
     @StateObject private var handbookMechanics = HandbookWordStore(subject: .mechanics)
+    @StateObject private var refinedComputer = RefinedMemoryStore(subject: .computer)
+    @StateObject private var refinedPower = RefinedMemoryStore(subject: .power)
+    @AppStorage("professional.refined.computer") private var useRefinedComputer = true
+    @AppStorage("professional.refined.power") private var useRefinedPower = true
+    @State private var requestedOriginalSubject: ConceptSubject?
     @StateObject private var studyNovel = StudyNovelStore()
     @StateObject private var professionalComputer = ProfessionalQuestionStore(subject: .computer)
     @StateObject private var professionalPower = ProfessionalQuestionStore(subject: .power)
@@ -121,7 +126,8 @@ struct RootView: View {
     private var homeTab: some View {
             StudyHomeView(store: store, exams: exams, math: mathExperience,
                           handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
-                          handbookMechanics: handbookMechanics,
+                          handbookMechanics: handbookMechanics, refinedComputer: refinedComputer, refinedPower: refinedPower,
+                          useRefinedComputer: useRefinedComputer, useRefinedPower: useRefinedPower,
                           flow: flow, effectiveTime: effectiveTime, hourly: hourly,
                           importing: $importing, visible: selectedTab == 5 && scenePhase == .active,
                           lastArea: EffectiveStudyArea(rawValue: lastEffectiveStudyArea),
@@ -155,7 +161,7 @@ struct RootView: View {
                                     onEffectiveOverlayChanged: { learning, blocked in
                                         professionalEffectiveContentOverlay = learning
                                         professionalEffectiveBlockedOverlay = blocked
-                                        syncEffectiveVisibility()
+                                        trackStudyVisibility()
                                     },
                                     objectiveComputer: professionalComputer, objectivePower: professionalPower,
                                     handbookComputer: handbookComputer, handbookPower: handbookPower, handbookCircuit: handbookCircuit,
@@ -163,7 +169,9 @@ struct RootView: View {
                                     contentDisabled: flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused && (professionalPracticing || professionalRecalling),
                                     segmentBar: AnyView(segmentBar),
                                     fullScreenEnabled: handbookFullScreenBinding,
-                                    novelStore: studyNovel, onOpenNovel: openNovel, onLookup: startCardLookup)
+                                    novelStore: studyNovel, onOpenNovel: openNovel, onLookup: startCardLookup,
+                                    refinedComputer: refinedComputer, refinedPower: refinedPower,
+                                    requestedOriginalSubject: $requestedOriginalSubject)
                 .toolbar(handbookFullScreenActive ? .hidden : .visible, for: .tabBar)
                 .tabItem { Label("专业课", systemImage: "books.vertical") }
                 .tag(4)
@@ -191,6 +199,8 @@ struct RootView: View {
         .onChange(of: showingStudyNovel) { _, _ in trackStudyVisibility() }
         .onChange(of: handbookComputer.engine?.record.attempts.last?.id) { _, _ in syncNovel() }
         .onChange(of: handbookPower.engine?.record.attempts.last?.id) { _, _ in syncNovel() }
+        .onChange(of: refinedComputer.engine?.record.attempts.last?.id) { _, _ in syncNovel() }
+        .onChange(of: refinedPower.engine?.record.attempts.last?.id) { _, _ in syncNovel() }
         .onChange(of: exams.novelAnswerSource) { _, _ in syncNovel() }
         .onChange(of: exams.novelAnswerHead) { _, _ in syncNovel() }
         .background(StudyActivityObserver {
@@ -248,7 +258,33 @@ struct RootView: View {
         if let engine = handbookPower.engine, !engine.usesDualFSRS, !handbookPower.blocked {
             result["power"] = engine.record.attempts.map { StudyNovelActivity($0, subject: "power") }
         }
+        // Keep both editions' append-only cursors, even when the other one is selected.
+        // Read only durable self-assessments, never presentations, flips or familiar marks.
+        for (source, refined) in [("refined.computer", refinedComputer), ("refined.power", refinedPower)] {
+            if !refined.blocked, let engine = refined.engine {
+                result[source] = engine.record.attempts.map { StudyNovelActivity($0, subject: source) }
+            }
+        }
         return result
+    }
+
+    private func selectedRefined(_ course: ConceptSubject) -> RefinedMemoryStore? {
+        switch course {
+        case .computer: return useRefinedComputer ? refinedComputer : nil
+        case .power: return useRefinedPower ? refinedPower : nil
+        case .circuit, .mechanics: return nil
+        }
+    }
+
+    private var refinedVisible: Bool {
+        guard let refined = selectedRefined(subject) else { return false }
+        return professionalRecalling && professionalEffectiveContentOverlay && !professionalEffectiveBlockedOverlay
+            && !refined.blocked && refined.presentation != nil
+    }
+
+    private var originalProblemVisible: Bool {
+        (subject == .circuit || subject == .mechanics) && !professionalRecalling &&
+            professionalEffectiveContentOverlay && !professionalEffectiveBlockedOverlay
     }
 
     private var tabVisibilityContent: some View {
@@ -317,6 +353,8 @@ struct RootView: View {
                       let area = EffectiveStudyArea(rawValue: answer.area),
                       visibleEffectiveArea == area else { return }
                 if let active = hourly.active, active.accepts(answer.area) {
+                    // The deadline counts study cards, not the Web course's original questions.
+                    guard active.firstPassOnly != true || (area != .circuit && area != .mechanics) else { return }
                     hourly.record(answer)
                 } else { hourly.ordinaryInteraction(area: area, now: answer.at) }
             }
@@ -398,7 +436,8 @@ struct RootView: View {
                 selectedTab = 5
             }
         }
-        let overlay = importing || showingStudyNovel || lookupRecap != nil || (selectedTab == 3 && examOverlay) || (selectedTab == 4 && professionalOverlay)
+        let professionalObscured = professionalOverlay && !refinedVisible && !originalProblemVisible
+        let overlay = importing || showingStudyNovel || lookupRecap != nil || (selectedTab == 3 && examOverlay) || (selectedTab == 4 && professionalObscured)
         let visible = scenePhase == .active && !overlay && currentPracticeArea == flow.state.activeArea
             && currentPracticeArea != nil
         flow.setVisible(visible)
@@ -431,10 +470,14 @@ struct RootView: View {
         screen.professionalLearningOverlay = professionalEffectiveContentOverlay
         screen.professionalBlocked = professionalEffectiveBlockedOverlay
         screen.professionalPaused = flow.state.activeArea == selectedProfessionalArea && flow.state.isPaused
-        if professionalRecalling {
-            let handbook: HandbookWordStore
-            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit; case .mechanics: handbook = handbookMechanics }
-            screen.professionalVisible = handbook.engine?.presentation != nil
+        if selectedRefined(subject) != nil {
+            // A retained legacy presentation or an open directory is not the new study face.
+            screen.professionalLearningOverlay = false
+            screen.professionalVisible = refinedVisible
+        } else if originalProblemVisible {
+            screen.professionalLearningOverlay = !screen.professionalPaused
+        } else if professionalRecalling {
+            screen.professionalVisible = handbookStore(for: subject).engine?.presentation != nil
         } else if professionalPracticing, subject == .computer || subject == .power {
             let selected = subject == .computer ? professionalComputer : professionalPower
             screen.professionalVisible = selected.engine?.presentation != nil
@@ -475,10 +518,10 @@ struct RootView: View {
     private var currentPracticeArea: StudyArea? {
         if selectedTab == 0, store.sessionStarted, store.currentWord != nil { return .vocabulary }
         if selectedTab == 3, examPracticing, exams.currentQuestion != nil { return .publicQuestions }
+        if selectedTab == 4, originalProblemVisible { return selectedProfessionalArea }
         if selectedTab == 4, professionalRecalling {
-            let handbook: HandbookWordStore
-            switch subject { case .computer: handbook = handbookComputer; case .power: handbook = handbookPower; case .circuit: handbook = handbookCircuit; case .mechanics: handbook = handbookMechanics }
-            if handbook.engine?.presentation != nil { return selectedProfessionalArea }
+            if selectedRefined(subject) != nil { return refinedVisible ? selectedProfessionalArea : nil }
+            if handbookStore(for: subject).engine?.presentation != nil { return selectedProfessionalArea }
         }
         if selectedTab == 4, professionalPracticing {
             guard subject == .computer || subject == .power else { return nil }
@@ -513,12 +556,13 @@ struct RootView: View {
                           _ firstPassTarget: Int? = nil, _ freeSubject: Bool = false) {
         let saved = hourly.plan.slot(window)
         let area = freeSubject ? requested : (saved?.area.flatMap(EffectiveStudyArea.init(rawValue:)) ?? requested)
+        // Older saved slots may point to an original-question course. Route there
+        // without opening a card-count goal or drawing warmup cards from its old deck.
+        if area == .circuit || area == .mechanics { routeHourlyStudy(area); return }
         let engine: HandbookWordEngine?
         switch area {
-        case .computer: engine = handbookComputer.engine
-        case .power: engine = handbookPower.engine
-        case .circuit: engine = handbookCircuit.engine
-        case .mechanics: engine = handbookMechanics.engine
+        case .computer: engine = useRefinedComputer ? nil : handbookComputer.engine
+        case .power: engine = useRefinedPower ? nil : handbookPower.engine
         default: engine = nil
         }
         hourly.open(window, area: area, card: engine?.hourlyWarmup(seed: window.endingHour), firstPassTarget: firstPassTarget, freeSubject: freeSubject)
@@ -551,12 +595,13 @@ struct RootView: View {
     }
 
     private var lookupCardPresentation: HandbookCardPresentation? {
-        lookup.session.flatMap { ConceptSubject(rawValue: $0.subject) }
-            .flatMap { handbookStore(for: $0).engine?.presentation }
+        guard let pending = lookup.session, let course = ConceptSubject(rawValue: pending.subject),
+              selectedRefined(course) == nil else { return nil }
+        return handbookStore(for: course).engine?.presentation
     }
 
     private func lookupStillActive(_ session: CardLookupSession) -> Bool {
-        guard let subject = ConceptSubject(rawValue: session.subject),
+        guard let subject = ConceptSubject(rawValue: session.subject), selectedRefined(subject) == nil,
               let current = handbookStore(for: subject).engine?.presentation else { return false }
         return session.matches(subject: subject.rawValue, cardID: current.cardID, presentationID: current.id)
     }
@@ -675,42 +720,27 @@ struct RootView: View {
             if !exams.sessionIsActive { exams.start() }
             guard exams.error == nil else { selectedTab = 3; return }
             examPracticing = true
-        case .computer:
-            subject = .computer
+        case .computer, .power:
+            let course: ConceptSubject = area == .computer ? .computer : .power
+            subject = course
             professionalPracticing = false
-            guard handbookComputer.engine != nil, !handbookComputer.blocked else {
-                professionalRecalling = false; selectedTab = 4; return
+            if let refined = selectedRefined(course) {
+                guard !refined.blocked, refined.engine != nil else { professionalRecalling = false; selectedTab = 4; return }
+                refined.start()
+                guard !refined.blocked, refined.presentation != nil else { professionalRecalling = false; selectedTab = 4; return }
+            } else {
+                let original = handbookStore(for: course)
+                guard !original.blocked, original.engine != nil else { professionalRecalling = false; selectedTab = 4; return }
+                original.start()
+                guard !original.blocked, original.error == nil else { professionalRecalling = false; selectedTab = 4; return }
             }
-            handbookComputer.start()
-            guard handbookComputer.error == nil, !handbookComputer.blocked else { selectedTab = 4; return }
             professionalRecalling = true
-        case .power:
-            subject = .power
+        case .circuit, .mechanics:
+            let course: ConceptSubject = area == .circuit ? .circuit : .mechanics
+            subject = course
             professionalPracticing = false
-            guard handbookPower.engine != nil, !handbookPower.blocked else {
-                professionalRecalling = false; selectedTab = 4; return
-            }
-            handbookPower.start()
-            guard handbookPower.error == nil, !handbookPower.blocked else { selectedTab = 4; return }
-            professionalRecalling = true
-        case .circuit:
-            subject = .circuit
-            professionalPracticing = false
-            guard handbookCircuit.engine != nil, !handbookCircuit.blocked else {
-                professionalRecalling = false; selectedTab = 4; return
-            }
-            handbookCircuit.start()
-            guard handbookCircuit.error == nil, !handbookCircuit.blocked else { selectedTab = 4; return }
-            professionalRecalling = true
-        case .mechanics:
-            subject = .mechanics
-            professionalPracticing = false
-            guard handbookMechanics.engine != nil, !handbookMechanics.blocked else {
-                professionalRecalling = false; selectedTab = 4; return
-            }
-            handbookMechanics.start()
-            guard handbookMechanics.error == nil, !handbookMechanics.blocked else { selectedTab = 4; return }
-            professionalRecalling = true
+            professionalRecalling = false
+            requestedOriginalSubject = course
         }
         flow.begin(area: area, mode: mode)
         guard flow.error == nil, flow.state.activeArea == area else { selectedTab = 5; return }

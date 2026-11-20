@@ -25,14 +25,48 @@ struct ProfessionalCoursesView: View {
     var onOpenNovel: (Bool) -> Void = { _ in }
     var onLookup: ((ConceptSubject, HandbookCard, HandbookCardPresentation) -> Bool)? = nil
 
+    var refinedComputer: RefinedMemoryStore? = nil
+    var refinedPower: RefinedMemoryStore? = nil
+    @Binding var requestedOriginalSubject: ConceptSubject? = .constant(nil)
+    @AppStorage("professional.refined.computer") private var usesRefinedComputer = true
+    @AppStorage("professional.refined.power") private var usesRefinedPower = true
     @State private var originalPracticeSubject: ConceptSubject?
     @State private var showsHandbook = false
 
     private var hasProblemCourse: Bool { subject == .circuit || subject == .mechanics }
 
+
+    private var refinedStore: RefinedMemoryStore? {
+        switch subject {
+        case .computer: return refinedComputer
+        case .power: return refinedPower
+        default: return nil
+        }
+    }
+
+    private var prefersRefined: Bool {
+        subject == .computer ? usesRefinedComputer : usesRefinedPower
+    }
+
+    private func selectEdition(_ refined: Bool) {
+        guard refined != prefersRefined else { return }
+        // The two stores own their own presentations. Switching changes only the visible edition.
+        recalling = false
+        practicing = false
+        onOverlayChanged(false)
+        onEffectiveOverlayChanged(false, false)
+        if subject == .computer { usesRefinedComputer = refined }
+        else if subject == .power { usesRefinedPower = refined }
+    }
+
+    private var canChooseEdition: Bool {
+        guard !hasProblemCourse, refinedStore != nil else { return false }
+        return Bundle.main.url(forResource: subject.rawValue, withExtension: "json", subdirectory: "RefinedMemory") != nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !(recalling && fullScreenEnabled.wrappedValue) {
+            if !(recalling && fullScreenEnabled.wrappedValue && !(canChooseEdition && prefersRefined)) {
                 if let segmentBar { segmentBar }
                 Picker("专业课", selection: Binding(get: { subject }, set: {
                 practicing = false
@@ -50,6 +84,16 @@ struct ProfessionalCoursesView: View {
             #if DEBUG
             .modifier(HandbookSubjectPickerGeometry())
             #endif
+            }
+            if canChooseEdition && (!recalling || !fullScreenEnabled.wrappedValue || prefersRefined) {
+                Picker("背卡版本", selection: Binding(get: { prefersRefined }, set: selectEdition)) {
+                    Text("新版精讲").tag(true)
+                    Text("原卡与进度").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 4)
+                .accessibilityIdentifier("memory-course-edition")
             }
             if hasProblemCourse && !practicing && !recalling {
                 VStack(alignment: .leading, spacing: 5) {
@@ -79,13 +123,26 @@ struct ProfessionalCoursesView: View {
                 .font(.subheadline)
                 .padding(.vertical, 8)
             }
-            if !hasProblemCourse || showsHandbook || recalling || practicing {
+            if canChooseEdition, prefersRefined, let refinedStore {
+                RefinedMemoryView(subject: subject, store: refinedStore, studying: $recalling,
+                                  onStart: onStart,
+                                  onLearningChanged: { onEffectiveOverlayChanged($0, false) },
+                                  onReturnToOriginal: { selectEdition(false) },
+                                  onReadChapter: novelStore?.active == nil ? nil : { onOpenNovel(true) })
+                    .disabled(contentDisabled)
+                    .id("refined-" + subject.rawValue)
+            } else if !hasProblemCourse || showsHandbook || recalling || practicing {
                 handbook
             } else {
                 Spacer(minLength: 0)
             }
         }
         .onChange(of: subject) { _, _ in showsHandbook = false }
+        .onChange(of: requestedOriginalSubject, initial: true) { _, requested in
+            guard let requested, requested == .circuit || requested == .mechanics else { return }
+            originalPracticeSubject = requested
+            requestedOriginalSubject = nil
+        }
         .sheet(item: $originalPracticeSubject, onDismiss: {
             onOverlayChanged(false)
             onEffectiveOverlayChanged(false, false)
