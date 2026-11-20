@@ -95,7 +95,7 @@ struct ProfessionalCoursesView: View {
                 .padding(.horizontal, 20)
             }
             if hasProblemCourse {
-                OriginalPracticeView(subject: subject, singleQueue: true, onLearningChanged: { learning in
+                OriginalPracticeView(subject: subject == .circuit ? .circuit : .mechanics, singleQueue: true, onLearningChanged: { learning in
                     onEffectiveOverlayChanged(learning, false)
                 })
                 .disabled(contentDisabled)

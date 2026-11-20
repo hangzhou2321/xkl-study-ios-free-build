@@ -26,7 +26,7 @@ final class OriginalPracticeStorage {
     private static let lock = NSLock()
     private static let maxKeys = 8_192, maxKeyBytes = 1_024, maxValueBytes = 1_048_576, maxFileBytes = 12_582_912
     // Also used verbatim (as JSON data, not executable source) for the browser's whitelist.
-    private static let keyPattern = #"^(?:real-bank-offline-v1:(?:browse(?::(?:circuit|mechanics))?|item/[^\s\x00-\x1F\x7F]+)|beici:corrected-practice:v1:[^\s\x00-\x1F\x7F]+:[^\s\x00-\x1F\x7F]+|course-methods-v1:(?:cir|mec):[a-f0-9]{64}/(?:pos|case/[^\s\x00-\x1F\x7F]+)|offline-workout-nov20-v1|single-problem-v1:(?:circuit|mechanics)|original-course-v1:(?:circuit|mechanics)|original-course-step-v1:[^\s\x00-\x1F\x7F]+)$"#
+    private static let keyPattern = #"^(?:real-bank-offline-v1:(?:browse(?::(?:circuit|mechanics))?|item/[^\s\x00-\x1F\x7F]+)|beici:corrected-practice:v1:[^\s\x00-\x1F\x7F]+:[^\s\x00-\x1F\x7F]+|course-methods-v1:(?:cir|mec):[a-f0-9]{64}/(?:pos|case/[^\s\x00-\x1F\x7F]+)|offline-workout-nov20-v1|single-problem-v1:(?:circuit|mechanics|math)|original-course-v1:(?:circuit|mechanics)|original-course-step-v1:[^\s\x00-\x1F\x7F]+)$"#
     private static let keyRegex = try! NSRegularExpression(pattern: keyPattern)
     private let file: URL
     /// Exactly what this instance was shown; a stale read-modify-write must not erase another writer.

@@ -3,9 +3,20 @@ import WebKit
 import PDFKit
 import UIKit
 
+enum OriginalPracticeSubject: String {
+    case circuit, mechanics, math
+    var shortTitle: String {
+        switch self {
+        case .circuit: return "电路"
+        case .mechanics: return "力学"
+        case .math: return "数学"
+        }
+    }
+}
+
 @MainActor
 struct OriginalPracticeView: View {
-    let subject: ConceptSubject
+    let subject: OriginalPracticeSubject
     var singleQueue = false
     var onLearningChanged: (Bool) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
@@ -21,7 +32,7 @@ struct OriginalPracticeView: View {
 
 @MainActor
 private struct PracticeHost: UIViewControllerRepresentable {
-    let subject: ConceptSubject
+    let subject: OriginalPracticeSubject
     let singleQueue: Bool
     let leave: () -> Void
     let learning: (Bool) -> Void
@@ -56,10 +67,11 @@ private final class PracticeResources: NSObject, WKURLSchemeHandler {
         super.init()
     }
 
-    func home(_ subject: ConceptSubject, singleQueue: Bool = false) -> URL? {
-        guard subject == .mechanics || subject == .circuit else { return nil }
+    func home(_ subject: OriginalPracticeSubject, singleQueue: Bool = false) -> URL? {
         var u = URLComponents()
-        u.scheme = Self.scheme; u.host = "bundle"; u.path = singleQueue ? "/single-practice.html" : "/course.html"
+        u.scheme = Self.scheme
+        u.host = "bundle"
+        u.path = subject == .math ? "/math-practice.html" : (singleQueue ? "/single-practice.html" : "/course.html")
         u.queryItems = [URLQueryItem(name: "nativeSubject", value: subject.rawValue)]
         return u.url
     }
@@ -140,7 +152,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
         var pdfIndex: Int?
     }
     private enum Move { case next, back, home }
-    private let subject: ConceptSubject
+    private let subject: OriginalPracticeSubject
     private let singleQueue: Bool
     private let leave: () -> Void
     private let learning: (Bool) -> Void
@@ -161,7 +173,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
     private var documentReady = false
     private var cardOpen = false
 
-    init(subject: ConceptSubject, singleQueue: Bool, leave: @escaping () -> Void, learning: @escaping (Bool) -> Void) {
+    init(subject: OriginalPracticeSubject, singleQueue: Bool, leave: @escaping () -> Void, learning: @escaping (Bool) -> Void) {
         self.subject = subject; self.singleQueue = singleQueue; self.leave = leave; self.learning = learning
         super.init(nibName: nil, bundle: nil)
     }
@@ -229,7 +241,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
     }
 
     @objc private func goBack() { if let last = stack.last { request(last, move: .back) } }
-    @objc private func goHome() { if let url = resources.home(subject) { request(Place(url: url), move: .home) } }
+    @objc private func goHome() { if let url = resources.home(subject, singleQueue: singleQueue) { request(Place(url: url), move: .home) } }
     @objc private func closeScreen() {
         documentReady = false; setLearning(false)
         guard !blocked, let w = web, !w.isHidden, w.url != nil else { leave(); return }
@@ -306,7 +318,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
               message.frameInfo.isMainFrame, let source = message.frameInfo.request.url,
               let file = resources.page(source), ["html","htm"].contains(file.pathExtension.lowercased()) else { return }
         if message.name == "originalPracticeLearning" {
-            guard ["course.html","single-practice.html"].contains(file.lastPathComponent), let here = position?.url,
+            guard ["course.html","single-practice.html","math-practice.html"].contains(file.lastPathComponent), let here = position?.url,
                   resources.page(here) == file, let value = message.body as? Bool else { return }
             cardOpen = value
             if documentReady { setLearning(value) }
@@ -353,7 +365,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
             guard let self, navigation === self.activeNavigation, !self.blocked else { return }
             if (value as? Bool) == true {
                 webView.isUserInteractionEnabled = true; self.documentReady = true
-                self.setLearning(["course.html","single-practice.html"].contains(f.lastPathComponent) ? self.cardOpen : true)
+                self.setLearning(["course.html","single-practice.html","math-practice.html"].contains(f.lastPathComponent) ? self.cardOpen : true)
             }
             else { self.fail("原题练习的记录保护未能启动，已停止作答。请退出后重开。", terminal: true) }
         }

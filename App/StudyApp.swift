@@ -175,17 +175,34 @@ struct RootView: View {
                 .tag(4)
     }
 
+    private var mathProblemQueueVisible: Bool {
+        !mathFormulaEntry && Bundle.main.url(forResource: "math-practice", withExtension: "html",
+                                             subdirectory: "OriginalPractice") != nil
+    }
+
     private var mathTab: some View {
-            MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
-                               entryRequest: mathEntryRequest, formulaEntry: mathFormulaEntry,
-                               formulaSlot: hourly.active?.firstPassOnly == true && hourly.active?.accepts("math") == true
-                                   ? hourly.active : nil,
-                               onEffectiveVisibilityChanged: { visible in
-                                   mathEffectiveVisible = visible
-                                   syncEffectiveVisibility()
-                               })
-                .tabItem { Label("数学", systemImage: "function") }
-                .tag(6)
+        Group {
+            if mathProblemQueueVisible {
+                OriginalPracticeView(subject: .math, singleQueue: true, onLearningChanged: { visible in
+                    mathEffectiveVisible = visible
+                    syncEffectiveVisibility()
+                })
+            } else {
+                MathExperienceView(store: mathExperience, legacy: math, isVisible: selectedTab == 6,
+                                   entryRequest: mathEntryRequest, formulaEntry: mathFormulaEntry,
+                                   formulaSlot: hourly.active?.firstPassOnly == true && hourly.active?.accepts("math") == true
+                                       ? hourly.active : nil,
+                                   onEffectiveVisibilityChanged: { visible in
+                                       mathEffectiveVisible = visible
+                                       syncEffectiveVisibility()
+                                   })
+            }
+        }
+        .onChange(of: selectedTab) { previous, next in
+            if previous == 6 && next != 6 { mathFormulaEntry = false }
+        }
+        .tabItem { Label("数学", systemImage: "function") }
+        .tag(6)
     }
 
     private var decoratedTabs: some View {
@@ -481,7 +498,7 @@ struct RootView: View {
             screen.professionalVisible = selected.engine?.presentation != nil
         }
         screen.mathVisible = mathEffectiveVisible
-        screen.mathBlocked = mathExperience.error != nil
+        screen.mathBlocked = !mathProblemQueueVisible && mathExperience.error != nil
         return screen
     }
 

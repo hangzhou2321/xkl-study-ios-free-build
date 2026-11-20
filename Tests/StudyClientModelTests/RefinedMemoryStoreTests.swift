@@ -64,6 +64,40 @@ final class RefinedMemoryStoreTests: XCTestCase {
             }
         }
     }
+    @MainActor func testReferenceScopeParksAnActiveAndAnAlreadyScoredQuestion() async throws {
+        let raw=try twoGroups(), extra=try supplement(for:raw)
+        let root=try workspace()
+        let legacy=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now)
+        legacy.start(now:now); ready(legacy)
+        let scored=try XCTUnwrap(legacy.presentation)
+        legacy.reveal(token:scored.id,now:now)
+        legacy.grade(remembered:true,token:scored.id,now:now)
+        let pending=try XCTUnwrap(legacy.presentation)
+        legacy.reveal(token:pending.id,now:now)
+        let attempts=legacy.engine?.record.attempts
+        let scope=try JSONSerialization.data(withJSONObject:[
+            "subject":"power","courseSHA256":StudySHA256.hex(extra),"refs":["unit#1","unit#3"]
+        ],options:.sortedKeys)
+        func updated() -> RefinedMemoryStore {
+            RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,
+                               referenceScopeData:scope,now:now)
+        }
+        let model=updated(); ready(model)
+        XCTAssertEqual(model.entries.map(\.id),["unit#extra-a","unit#brief","other#1"])
+        XCTAssertEqual(model.engine?.record.attempts,attempts)
+        XCTAssertEqual(model.engine?.record.parkedCards?[pending.cardID]?.presentation,legacy.presentation)
+        XCTAssertEqual(model.engine?.record.activeCardIDs?.count,3)
+        let reopened=updated(); ready(reopened)
+        reopened.start(now:now); ready(reopened)
+        for _ in 0..<5 {
+            guard let prompt=reopened.presentation else { break }
+            XCTAssertFalse([scored.cardID,pending.cardID].contains(prompt.cardID))
+            reopened.markFamiliar(token:prompt.id,now:now); ready(reopened)
+        }
+        reopened.start(now:now); ready(reopened)
+        XCTAssertEqual(reopened.engine?.record.attempts,attempts)
+    }
+
     @MainActor func testMatchedRevisionKeepsTheOriginalIdentityAndRelocatesOriginalBookMark() async throws {
         let raw=try data("电力系统"), root=try workspace()
         let original=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now);ready(original)
