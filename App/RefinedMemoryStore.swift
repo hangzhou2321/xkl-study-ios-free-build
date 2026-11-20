@@ -45,6 +45,16 @@ struct RefinedMemoryCourse: Decodable {
     let subject, baseSHA256: String
     let cards: [Group]
 
+    struct Supplement: Decodable {
+        struct Addition: Decodable {
+            let group: String
+            let row: Row
+            let source: String?
+        }
+        let subject, baseSHA256: String
+        let additions: [Addition]
+    }
+
     func validatedDeck(for expected: ConceptSubject) throws -> RecallDeck {
         let wanted = expected == .computer ? "计算机" : "电力系统"
         guard [.computer,.power].contains(expected), subject == wanted || subject == expected.rawValue,
@@ -92,13 +102,14 @@ final class RefinedMemoryStore: ObservableObject {
     @Published private(set) var blocked = false
     @Published var error: String?
     private(set) var entries: [Entry] = []
+    private(set) var supplementRefs = Set<String>()
     private var index: [String:Int] = [:]
     private var courseSHA = "", committedSHA = ""
     private let directory: URL, currentURL: URL
     private let writer: (Data, URL) throws -> Void
     private var namespace: String { "refined-" + subject.rawValue + ":" }
 
-    init(subject: ConceptSubject, baseDirectory: URL? = nil, courseData: Data? = nil,
+    init(subject: ConceptSubject, baseDirectory: URL? = nil, courseData: Data? = nil, supplementData: Data? = nil,
          now: Date = Date(), writer: @escaping (Data,URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.writer = writer
         let base = baseDirectory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -115,10 +126,46 @@ final class RefinedMemoryStore: ObservableObject {
                 raw = try Self.read(url,limit:16*1024*1024)
             }
             guard raw.count <= 16*1024*1024 else { throw ExamError.invalid("课程文件过大。") }
-            let parsed = try JSONDecoder().decode(RefinedMemoryCourse.self,from:raw)
-            let deck = try parsed.validatedDeck(for:subject)
-            courseSHA = StudySHA256.hex(raw)
-            entries = parsed.cards.flatMap { group in group.rows.map { (group,$0) } }.enumerated()
+            let original = try JSONDecoder().decode(RefinedMemoryCourse.self,from:raw)
+            let originalDeck = try original.validatedDeck(for:subject)
+            let originalSHA = StudySHA256.hex(raw)
+            courseSHA = originalSHA
+            var parsed = original, deck = originalDeck
+            var ordered = original.cards.flatMap { group in group.rows.map { (group,$0) } }
+            var extra = supplementData
+            if courseData == nil, extra == nil,
+               let url = Bundle.main.url(forResource:subject.rawValue+"-additions",withExtension:"json",subdirectory:"RefinedMemory") {
+                extra = try Self.read(url,limit:4*1024*1024)
+            }
+            if let extra {
+                let supplement = try JSONDecoder().decode(RefinedMemoryCourse.Supplement.self,from:extra)
+                guard supplement.subject == subject.rawValue, supplement.baseSHA256 == originalSHA,
+                      !supplement.additions.isEmpty else { throw ExamError.invalid("增补小问与本机原课程不符。") }
+                let groups = Dictionary(uniqueKeysWithValues:original.cards.map { ($0.key,$0) })
+                let additions = Dictionary(grouping:supplement.additions,by:\.group)
+                for addition in supplement.additions {
+                    guard let group = groups[addition.group] else { throw ExamError.invalid("增补小问的原卡组不存在。") }
+                    let source = RefinedMemoryCourse.Evidence(label:"新增考点",detail:addition.source ?? "本次基础、强化增补。")
+                    let displayGroup = RefinedMemoryCourse.Group(key:group.key,title:group.title,chapter:group.chapter,
+                                                                 evidence:source,rows:[addition.row])
+                    ordered.append((displayGroup,addition.row))
+                }
+                parsed = RefinedMemoryCourse(subject:original.subject,baseSHA256:original.baseSHA256,cards:original.cards.map { group in
+                    .init(key:group.key,title:group.title,chapter:group.chapter,evidence:group.evidence,
+                          rows:group.rows + (additions[group.key] ?? []).map(\.row))
+                })
+                // Validate the whole catalogue (including old/new ref collisions) before assigning numeric slots.
+                let merged = try parsed.validatedDeck(for:subject)
+                let byID = Dictionary(uniqueKeysWithValues:merged.cards.map { ($0.id,$0) })
+                let appended = try supplement.additions.map { value -> RecallDeck.Item in
+                    guard let item = byID[namespace+value.row.ref] else { throw ExamError.invalid("增补小问编号无效。") }
+                    return item
+                }
+                deck = RecallDeck(subject:subject,bankID:originalDeck.bankID,cards:originalDeck.cards+appended)
+                supplementRefs = Set(supplement.additions.map { $0.row.ref })
+                courseSHA = StudySHA256.hex(extra)
+            }
+            entries = ordered.enumerated()
                 .map { Entry(group:$0.element.0,row:$0.element.1,position:$0.offset+1) }
             index = Dictionary(uniqueKeysWithValues:entries.enumerated().map { (namespace+$0.element.id,$0.offset) })
             try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
@@ -130,11 +177,25 @@ final class RefinedMemoryStore: ObservableObject {
             if names.contains(currentURL.lastPathComponent) {
                 let existing = try Self.read(currentURL)
                 let saved = try JSONDecoder().decode(Disk.self,from:existing)
-                guard saved.format == Self.format, saved.subject == subject, saved.courseSHA256 == courseSHA else {
+                guard saved.format == Self.format, saved.subject == subject else {
                     throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。")
                 }
-                engine = try ProfessionalRecallEngine(deck:deck,record:saved.record)
-                committedSHA = StudySHA256.hex(existing)
+                if saved.courseSHA256 == courseSHA {
+                    engine = try ProfessionalRecallEngine(deck:deck,record:saved.record)
+                    committedSHA = StudySHA256.hex(existing)
+                } else if extra != nil, saved.courseSHA256 == originalSHA {
+                    let updated = try ProfessionalRecallEngine(deck:originalDeck,record:saved.record)
+                    try updated.reconcile(to:deck,now:now)
+                    let backup = directory.appendingPathComponent("before-additions-"+StudySHA256.hex(existing)+".json")
+                    if !names.contains(backup.lastPathComponent) { try writer(existing,backup) }
+                    guard try Self.read(backup) == existing, try Self.read(currentURL) == existing else {
+                        throw ExamError.invalid("增补前的精讲记录未能核对。")
+                    }
+                    let bytes = try encode(updated.record)
+                    try replaceCurrent(with:bytes,previous:existing)
+                    committedSHA = StudySHA256.hex(bytes)
+                    engine = updated
+                } else { throw ExamError.invalid("现有新版精讲记录与课程不匹配；原记录已保留。") }
             } else {
                 guard names.isEmpty else { throw ExamError.invalid("已有新版学习目录但缺少完整记录，未新建或覆盖。") }
                 let fresh = try ProfessionalRecallEngine.fresh(deck:deck,now:now)
@@ -185,6 +246,19 @@ final class RefinedMemoryStore: ObservableObject {
         let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
         return try enc.encode(Disk(format:Self.format,subject:subject,courseSHA256:courseSHA,record:r))
     }
+    private func replaceCurrent(with bytes:Data,previous:Data) throws {
+        do {
+            try writer(bytes,currentURL)
+            guard try Self.read(currentURL) == bytes else { throw ExamError.invalid("精讲记录写后核验失败。") }
+        } catch {
+            // A synchronized write may fail after rename. Only roll back our exact candidate.
+            if let observed = try? Self.read(currentURL), observed == bytes {
+                try DurableFile.write(previous,to:currentURL)
+                guard try Self.read(currentURL) == previous else { throw ExamError.invalid("精讲记录恢复核验失败。") }
+            }
+            throw error
+        }
+    }
     @discardableResult private func change(_ action:(ProfessionalRecallEngine)throws->Void) -> Bool {
         guard !blocked, let live=engine else { return false }
         let old: Data
@@ -200,15 +274,8 @@ final class RefinedMemoryStore: ObservableObject {
             guard next.record != live.record else { self.error=nil; return false }
             let bytes=try encode(next.record)
             do {
-                try writer(bytes,currentURL)
-                guard try Self.read(currentURL) == bytes else {throw ExamError.invalid("精讲记录写后核验失败。")}
+                try replaceCurrent(with:bytes,previous:old)
             } catch {
-                // A synchronized write may throw after rename. Restore only our exact failed candidate
-                // (never a third party's file), without publishing a grade/novel/hourly event.
-                if let observed=try? Self.read(currentURL), observed == bytes {
-                    do { try DurableFile.write(old,to:currentURL); guard try Self.read(currentURL)==old else { throw ExamError.invalid("恢复核验失败") } }
-                    catch { blocked=true; self.error="写入结果需要核查；请保留新版原学习档。"; return false }
-                }
                 blocked=true; self.error=error.localizedDescription; return false
             }
             committedSHA=StudySHA256.hex(bytes)

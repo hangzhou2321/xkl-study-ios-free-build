@@ -23,6 +23,12 @@ final class RefinedMemoryStoreTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at:f) }
         return f
     }
+    private func supplement(for base:Data, ref:String="unit#brief", group:String="unit") throws -> Data {
+        let row:[String:Any]=["ref":ref,"q":"换个条件时看哪里","a":"先检查位置","kind":"判断","how":"B","note":"","colors":[]]
+        let extra:[String:Any]=["subject":"power","baseSHA256":StudySHA256.hex(base),
+                               "additions":[["group":group,"row":row,"source":"合成讲义第1页"]]]
+        return try JSONSerialization.data(withJSONObject:extra,options:.sortedKeys)
+    }
     @MainActor private func ready(_ s:RefinedMemoryStore,file:StaticString=#filePath,line:UInt=#line) {
         XCTAssertFalse(s.blocked,s.error ?? "",file:file,line:line);XCTAssertNil(s.error,file:file,line:line)
         XCTAssertNotNil(s.engine,file:file,line:line)
@@ -111,6 +117,81 @@ final class RefinedMemoryStoreTests: XCTestCase {
             ready(relaunch);XCTAssertEqual(relaunch.presentation?.id,p.id);XCTAssertEqual(relaunch.presentation?.revealed,true)
             XCTAssertEqual(relaunch.engine?.record.attempts.count,0)
         }
+    }
+
+    @MainActor func testAdditionsKeepLiveTaskAndAppendUnlearnedQuestionOnlyOnce() async throws {
+        let root=try workspace(), raw=try data("电力系统"), extra=try supplement(for:raw)
+        let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now)
+        old.start(now:now);ready(old)
+        old.markFamiliar(token:try XCTUnwrap(old.presentation).id,now:now)
+        let recall=try XCTUnwrap(old.presentation)
+        old.reveal(token:recall.id,now:now);old.grade(remembered:false,token:recall.id,now:now);ready(old)
+        let pending=try XCTUnwrap(old.presentation)
+        old.reveal(token:pending.id,now:now);ready(old)
+        let url=pointer(root,"power"), before=try Data(contentsOf:url), previous=try XCTUnwrap(old.engine)
+        let updated=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+        ready(updated)
+        let engine=try XCTUnwrap(updated.engine), newID="refined-power:unit#brief"
+        XCTAssertEqual(engine.record.cardIDs,previous.record.cardIDs+[newID])
+        XCTAssertEqual(updated.entries.map(\.id),old.entries.map(\.id)+["unit#brief"])
+        XCTAssertEqual(updated.entries.last?.group.evidence.detail,"合成讲义第1页")
+        XCTAssertTrue(old.supplementRefs.isEmpty);XCTAssertEqual(updated.supplementRefs,["unit#brief"])
+        XCTAssertEqual(updated.course?.cards[0].rows.count,4)
+        XCTAssertEqual(updated.presentation,old.presentation);XCTAssertEqual(updated.presentation?.revealed,true)
+        XCTAssertEqual(updated.familiarRefs,old.familiarRefs);XCTAssertEqual(updated.firstPassRemaining,old.firstPassRemaining+1)
+        XCTAssertEqual(engine.record.attempts,previous.record.attempts)
+        for id in previous.record.cardIDs { XCTAssertEqual(try engine.packedCard(id:id),try previous.packedCard(id:id)) }
+        XCTAssertEqual(try engine.packedCard(id:newID),0)
+        XCTAssertEqual(engine.record.contentChanges?.last?.beforeSnapshot,previous.record.snapshot)
+        let backup=url.deletingLastPathComponent().appendingPathComponent("before-additions-"+StudySHA256.hex(before)+".json")
+        XCTAssertEqual(try Data(contentsOf:backup),before)
+        let migrated=try Data(contentsOf:url)
+        let resumed=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+        ready(resumed);XCTAssertEqual(try Data(contentsOf:url),migrated)
+        XCTAssertEqual(resumed.engine?.record,engine.record)
+        old.grade(remembered:true,token:pending.id,now:now);XCTAssertTrue(old.blocked)
+        XCTAssertEqual(try Data(contentsOf:url),migrated)
+        resumed.grade(remembered:true,token:pending.id,now:now);ready(resumed)
+        XCTAssertEqual(resumed.engine?.record.attempts.count,previous.record.attempts.count+1)
+        let later=try Data(contentsOf:url)
+        let downgrade=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now)
+        XCTAssertTrue(downgrade.blocked);XCTAssertEqual(try Data(contentsOf:url),later)
+        XCTAssertEqual(try Data(contentsOf:backup),before)
+    }
+
+    @MainActor func testInvalidOrFailedAdditionLeavesOldJournalAvailableForRetry() async throws {
+        let root=try workspace(),raw=try data("电力系统"),extra=try supplement(for:raw)
+        let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now);ready(old)
+        let url=pointer(root,"power"), before=try Data(contentsOf:url)
+        for invalid in [try supplement(for:raw,ref:"unit#1"),try supplement(for:raw,group:"unknown"),
+                        try supplement(for:Data("different".utf8))] {
+            let refused=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:invalid,now:now)
+            XCTAssertTrue(refused.blocked);XCTAssertNil(refused.engine)
+            XCTAssertEqual(try Data(contentsOf:url),before)
+        }
+        let failed=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now) { bytes,destination in
+            try DurableFile.write(bytes,to:destination)
+            if destination==url { throw NSError(domain:"SyntheticAfterRename",code:1) }
+        }
+        XCTAssertTrue(failed.blocked);XCTAssertEqual(try Data(contentsOf:url),before)
+        let retry=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+        ready(retry);XCTAssertEqual(retry.stats(on:now)?.unintroduced,4)
+        let fresh=RefinedMemoryStore(subject:.power,baseDirectory:try workspace(),courseData:raw,supplementData:extra,now:now)
+        ready(fresh);XCTAssertEqual(fresh.engine?.record.cardIDs,retry.engine?.record.cardIDs)
+        XCTAssertEqual(fresh.engine?.record.contentChanges?.count ?? 0,0)
+    }
+
+    @MainActor func testLearnerFinishedBaseGetsOnlyTheAddedQuestionNext() async throws {
+        let root=try workspace(),raw=try data("电力系统"),extra=try supplement(for:raw)
+        let base=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now)
+        base.start(now:now)
+        for _ in base.entries { base.markFamiliar(token:try XCTUnwrap(base.presentation).id,now:now) }
+        XCTAssertEqual(base.firstPassRemaining,0)
+        let grown=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,supplementData:extra,now:now)
+        ready(grown);XCTAssertEqual(grown.firstPassRemaining,1)
+        grown.start(now:now);ready(grown)
+        XCTAssertEqual(grown.current?.id,"unit#brief");XCTAssertEqual(grown.presentation?.revealed,false)
+        XCTAssertEqual(grown.familiarRefs,base.familiarRefs);XCTAssertTrue(grown.engine?.record.attempts.isEmpty == true)
     }
 }
 #endif

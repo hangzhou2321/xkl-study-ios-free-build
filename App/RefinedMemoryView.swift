@@ -53,6 +53,9 @@ struct RefinedMemoryView: View {
                         Button("回卡片首页", systemImage: "house") { setStudying(false) }
                     }
                     Button("全部小问", systemImage: "list.bullet") { directory = .all }
+                    if !store.supplementRefs.isEmpty {
+                        Button("本次补问", systemImage: "text.badge.plus") { directory = .supplement }
+                    }
                     Button("已熟记", systemImage: "checkmark.circle") { directory = .familiar }
                     if let onReturnToOriginal {
                         Button("返回原卡", systemImage: "arrow.uturn.backward") { report(false); onReturnToOriginal() }
@@ -182,7 +185,7 @@ struct RefinedMemoryView: View {
     }
 }
 
-private enum RefinedDirectoryMode: String, Identifiable { case all, familiar; var id: String { rawValue } }
+private enum RefinedDirectoryMode: String, Identifiable { case all, supplement, familiar; var id: String { rawValue } }
 
 @MainActor
 private struct RefinedDirectory: View {
@@ -198,9 +201,14 @@ private struct RefinedDirectory: View {
 
     private var filtered: [RefinedMemoryStore.Entry] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        let familiar = store.familiarRefs
+        let scope: Set<String>?
+        switch mode {
+        case .all: scope = nil
+        case .supplement: scope = store.supplementRefs
+        case .familiar: scope = store.familiarRefs
+        }
         return store.entries.filter { e in
-            (mode == .all || familiar.contains(e.id)) && (query.isEmpty ||
+            (scope?.contains(e.id) ?? true) && (query.isEmpty ||
                 [e.group.title, RefinedFace.chapter(e.group.chapter), e.row.q, e.id].contains { $0.localizedCaseInsensitiveContains(query) })
         }
     }
@@ -210,6 +218,7 @@ private struct RefinedDirectory: View {
             Section {
                 Picker("范围", selection: $mode) {
                     Text("全部小问").tag(RefinedDirectoryMode.all)
+                    if !store.supplementRefs.isEmpty { Text("本次补问").tag(RefinedDirectoryMode.supplement) }
                     Text("已熟记").tag(RefinedDirectoryMode.familiar)
                 }.pickerStyle(.segmented)
                 if !message.isEmpty { Text(message).font(.footnote).foregroundStyle(.secondary) }
