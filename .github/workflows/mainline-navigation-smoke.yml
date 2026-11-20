@@ -1,0 +1,27 @@
+name: Verify compact learning entrance with synthetic courses
+on:
+  push:
+    branches: ["codex/b85-mainline-navigation-smoke"]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      RELEASE: b2526cae5da12b5f383ecdfd27fe252ebb1df085
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Fetch the exact release with no private course data
+        run: |
+          git fetch --no-tags --depth=1 origin "$RELEASE"
+          git worktree add --detach "$RUNNER_TEMP/release" "$RELEASE"
+      - name: Build a clean Simulator app and exercise its mainline navigation
+        run: python3 -u tools/refined_smoke/run.py "$RUNNER_TEMP/release" "$RELEASE" "$RUNNER_TEMP/refined-output"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-mainline-navigation
+          path: ${{ runner.temp }}/refined-output
+          retention-days: 2
