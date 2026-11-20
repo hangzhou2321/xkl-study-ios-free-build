@@ -12,12 +12,16 @@ sdk=capture('xcrun','--sdk','iphonesimulator','--show-sdk-path')
 probe=OUT.parent/'diagnostic-observer-preflight.swift'
 probe.write_text('import UIKit\nimport WebKit\n@MainActor private final class PracticeController: UIViewController { private var web: WKWebView?; private var documentReady=false; private let notice=UILabel() }\n'+(HERE/'Observations.swift.inc').read_text())
 cmd('xcrun','swiftc','-typecheck','-swift-version','5','-D','DEBUG','-sdk',sdk,'-target',platform.machine()+'-apple-ios17.0-simulator',probe)
-files=['StudyApp.swift','OriginalPracticeView.swift']; orig={f:(ROOT/'App'/f).read_text() for f in files}
+files=['StudyApp.swift','OriginalPracticeView.swift','ConceptView.swift'];orig={f:(ROOT/'App'/f).read_text() for f in files}
 def sub(s,a,b):
     assert s.count(a)==1,(a,s.count(a));return s.replace(a,b)
-t=orig[files[0]];marker='if ProcessInfo.processInfo.arguments.contains("--effective-time-preview") {'
-t=sub(t,marker,'if ProcessInfo.processInfo.arguments.contains("--synthetic-originals-direct") { OriginalPracticeView(subject: .circuit) } else '+marker)
-(ROOT/'App'/files[0]).write_text(t)
+# Start at the real RootView professional tab; present through the same @State used by the shipped entry button.
+arg='ProcessInfo.processInfo.arguments.contains("--synthetic-originals-sheet")'
+s=sub(orig[files[0]],'@State private var selectedTab = 5','@State private var selectedTab: Int = '+arg+' ? 4 : 5')
+s=sub(s,'@State private var subject: ConceptSubject = .computer','@State private var subject: ConceptSubject = '+arg+' ? .circuit : .computer')
+(ROOT/'App'/files[0]).write_text(s)
+s=sub(orig[files[2]],'.sheet(item: $originalPracticeSubject, onDismiss:', '.onAppear { if '+arg+' && subject == .circuit { DispatchQueue.main.asyncAfter(deadline: .now()+1.5) { originalPracticeSubject = subject } } }\n        .sheet(item: $originalPracticeSubject, onDismiss:')
+(ROOT/'App'/files[2]).write_text(s)
 t=orig[files[1]]
 pairs=[
 ('web = w; install(w)','web = w; install(w); WKOnlyDiagnostic.watch(self); WKOnlyDiagnostic.event("webInstalled")'),
@@ -50,7 +54,7 @@ ud=Path(capture('xcrun','simctl','get_app_container',udid,'local.xkl.study','dat
 modes=[('normal',{})]+([('runtime-library',launchEnv)] if launchEnv else []); states={}
 for name,ev in modes:
     capturefile.unlink(missing_ok=True); out=OUT/name;out.mkdir(exist_ok=True)
-    cmd('xcrun','simctl','launch',udid,'local.xkl.study','--synthetic-originals-direct',env=os.environ|ev)
+    cmd('xcrun','simctl','launch',udid,'local.xkl.study','--synthetic-originals-sheet',env=os.environ|ev)
     timeout=time.monotonic()+105; seen=set();lines=[]
     while time.monotonic()<timeout:
         try:lines=json.loads(capturefile.read_bytes())
@@ -68,5 +72,5 @@ for name,ev in modes:
     states[name]={'DOMCourseReady':bool(ready),'snapshots':len([x for x in lines if x['event']=='domSnapshot']),'events':[x['event'] for x in lines],'firstReadyOffset':ready[0]['offset'] if ready else None}
     print(name,states[name],flush=True)
     subprocess.run(['xcrun','simctl','terminate',udid,'local.xkl.study'],capture_output=True)
-(OUT/'result.json').write_text(json.dumps(dict(release=EXPECTED,debugObservationOnly=True,host=platform.machine(),runtime=runtime,model=kind,os=info['version'],states=states,simulatorWorkaround=workaround,physicalDevice=False),indent=2))
+(OUT/'result.json').write_text(json.dumps(dict(release=EXPECTED,debugObservationOnly=True,entry='real RootView professional tab and production sheet; launch arg sets initial route and requests same state as entry button',host=platform.machine(),runtime=runtime,model=kind,os=info['version'],states=states,simulatorWorkaround=workaround,physicalDevice=False),indent=2))
 assert all(s['snapshots']>=3 for s in states.values()),'diagnostic did not collect sufficient actual DOM snapshots'

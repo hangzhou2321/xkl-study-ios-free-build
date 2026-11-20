@@ -21,7 +21,7 @@ jobs:
           path: app
           ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
-      - name: Run passive DOM, callback and rendering diagnostics with synthetic pages only
+      - name: Check the real professional course sheet, real bridge and synthetic DOM under the actual app
         run: |
           test "$(git -C app rev-parse HEAD)" = "$RELEASE_SHA"
           test ! -e app/OriginalPractice

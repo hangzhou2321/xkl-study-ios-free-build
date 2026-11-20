@@ -3,7 +3,7 @@
 @MainActor
 private enum WKOnlyDiagnostic {
     static var lines: [[String: Any]] = []
-    static let active = ProcessInfo.processInfo.arguments.contains("--synthetic-originals-direct")
+    static let active = ProcessInfo.processInfo.arguments.contains("--synthetic-originals-sheet")
     static func event(_ name: String, _ details: [String: Any] = [:]) {
         guard active else { return }
         var r = details; r["event"] = name; r["uptime"] = ProcessInfo.processInfo.systemUptime; lines.append(r)
