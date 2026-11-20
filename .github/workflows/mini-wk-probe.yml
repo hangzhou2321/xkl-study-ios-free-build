@@ -1,0 +1,23 @@
+name: Synthetic native WK probe
+on:
+  push:
+    branches: ["codex/b82-mini-wk"]
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: macos-15
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 3
+      - name: Boot and probe with unmodified native reader
+        run: bash mini-wk-probe/run.sh
+      - name: Capture synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wk-synthetic-only
+          path: logs/
+          retention-days: 2
