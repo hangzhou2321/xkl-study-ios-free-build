@@ -82,6 +82,15 @@ private final class PracticeResources: NSObject, WKURLSchemeHandler {
         return f
     }
 
+    // A page can replace its query/hash while moving between questions or cards.
+    // Only that portion of the bookmark may change; never trust a different document.
+    func sameDocumentLocation(_ reported: String?, as original: URL) -> URL? {
+        guard let reported, reported.utf8.count <= 32_768, let url = URL(string: reported),
+              let oldFile = page(original), let newFile = page(url), oldFile == newFile
+        else { return nil }
+        return url
+    }
+
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard task.request.httpMethod == nil || task.request.httpMethod == "GET",
               let u = task.request.url, let f = file(u), let mime = types[f.pathExtension.lowercased()]
@@ -230,11 +239,19 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
 
     private func request(_ dest: Place, move: Move) {
         guard !blocked, !transitioning else { return }
-        // Drain earlier posts from an input handler before taking the next page's storage snapshot.
+        // Drain earlier input posts and save the live SPA location, not merely the
+        // URL used to enter this page. open() captures scroll/PDF position separately.
         transitioning = true
         if let w = web, !w.isHidden, w.url != nil {
-            w.evaluateJavaScript("void 0") { [weak self] _,_ in
-                guard let self, !self.blocked else { return }; self.open(dest, move: move)
+            let outgoing = position?.url
+            w.evaluateJavaScript("window.location.href") { [weak self, weak w] value,_ in
+                guard let self, let w, self.web === w, !self.blocked else { return }
+                if move == .next, let outgoing, self.position?.url == outgoing {
+                    let live = self.resources.sameDocumentLocation(value as? String, as: outgoing)
+                        ?? self.resources.sameDocumentLocation(w.url?.absoluteString, as: outgoing)
+                    if let live { self.position?.url = live }
+                }
+                self.open(dest, move: move)
             }
         } else { open(dest, move: move) }
     }
@@ -242,7 +259,11 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
     private func open(_ dest: Place, move: Move) {
         guard !blocked, let w = web, let s = store else { return }
         documentReady = false; cardOpen = false; setLearning(false)
-        guard let f = resources.page(dest.url) else { fail("找不到这份练习资料，请返回科目首页。"); return }
+        guard let f = resources.page(dest.url) else {
+            if move == .home { fail("当前安装包缺少本地课程目录。请退出练习，使用包含课程资料的完整安装包。") }
+            else { fail("找不到这份练习资料，请返回科目首页。") }
+            return
+        }
         if move == .next, var current = position {
             if let pdf, let doc = pdf.document, let page = pdf.currentPage { current.pdfIndex = doc.index(for: page) }
             else { current.scroll = w.scrollView.contentOffset }
