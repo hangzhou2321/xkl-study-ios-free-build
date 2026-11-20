@@ -1,5 +1,6 @@
 """Trace real WK callbacks in an explicitly patched Debug simulator build. No shipping target is changed."""
 from pathlib import Path
+import plistlib
 import subprocess,sys,os,platform,time,json,hashlib,shutil,uuid
 from run import cmd,capture,sha,add_test
 HERE=Path(__file__).resolve().parent
@@ -32,19 +33,30 @@ for a,b in pairs:t=sub(t,a,b)
 (ROOT/'App'/files[1]).write_text(t+'\n'+(HERE/'Observations.swift.inc').read_text())
 # Emit only the diagnostic source delta in this clean public checkout (never private materials).
 (OUT/'debug-observation.patch').write_text(capture('git','-C',ROOT,'diff','--','App'))
-add_test(ROOT); name,runtime,kind,info=select_device();launchEnv,workaround=simulator_webkit_workaround(info)
-udid=capture('xcrun','simctl','create','Synthetic-Originals-DOM-'+uuid.uuid4().hex[:6],kind,runtime)
+name,runtime,kind,info=select_device();launchEnv,workaround=simulator_webkit_workaround(info)
+udid=capture('xcrun','simctl','create','Real-Originals-Panel-'+uuid.uuid4().hex[:6],kind,runtime)
 print('device',name,runtime,info['version'],udid,flush=True)
 cmd('xcrun','simctl','boot',udid)
-dd=OUT.parent/'diag-derived'
-args=['xcodebuild','-project',str(ROOT/'XKLStudy.xcodeproj'),'-scheme','XKLStudy','-configuration','Debug','-sdk','iphonesimulator',
-      '-destination','generic/platform=iOS Simulator','-derivedDataPath',str(dd),'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=',
-      'ARCHS='+platform.machine(),'ONLY_ACTIVE_ARCH=YES','COMPILER_INDEX_STORE_ENABLE=NO','build']
+tmp=OUT.parent/'direct-host';tmp.mkdir(); app=tmp/'RealPanel.app';app.mkdir()
+enum=(ROOT/'App/ConceptTeaching.swift').read_text().split('enum ConceptSubject:',1)[1].split('\nenum ConceptCalendar',1)[0]
+assert enum.rstrip().endswith('}');(tmp/'Subject.swift').write_text('import Foundation\nenum ConceptSubject:'+enum)
+(tmp/'Host.swift').write_text('import SwiftUI\n@main struct DirectControllerHost: App { var body:some Scene { WindowGroup { OriginalPracticeView(subject: .circuit) } } }')
 with (OUT/'compile.log').open('w') as log:
-    result=subprocess.run(args,cwd=ROOT,stdout=log,stderr=subprocess.STDOUT)
-if result.returncode:
-    print('\n'.join(l for l in (OUT/'compile.log').read_text(errors='replace').splitlines() if ': error:' in l)[-3000:]);raise SystemExit(result.returncode)
-app=dd/'Build/Products/Debug-iphonesimulator/XKLStudy.app';assert all(sha(app/'OriginalPractice'/x)==sha(HERE/'OriginalPractice'/x)for x in ('course.html','main.html'))
+    x=subprocess.run(['xcrun','swiftc','-parse-as-library','-D','DEBUG','-swift-version','5','-sdk',sdk,
+                      '-target',platform.machine()+'-apple-ios17.0-simulator','-module-name','RealPanel',
+                      ROOT/'App/OriginalPracticeView.swift',ROOT/'App/OriginalPracticeStorage.swift',
+                      tmp/'Host.swift',tmp/'Subject.swift','-Xlinker','-rpath','-Xlinker','/usr/lib/swift','-o',app/'RealPanel'],
+                     stdout=log,stderr=subprocess.STDOUT)
+if x.returncode:
+    print((OUT/'compile.log').read_text()[-5000:]);raise SystemExit(x.returncode)
+shutil.copytree(HERE/'OriginalPractice',app/'OriginalPractice')
+plist={'CFBundleIdentifier':'local.xkl.study','CFBundleDisplayName':'RealPanel','CFBundleName':'RealPanel','CFBundleExecutable':'RealPanel',
+       'CFBundlePackageType':'APPL','CFBundleVersion':'1','CFBundleShortVersionString':'1.0','CFBundleInfoDictionaryVersion':'6.0','MinimumOSVersion':'17.0',
+       'UIDeviceFamily':[1,2],'LSRequiresIPhoneOS':True,'UILaunchScreen':{},'CFBundleSupportedPlatforms':['iPhoneSimulator'],'DTPlatformName':'iphonesimulator'}
+(app/'Info.plist').write_bytes(plistlib.dumps(plist));cmd('codesign','--force','--sign','-','--timestamp=none',app)
+assert all(sha(app/'OriginalPractice'/x)==sha(HERE/'OriginalPractice'/x)for x in ('course.html','main.html'))
+(OUT/'diagnostic-scope.json').write_text(json.dumps({'mode':'Production OriginalPracticeView & OriginalPracticeStorage under a small synthetic SwiftUI host, not RootView route. Only passive observations in copied view.', 'release':EXPECTED,
+     'oldProductionView':hashlib.sha256(orig['OriginalPracticeView.swift'].encode()).hexdigest(),'storage':sha(ROOT/'App/OriginalPracticeStorage.swift')},indent=2))
 cmd('xcrun','simctl','bootstatus',udid,'-b');cmd('xcrun','simctl','install',udid,app)
 ud=Path(capture('xcrun','simctl','get_app_container',udid,'local.xkl.study','data'));capturefile=ud/'tmp/synthetic-originals-wk-diagnostic.json'
 modes=[('normal',{})]+([('runtime-library',launchEnv)] if launchEnv else []); states={}
