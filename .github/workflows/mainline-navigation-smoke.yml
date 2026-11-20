@@ -9,7 +9,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 40
     env:
-      RELEASE: b2526cae5da12b5f383ecdfd27fe252ebb1df085
+      RELEASE: cb6607b1d431d4bc17087fc69067537bfe4df8be
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
