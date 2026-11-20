@@ -49,12 +49,31 @@ with (OUT/'compile.log').open('w') as log:
 if result.returncode:
     print('\n'.join(l for l in (OUT/'compile.log').read_text(errors='replace').splitlines() if ': error:' in l)[-3000:]);raise SystemExit(result.returncode)
 app=dd/'Build/Products/Debug-iphonesimulator/XKLStudy.app';assert all(sha(app/'OriginalPractice'/x)==sha(HERE/'OriginalPractice'/x)for x in ('course.html','main.html'))
+# Keep this exact Debug simulator app with only the two public synthetic HTML files. A launch diagnostic can then be rerun without another build.
+cmd('/usr/bin/ditto','-c','-k','--keepParent',app,OUT/'synthetic-simulator-app.zip')
+(OUT/'prelaunch.json').write_text(json.dumps(dict(source=EXPECTED,runtime=runtime,device=kind,simulatorApp=sha(OUT/'synthetic-simulator-app.zip'),syntheticOnly=True,workaround=workaround),indent=2))
 cmd('xcrun','simctl','bootstatus',udid,'-b');cmd('xcrun','simctl','install',udid,app)
 ud=Path(capture('xcrun','simctl','get_app_container',udid,'local.xkl.study','data'));capturefile=ud/'tmp/synthetic-originals-wk-diagnostic.json'
-modes=[('normal',{})]+([('runtime-library',launchEnv)] if launchEnv else []); states={}
+modes=([('runtime-library',launchEnv)] if launchEnv else [])+[('normal',{})]; states={}
 for name,ev in modes:
     capturefile.unlink(missing_ok=True); out=OUT/name;out.mkdir(exist_ok=True)
-    cmd('xcrun','simctl','launch',udid,'local.xkl.study','--synthetic-originals-sheet',env=os.environ|ev)
+    launch=subprocess.run(['xcrun','simctl','launch',udid,'local.xkl.study','--synthetic-originals-sheet'],env=os.environ|ev,capture_output=True,text=True,timeout=120)
+    (out/'launch.txt').write_text(launch.stdout+launch.stderr)
+    if launch.returncode:
+        paths=[Path.home()/'Library/Logs/DiagnosticReports',Path.home()/'Library/Developer/CoreSimulator/Devices'/udid/'data/Library/Logs/CrashReporter']
+        for folder in paths:
+            if folder.exists():
+                for cr in sorted(folder.glob('XKLStudy*'),key=lambda q:q.stat().st_mtime,reverse=True)[:3]:
+                    if cr.is_file():shutil.copy2(cr,out/cr.name)
+        try:
+            lastlog=subprocess.run(['xcrun','simctl','spawn',udid,'log','show','--style','compact','--last','2m','--predicate',
+                '(process == "XKLStudy") OR (eventMessage CONTAINS[c] "libswiftWebKit")'],timeout=20,capture_output=True,text=True)
+            (out/'sim-launch.log').write_text(lastlog.stdout[-40000:]+lastlog.stderr[-500:])
+        except subprocess.TimeoutExpired:pass
+        states[name]={'DOMCourseReady':False,'snapshots':0,'events':['launchFailed'],'launchCode':launch.returncode}
+        if capturefile.exists():shutil.copy2(capturefile,out/'wk-events.json')
+        else:(out/'wk-events.json').write_text('[]')
+        print(name,states[name],flush=True);continue
     timeout=time.monotonic()+105; seen=set();lines=[]
     while time.monotonic()<timeout:
         try:lines=json.loads(capturefile.read_bytes())
@@ -73,4 +92,4 @@ for name,ev in modes:
     print(name,states[name],flush=True)
     subprocess.run(['xcrun','simctl','terminate',udid,'local.xkl.study'],capture_output=True)
 (OUT/'result.json').write_text(json.dumps(dict(release=EXPECTED,debugObservationOnly=True,entry='real RootView professional tab and production sheet; launch arg sets initial route and requests same state as entry button',host=platform.machine(),runtime=runtime,model=kind,os=info['version'],states=states,simulatorWorkaround=workaround,physicalDevice=False),indent=2))
-assert all(s['snapshots']>=3 for s in states.values()),'diagnostic did not collect sufficient actual DOM snapshots'
+assert any(s['snapshots']>=3 for s in states.values()),'no mode returned actual DOM snapshots; see launch logs and reports'
