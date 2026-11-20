@@ -27,6 +27,14 @@ final class OriginalPracticeSmokeUITests: XCTestCase {
     }
     func testSubjectNavigationAssistedResponsesAndColdReopen() throws {
         continueAfterFailure = false
+        addUIInterruptionMonitor(withDescription: "First-launch simulator permission") { dialog in
+            guard dialog.label.localizedCaseInsensitiveContains("Bluetooth") || dialog.label.contains("蓝牙") ||
+                  dialog.staticTexts.allElementsBoundByIndex.contains(where: { $0.label.localizedCaseInsensitiveContains("Bluetooth") || $0.label.contains("蓝牙") }) else { return false }
+            for name in ["不允许","Don’t Allow","Don't Allow","拒绝"] where dialog.buttons[name].exists {
+                dialog.buttons[name].tap(); return true
+            }
+            return false
+        }
         app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "--synthetic-original-practice-ui"]
         app.launch()
         for subject in ["circuit", "mechanics"] {

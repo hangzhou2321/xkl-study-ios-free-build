@@ -1,7 +1,7 @@
 """Isolated hosted macOS test. Adds a Debug UI-test target in a temporary checkout, never to a Release IPA."""
 from pathlib import Path
 from datetime import datetime,timezone
-import hashlib, json, os, plistlib, re, shutil, subprocess, sys
+import hashlib, json, os, plistlib, re, shutil, subprocess, sys, platform
 from xml.etree import ElementTree as ET
 
 HERE=Path(__file__).resolve().parent
@@ -72,7 +72,7 @@ def run():
     result=out/'Smoke.xcresult';dd=out.parent/'originals-smoke-derived'
     args=['xcodebuild','-project',str(root/'XKLStudy.xcodeproj'),'-scheme','OriginalsSynthetic','-configuration','Debug',
           '-destination','platform=iOS Simulator,id='+udid,'-derivedDataPath',str(dd),'-resultBundlePath',str(result),
-          '-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1',
+          'ARCHS='+platform.machine(),'ONLY_ACTIVE_ARCH=YES','-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1',
           '-only-testing:'+UI+'/OriginalPracticeSmokeUITests/testSubjectNavigationAssistedResponsesAndColdReopen','test']
     with (out/'ui-test.log').open('w',encoding='utf8') as log:
         r=subprocess.run(args,cwd=root,stdout=log,stderr=subprocess.STDOUT)
@@ -85,7 +85,7 @@ def run():
     archive=json.loads(progress.read_bytes()); expected_keys={'real-bank-offline-v1:item/ui-'+s for s in ('circuit','mechanics')}
     assert archive['version']==1 and set(archive['entries'])==expected_keys
     decoded={k:json.loads(x) for k,x in archive['entries'].items()}
-    assert all(v==dict(questionID='synthetic-square',hint=True,choice='B') for v in decoded.values())
+    assert all(v.get('questionID')=='synthetic-square' and v.get('hint') is True and v.get('choice')=='B' and v.get('queryRewriteSupport') in ('allowed','blocked') for v in decoded.values())
     html={n:sha(HERE/'OriginalPractice'/n) for n in ('course.html','main.html')}
     assert html=={n:sha(app_dir/'OriginalPractice'/n) for n in html}
     assert all(sha(root/'App'/n)==v for n,v in app_sources.items())
