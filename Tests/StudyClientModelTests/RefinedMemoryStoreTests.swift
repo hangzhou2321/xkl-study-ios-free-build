@@ -56,7 +56,7 @@ final class RefinedMemoryStoreTests: XCTestCase {
         resumed.grade(remembered:false,token:shown.id,now:tomorrow);ready(resumed)
         let one=try XCTUnwrap(resumed.engine).record.attempts
         XCTAssertEqual(one.count,1);XCTAssertFalse(one[0].remembered);XCTAssertEqual(one[0].cardID,shown.cardID)
-        XCTAssertEqual(one[0].day,UInt32(ConceptCalendar.studyDay(tomorrow)))
+        XCTAssertEqual(one[0].day,UInt32(try ConceptCalendar.studyDay(tomorrow)))
         XCTAssertEqual(resumed.firstPassRemaining,2)
         let graded=try Data(contentsOf:currentFile)
         resumed.grade(remembered:false,token:shown.id,now:tomorrow)
