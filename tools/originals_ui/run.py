@@ -94,6 +94,6 @@ def run():
                  releaseSourcesUnmodified=app_sources,releaseProject=checked_project,simulatorOnlyProject=mod,syntheticFixtures=html,
                  osRuntime='.'.join(map(str,latest)),deviceType=device['name'],testedThrough='RootView → 专业课 → 分科 → OriginalPracticeView → WKWebView/course.html → main.html',
                  evidence=decoded,diskArchiveSHA256=sha(progress),xcode=capture('xcodebuild','-version'),utc=datetime.now(timezone.utc).isoformat(),
-                 nativeBackFragmentCheckedFor=['circuit','mechanics'],coldAppLaunchCheckedFor=['circuit','mechanics'],realPrivateMaterialsUsed=False,physicalDeviceTested=False)
+                 problemFirstEntryCheckedFor=['circuit','mechanics'],nativeBackFragmentCheckedFor=['circuit','mechanics'],coldAppLaunchCheckedFor=['circuit','mechanics'],realPrivateMaterialsUsed=False,physicalDeviceTested=False)
     (out/'simulator-receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2)+'\n',encoding='utf8');print(json.dumps(receipt,ensure_ascii=False))
 if __name__=='__main__': run()

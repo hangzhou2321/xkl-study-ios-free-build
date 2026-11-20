@@ -9,7 +9,7 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 45
     env:
-      RELEASE_SHA: 44d1e2b356966cca0700a49329ffd63636253e41
+      RELEASE_SHA: 8f2fdc67696ece384f8f6abca0a7227155e84bb0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
