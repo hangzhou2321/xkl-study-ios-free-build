@@ -27,7 +27,7 @@ final class RefinedSmokeUITests: XCTestCase {
    for s in ["Don’t Allow","Don't Allow","不允许","拒绝"] where a.buttons[s].exists {a.buttons[s].tap();return true};return false
   }
   launch()
-  let subjects=[("计算机","computer"),("电力","power")]
+  let subjects=[("计算机","computer"),("电力系统","power")]
   // Independently import and grade genuine legacy archives, so preservation is not a check against an empty or fabricated snapshot.
   for (name,_) in subjects {
    try subject(name);try edition("原卡与进度");try b("handbook-import-staged").tap();try b("handbook-continue").tap();try b("handbook-reveal").tap();try b("handbook-forgotten").tap()

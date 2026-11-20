@@ -88,7 +88,27 @@ def run():
     def build(args,file):
         with (out/file).open('w') as log:rc=subprocess.run(args,cwd=root,stdout=log,stderr=subprocess.STDOUT).returncode
         if rc: print((out/file).read_text(errors='replace')[-6500:]);raise RuntimeError((file,rc))
-    build(common+['build-for-testing'],'build.log')
+    # Fast path: exact same synthetic host app + existing Xcode-generated UI runner.
+    # Recompile only the changed XCTest executable. Never reuse a real-data app or an unpinned archive.
+    cached=Path(os.environ.get('PRIOR_SYNTH_PRODUCTS','no-cache.zip'))
+    reused=False
+    if cached.is_file():
+        try:
+            product=dd/'Build/Products';product.mkdir(parents=True,exist_ok=True)
+            cmd('ditto','-x','-k',cached,product)
+            runner=product/'Debug-iphonesimulator'/(UI+'-Runner.app')
+            test=runner/'PlugIns'/(UI+'.xctest')
+            binary=test/UI; assert binary.is_file() and (product/'Debug-iphonesimulator/XKLStudy.app').is_dir()
+            dev=Path(os.environ['DEVELOPER_DIR'])/'Platforms/iPhoneSimulator.platform/Developer'
+            sd=capture('xcrun','--sdk','iphonesimulator','--show-sdk-path'); plat=platform.machine()+'-apple-ios17.0-simulator'
+            build(['xcrun','--sdk','iphonesimulator','swiftc','-target',plat,'-sdk',sd,'-parse-as-library','-module-name',UI,'-swift-version','5','-emit-library','-F'+str(dev/'Library/Frameworks'),'-I'+str(dev/'usr/lib'),'-L'+str(dev/'usr/lib'),'-framework','XCTest','-Xlinker','-rpath','-Xlinker','@loader_path/Frameworks','-Xlinker','-rpath','-Xlinker','@executable_path/Frameworks',root/'RefinedSyntheticSmoke'/(UI+'.swift'),'-o',binary],'patch-test.log')
+            cmd('codesign','--force','--sign','-',test);cmd('codesign','--force','--sign','-','--preserve-metadata=identifier,entitlements,flags',runner)
+            xrun=next(product.glob('*.xctestrun'));common=['xcodebuild','-xctestrun',str(xrun),'-destination','platform=iOS Simulator,id='+u,'-parallel-testing-enabled','NO','-maximum-concurrent-test-simulator-destinations','1']
+            print('Reused validated synthetic app; rebuilt XCTest bundle only.',flush=True);reused=True
+        except Exception as exc:
+            print('Full build fallback:',repr(exc),flush=True)
+            if (dd/'Build/Products').exists():shutil.rmtree(dd/'Build/Products')
+    if not reused:build(common+['build-for-testing'],'build.log')
     cmd('xcrun','simctl','bootstatus',u,'-b')
     app=dd/'Build/Products/Debug-iphonesimulator/XKLStudy.app';cmd('xcrun','simctl','install',u,app)
     data=Path(capture('xcrun','simctl','get_app_container',u,BUNDLE,'data'));stage_old(data/'Documents/HandbookCards')
@@ -120,7 +140,7 @@ def run():
         try: ui(phase,'ui.log')
         except RuntimeError:
             # Preserve data about the first failed path; no reset of any non-synthetic device or subject.
-            assert 'RefinedSynthetic' in str(common)
+            assert 'RefinedSynthetic' in str(common) or ('-xctestrun' in common and reused)
             (out/'root-observations.json').write_text(json.dumps(history))
             crash=out/'crash';crash.mkdir(exist_ok=True)
             for f in (Path.home()/'Library/Logs/DiagnosticReports').glob('XKLStudy*'):
@@ -144,5 +164,5 @@ def run():
         assert r['presentation'] and not r['presentation']['revealed']; s=base64.b64decode(r['snapshot']);assert hashlib.sha256(s).hexdigest()==r['snapshotSHA256'];handle=dll.xkl_engine_restore(s,len(s));assert handle
         ev=(ctypes.c_uint32*16)();a=at[0];assert dll.xkl_engine_event(handle,a['engineSequence']-1,ctypes.byref(ev)),a;assert ev[0]==a['engineSequence'] and ev[1] in (5,6) and r['cardIDs'][ev[3]]==a['cardID'] and ev[7]==a['beforeRevision'] and ev[8]==a['afterRevision']
         result[k]=dict(legacySnapshot=old[0]['snap'],legacyGraded=old[0]['submitted'],legacyArchiveUnchanged=True,sawRevealWithoutGrading=True,newWrongGrades=len(at),nativeEvent=list(ev),newPending=r['presentation'],courseSHA=sha(app/'RefinedMemory'/(k+'.json')))
-    assert all(sha(root/'App'/n)==v for n,v in h.items());(out/'receipt.json').write_text(json.dumps(dict(release=target,sources=h,os=latest,device=d['name'],subjects=result,synthetic=True,route=phase),ensure_ascii=False,indent=1))
+    assert all(sha(root/'App'/n)==v for n,v in h.items());(out/'receipt.json').write_text(json.dumps(dict(release=target,sources=h,os=latest,device=d['name'],subjects=result,synthetic=True,route=phase,reusedExactSyntheticHost=reused),ensure_ascii=False,indent=1))
 if __name__=='__main__':run()

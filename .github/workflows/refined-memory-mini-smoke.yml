@@ -4,6 +4,7 @@ on:
     branches: ["codex/b83-refined-native-smoke"]
 permissions:
   contents: read
+  actions: read
 jobs:
   verify:
     runs-on: macos-15
@@ -17,6 +18,15 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$RELEASE"
           git worktree add --detach "$RUNNER_TEMP/release" "$RELEASE"
+      - name: Reuse the exact fixture-only Simulator products if available
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          require=13a3a19bc838e73e03ba13f842c8eb2840bb155b34a4fdd1cf8f3d7d2be9fc74
+          gh api /repos/${{ github.repository }}/actions/artifacts/14596556824/zip > "$RUNNER_TEMP/old.zip"
+          echo "$require  $RUNNER_TEMP/old.zip" | shasum -a 256 -c -
+          unzip -p "$RUNNER_TEMP/old.zip" built-synthetic-simulator.zip > "$RUNNER_TEMP/products.zip"
+          echo "PRIOR_SYNTH_PRODUCTS=$RUNNER_TEMP/products.zip" >> "$GITHUB_ENV"
       - name: Exercise actual SwiftUI subject and edition switches with synthetic bundles
         run: python3 -u tools/refined_smoke/run.py "$RUNNER_TEMP/release" "$RELEASE" "$RUNNER_TEMP/refined-output"
       - if: always()
