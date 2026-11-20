@@ -36,7 +36,7 @@ final class ProbeApp: UIResponder, UIApplicationDelegate {
         let f=root.appendingPathComponent("OriginalPracticeProgress/original-practice-v1.json")
         let disk=(try? String(contentsOf:f,encoding:.utf8)) ?? "(not found)"
         guard let w=found else {append(["t":dt,"wkFound":false,"labels":labels,"archive":disk]);return}
-        append(["t":dt,"wkFound":true,"wkURL":w.url?.absoluteString ?? "(nil)","loading":w.isLoading,"progress":w.estimatedProgress,"bounds":NSStringFromCGRect(w.bounds),"frame":NSStringFromCGRect(w.frame),"interactive":w.isUserInteractionEnabled,"hidden":w.isHidden,"wkTitle":w.title ?? "(nil)","labels":labels,"archive":disk])
+        append(["t":dt,"wkFound":true,"wkURL":w.url?.absoluteString ?? "(nil)","loading":w.isLoading,"progress":w.estimatedProgress,"bounds":String(describing:w.bounds),"frame":String(describing:w.frame),"interactive":w.isUserInteractionEnabled,"hidden":w.isHidden,"wkTitle":w.title ?? "(nil)","labels":labels,"archive":disk])
         let expr="""
         (()=>{let x={url:location.href,ready:document.readyState,title:document.title,body:document.body?.innerText||'',bridge:window.__originalPracticeStorageReady===true};try{x.stored=localStorage.getItem('real-bank-offline-v1:item/synthetic-probe')}catch(e){x.storeError=String(e)}return JSON.stringify(x)})()
         """
