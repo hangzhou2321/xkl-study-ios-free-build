@@ -48,9 +48,12 @@ struct RefinedMemoryCourse: Decodable {
     struct Supplement: Decodable {
         struct Revision: Decodable {
             let ref, oldQ, oldA, q, a, source: String
+            let recognize: String?
 
             func applied(to original: Row) throws -> Row {
-                guard ref == original.ref, oldQ == original.q, oldA == original.a, q != oldQ || a != oldA,
+                let reading = recognize ?? original.recognize
+                guard ref == original.ref, oldQ == original.q, oldA == original.a,
+                      q != oldQ || a != oldA || reading != original.recognize,
                       !source.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
                     throw ExamError.invalid("精简修订与原问不一致。")
                 }
@@ -64,7 +67,7 @@ struct RefinedMemoryCourse: Decodable {
                     return Mark(field:mark.field,text:mark.text,color:mark.color,location:found.location,start:nil)
                 }
                 return Row(ref:ref,q:q,a:a,kind:original.kind,how:original.how,note:original.note,colors:colors,
-                           core:original.core,recognize:original.recognize,editKind:original.editKind)
+                           core:original.core,recognize:reading,editKind:original.editKind)
             }
         }
         struct Addition: Decodable {
