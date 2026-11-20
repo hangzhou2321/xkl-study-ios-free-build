@@ -1,0 +1,36 @@
+name: Original practice passive WK diagnostic
+on:
+  push:
+    branches: [codex/native-originals-wk-diagnostic-b82]
+permissions:
+  contents: read
+jobs:
+  wk-diagnostic:
+    runs-on: macos-15-intel
+    timeout-minutes: 40
+    env:
+      RELEASE_SHA: 8f2fdc67696ece384f8f6abca0a7227155e84bb0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: smoke
+          sparse-checkout: tools/originals_ui
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: app
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+      - name: Run passive DOM, callback and rendering diagnostics with synthetic pages only
+        run: |
+          test "$(git -C app rev-parse HEAD)" = "$RELEASE_SHA"
+          test ! -e app/OriginalPractice
+          python3 smoke/tools/originals_ui/wk_diagnostic.py app "$RELEASE_SHA" build/wk-diagnostic
+      - name: Upload DOM snapshots, callback trace, full-screen captures and exact Debug-only patch
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-originals-wk-diagnostic
+          path: build/wk-diagnostic/
+          if-no-files-found: warn
+          retention-days: 3
