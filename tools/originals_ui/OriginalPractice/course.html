@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Synthetic course</title></head>
+<body><h1 id="headline">Opening fixture</h1><a id="open-bank">Open synthetic problem</a>
+<script>
+const subject=new URLSearchParams(location.search).get('nativeSubject');
+if(['circuit','mechanics'].includes(subject)&&window.__originalPracticeStorageReady===true){
+  document.getElementById('headline').textContent=(new URLSearchParams(location.search).get('detail')==='1'?'Synthetic detail ':'Course ')+subject;
+  const link=document.getElementById('open-bank');link.href='main.html?subject='+subject;
+  link.setAttribute('aria-label','Open synthetic problem '+subject);link.textContent='Open synthetic problem '+subject;
+}
+</script></body></html>

@@ -1,0 +1,45 @@
+name: Original practice synthetic Apple UI
+on:
+  push:
+    branches: [codex/native-originals-smoke-b82]
+permissions:
+  contents: read
+jobs:
+  original-practice-real-webkit:
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    env:
+      RELEASE_SHA: e717b31e587a60629fcf880c2d77574e8b69c406
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: smoke
+          sparse-checkout: tools/originals_ui
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: app
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+      - name: Check exact release sources and synthetic-only smoke resources
+        run: |
+          test "$(git -C app rev-parse HEAD)" = "$RELEASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('app')
+          denied={'.pdf','.epub','.xklcontent','.xklquestions','.xklconcepts','.xklcourse','.xklqbank','.xklflashcards','.xklmath','.xklmathguide','.xklguide','.p12','.p8','.key','.mobileprovision'}
+          assert not any(x.suffix.lower() in denied for x in root.rglob('*') if x.is_file())
+          assert not any((root/p).exists() for p in ['Resources/deck.json','Resources/personal-state.bin','Resources/resource-manifest.json','OriginalPractice'])
+          fixture=Path('smoke/tools/originals_ui/OriginalPractice')
+          assert {x.name for x in fixture.iterdir()}=={'course.html','main.html'}
+          PY
+      - name: Test real native course entry and WK bridge, then check simulator container
+        run: python3 smoke/tools/originals_ui/run.py app "$RELEASE_SHA" build/verified-ui
+      - name: Upload receipt, synthetic XCTest attachments and build log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-original-practice-apple-ui-smoke
+          path: build/verified-ui/
+          if-no-files-found: warn
+          retention-days: 3

@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Synthetic problem</title></head>
+<body><h1 id="headline">Opening fixture</h1><p>Synthetic squares: which choice is four?</p>
+<button id="hint" type="button" disabled>Reveal synthetic hint</button><p id="notice">Hint concealed</p>
+<button id="choose" type="button" disabled>Choose four</button><p id="result">Not selected</p>
+<p id="position"></p><button id="next">Switch to second synthetic question</button><a id="detail">Open synthetic detail</a>
+<script>
+const subject=new URLSearchParams(location.search).get('subject');
+if(['circuit','mechanics'].includes(subject)&&window.__originalPracticeStorageReady===true){
+  const by=id=>document.getElementById(id), key='real-bank-offline-v1:item/ui-'+subject;
+  const state=JSON.parse(localStorage.getItem(key)||'{"questionID":"synthetic-square","hint":false,"choice":null}');
+  function show(){by('notice').textContent=state.hint?'Hint used':'Hint concealed';by('result').textContent=state.choice==='B'?'Selected four':'Not selected';}
+  function commit(){localStorage.setItem(key,JSON.stringify(state));show();}
+  by('hint').onclick=()=>{state.hint=true;commit()};by('choose').onclick=()=>{state.choice='B';commit()};
+    const position=()=>{by('position').textContent=location.hash==='#question-two'?'Second synthetic question':'First synthetic question'};
+  by('next').onclick=()=>{history.replaceState(null,'','#question-two');position()};
+  by('detail').href='course.html?nativeSubject='+subject+'&detail=1';position();
+  by('hint').disabled=by('choose').disabled=false;by('headline').textContent='Problem '+subject;show();
+}
+</script></body></html>
