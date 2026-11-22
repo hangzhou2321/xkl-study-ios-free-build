@@ -285,6 +285,10 @@ private struct RefinedFace: View {
     let item: RefinedMemoryStore.Entry
     let revealed: Bool
     @State private var sources = false
+    @State private var practicingFirstMove = false
+    private var firstMoveLesson: PowerFirstMoveLesson? {
+        PowerFirstMoveLesson.lesson(for: item.row)
+    }
     static func chapter(_ code: String) -> String {
         ["hardware":"计算机硬件基础", "software":"计算机软件基础", "network":"网络技术基础",
          "security":"信息安全技术", "frontier":"信息新技术"][code] ?? code
@@ -306,6 +310,10 @@ private struct RefinedFace: View {
             Text(RefinedText.render(item.row, answer: false))
                 .font(.title3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("refined-current-question")
+            if firstMoveLesson != nil, !revealed {
+                Text("看到这个条件，第一时间想到什么？")
+                    .font(.subheadline.weight(.medium)).foregroundStyle(Color.accentColor)
+            }
             if revealed {
                 Divider()
                 Text(RefinedText.render(item.row, answer: true))
@@ -319,6 +327,16 @@ private struct RefinedFace: View {
                     Text(item.row.note).font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let firstMoveLesson {
+                    DisclosureGroup("看讲解") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(firstMoveLesson.explanation)
+                            Text(firstMoveLesson.example)
+                        }.font(.subheadline).padding(.vertical, 5)
+                    }.accessibilityIdentifier("refined-first-move-explain")
+                    Button("换条件练起手") { practicingFirstMove = true }
+                        .accessibilityIdentifier("refined-first-move-practice")
+                }
                 DisclosureGroup(isExpanded: $sources) {
                     Text(item.group.evidence.detail).font(.footnote).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
@@ -330,6 +348,84 @@ private struct RefinedFace: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(16)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+        .sheet(isPresented: $practicingFirstMove) {
+            if let firstMoveLesson, revealed {
+                PowerFirstMovePractice(lesson: firstMoveLesson)
+            }
+        }
+    }
+}
+
+/// Optional teaching content is tied to the exact current card text and sits outside the recall deck.
+@MainActor
+private struct PowerFirstMoveLesson: Decodable {
+    let expectedQ, expectedA, explanation, example, question, firstFeedback, feedback: String
+    let starts, options: [String]
+    let firstKey, key: Int
+
+    private static let library: [String: PowerFirstMoveLesson] = {
+        guard let url = Bundle.main.url(forResource: "power-first-move", withExtension: "json",
+                                        subdirectory: "RefinedMemory"),
+              let bytes = try? Data(contentsOf: url), bytes.count <= 262_144,
+              let catalog = try? JSONDecoder().decode([String: PowerFirstMoveLesson].self, from: bytes)
+        else { return [:] }
+        return catalog
+    }()
+
+    static func lesson(for row: RefinedMemoryCourse.Row) -> Self? {
+        guard let lesson = library[row.ref], lesson.expectedQ == row.q, lesson.expectedA == row.a,
+              lesson.starts.count >= 2, lesson.options.count >= 2,
+              lesson.starts.indices.contains(lesson.firstKey), lesson.options.indices.contains(lesson.key)
+        else { return nil }
+        return lesson
+    }
+}
+
+/// Temporary two-step practice. The card's grading buttons own all writes to the learning record.
+@MainActor
+private struct PowerFirstMovePractice: View {
+    let lesson: PowerFirstMoveLesson
+    @Environment(\.dismiss) private var dismiss
+    @State private var firstChoice: Int?
+    @State private var answerChoice: Int?
+    @State private var firstConfirmed = false
+    @State private var finished = false
+
+    private var options: [String] { firstConfirmed ? lesson.options : lesson.starts }
+    private var selected: Int? { firstConfirmed ? answerChoice : firstChoice }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(lesson.question).font(.title3)
+                    Text(firstConfirmed ? "再选结论" : "第一时间先想到什么？").font(.headline)
+                    ForEach(options.indices, id: \.self) { index in
+                        Button {
+                            if firstConfirmed { answerChoice = index } else { firstChoice = index }
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: selected == index ? "checkmark.circle.fill" : "circle")
+                                Text(options[index]).multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }.frame(minHeight: 32)
+                        }.buttonStyle(.bordered).disabled(finished)
+                            .accessibilityAddTraits(selected == index ? .isSelected : [])
+                    }
+                    if finished {
+                        Text((firstChoice == lesson.firstKey ? "起手正确。" : "先改起手。") + lesson.firstFeedback)
+                        Text((answerChoice == lesson.key ? "结论正确。" : "再核对结论。") + lesson.feedback)
+                        Button("回到卡片") { dismiss() }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button(firstConfirmed ? "交卷核对" : "确认第一步") {
+                            if firstConfirmed { finished = true } else { firstConfirmed = true }
+                        }.buttonStyle(.borderedProminent).disabled(selected == nil)
+                    }
+                }.frame(maxWidth: 640, alignment: .leading).padding()
+            }
+            .navigationTitle("换条件练起手").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+        }
     }
 }
 
