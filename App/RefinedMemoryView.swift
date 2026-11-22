@@ -1,5 +1,7 @@
 import SwiftUI
 import Foundation
+import UIKit
+import UniformTypeIdentifiers
 
 /// One visible assessment is one existing stable reference. Scheduling, writes and
 /// duplicate-token handling all belong to RefinedMemoryStore.
@@ -147,7 +149,7 @@ struct RefinedMemoryView: View {
     private func question(_ item: RefinedMemoryStore.Entry, _ p: ProfessionalRecallPresentation) -> some View {
         VStack(spacing: 0) {
             ScrollView {
-                RefinedFace(item: item, revealed: p.revealed)
+                RefinedFace(subject: subject, item: item, revealed: p.revealed)
                     .frame(maxWidth: 650, alignment: .leading)
                     .padding(.horizontal, 12).padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
@@ -263,7 +265,7 @@ private struct RefinedReference: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                RefinedFace(item: item, revealed: shown)
+                RefinedFace(subject: store.subject, item: item, revealed: shown)
                 Button(shown ? "遮住答案" : "查看答案（不计成绩）") { shown.toggle() }.buttonStyle(.bordered)
                 Button {
                     store.requeue(ref: item.id)
@@ -282,10 +284,12 @@ private struct RefinedReference: View {
 
 @MainActor
 private struct RefinedFace: View {
+    let subject: ConceptSubject
     let item: RefinedMemoryStore.Entry
     let revealed: Bool
     @State private var sources = false
     @State private var practicingFirstMove = false
+    @State private var copiedPrompt: String?
     private var firstMoveLesson: PowerFirstMoveLesson? {
         PowerFirstMoveLesson.lesson(for: item.row)
     }
@@ -319,6 +323,7 @@ private struct RefinedFace: View {
                 Text(RefinedText.render(item.row, answer: true))
                     .font(.body).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled).accessibilityIdentifier("refined-current-answer")
+                computerIllustration
                 if let recognize = item.row.recognize, !recognize.isEmpty {
                     Text("只认读，不要求默写").font(.caption).foregroundStyle(.secondary)
                     Text(recognize).font(.body)
@@ -344,6 +349,13 @@ private struct RefinedFace: View {
                     Text(["新增考点","本次修订"].contains(item.group.evidence.label) ? "本问依据" : "上版卡组依据 · \(item.group.evidence.label)")
                         .font(.footnote)
                 }
+                Menu {
+                    Button("复制讲解指令") { copyPrompt(.explain) }
+                    Button("复制改卡指令") { copyPrompt(.rewrite) }
+                } label: {
+                    Label("AI 辅助", systemImage: "text.bubble").font(.footnote)
+                }
+                if let copiedPrompt { Text(copiedPrompt).font(.caption).foregroundStyle(.secondary) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(16)
@@ -352,6 +364,61 @@ private struct RefinedFace: View {
             if let firstMoveLesson, revealed {
                 PowerFirstMovePractice(lesson: firstMoveLesson)
             }
+        }
+    }
+
+    private func copyPrompt(_ purpose: CardLookupSession.PromptPurpose) {
+        let prompt = CardLookupSession.prompt(subject: subject.shortTitle, title: item.group.title,
+                                              question: item.row.q, answer: item.row.a, purpose: purpose)
+        UIPasteboard.general.setItems([[UTType.plainText.identifier: prompt]],
+                                      options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+        switch purpose {
+        case .explain: copiedPrompt = "已复制讲解指令"
+        case .rewrite: copiedPrompt = "已复制改卡指令"
+        }
+    }
+
+    @ViewBuilder private var computerIllustration: some View {
+        switch item.row.ref {
+        case "hw-ieee-layout#1":
+            ieeeRow("单精度 32 位", [1,8,23])
+            ieeeRow("双精度 64 位", [1,11,52])
+            DisclosureGroup("讲义字段原图") { cardImage("ieee-fields",label:"基础讲义的单精度与双精度三字段原图") }
+        case "hw-ieee-layout#2":
+            Text("符号位 S：0 为正号，1 为负号。")
+                .font(.body).foregroundStyle(Color.accentColor)
+        case "hw-von-neumann#2":
+            cardImage("classic-five-parts", label:"宝典原图。实线为数据线，虚线为控制线与反馈线。")
+            Text("实线：外部 → 输入设备 → 运算器 → 输出设备 → 外部；运算器 ↔ 存储器；存储器 → 控制器。")
+                .font(.subheadline)
+            Text("虚线：控制器与输入设备、输出设备、运算器、存储器分别双向相连。")
+                .font(.subheadline)
+        default: EmptyView()
+        }
+    }
+
+    private func ieeeRow(_ title: String, _ bits: [Int]) -> some View {
+        let labels = ["符号", "阶码", "尾数"]
+        let colors: [Color] = [.orange,.blue,.green]
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption.weight(.medium))
+            HStack(spacing: 4) {
+                ForEach(bits.indices, id: \.self) { i in
+                    VStack(spacing: 2) {
+                        Text("\(bits[i]) 位").font(.subheadline.weight(.semibold)).monospacedDigit()
+                        Text(labels[i]).font(.caption)
+                    }.frame(maxWidth: .infinity).padding(6)
+                        .background(colors[i].opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }.accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private func cardImage(_ name: String, label: String) -> some View {
+        if let url = Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: "RefinedMemory/Diagrams"),
+           let image = UIImage(contentsOfFile: url.path) {
+            Image(uiImage: image).resizable().scaledToFit()
+                .clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityLabel(label)
         }
     }
 }

@@ -31,6 +31,8 @@ struct StudyHomeView: View {
     @State private var importingSchedule = false
     @State private var choosingWindow: HourlyStudyPlan.Window?
     @State private var choosingTarget = 0
+    @State private var paceExpanded = false
+    @AppStorage("todayFocus.dailyNewTarget") private var dailyNewTarget = 10
 
     private var choices: [EffectiveStudyArea] {
         EffectiveStudyArea.allCases.filter { (cardsRemaining[$0.rawValue] ?? 0) > 0 }
@@ -61,15 +63,20 @@ struct StudyHomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if flow.state.needsBreak { completedTimedSegment }
-                    if hourly.schedule == nil && !actions.isEmpty {
-                        Picker("配速科目", selection: Binding(get: { nextAction?.area }, set: { chosenArea = $0 })) {
+                    if actions.count > 1 && !flow.state.needsBreak {
+                        Picker("当前科目", selection: Binding(get: { nextAction?.area }, set: { chosenArea = $0 })) {
                             ForEach(actions, id: \.area) { action in
                                 Text(action.area.title).tag(Optional(action.area))
                             }
                         }
                         .pickerStyle(.menu)
                     }
-                    HourlyStudyBoard(tracker: hourly, subject: paceArea,
+                    if let next = nextAction, !flow.state.needsBreak {
+                        if let refined = selectedRefined(next.area) { todayFocus(next, refined) }
+                        else { nextCard(next) }
+                    }
+                    DisclosureGroup("小时配速与截止", isExpanded: $paceExpanded) {
+                        HourlyStudyBoard(tracker: hourly, subject: paceArea,
                                      unit: nextAction?.area == .publicQuestions || nextAction?.area == .math ? "题" : "张",
                                      unseen: nextAction.flatMap { firstPassByArea[$0.area] },
                                      remainingFirstPass: cardsRemaining, enabled: !flow.state.needsBreak,
@@ -77,8 +84,9 @@ struct StudyHomeView: View {
                                      choose: { window, target in
                                          choosingTarget = target
                                          choosingWindow = window
-                                     })
-                    if let next = nextAction, !flow.state.needsBreak { nextCard(next) }
+                                     }).padding(.top, 6)
+                    }
+                    .accessibilityIdentifier("today-hour-details")
                     if !flow.state.needsBreak {
                         HStack {
                             Button("电路解题课") { launch(.circuit, .standard) }
@@ -144,6 +152,72 @@ struct StudyHomeView: View {
         .onChange(of: refinedPower.presentation?.id) { _, _ in if visible { refresh() } }
         .onChange(of: day) { _, _ in if visible { refresh() } }
         .onChange(of: hourly.schedule?.deadline) { _, _ in if visible { refresh() } }
+    }
+
+    private func todayFocus(_ action: StudyHomeAction, _ refined: RefinedMemoryStore) -> some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let calendar = Calendar.current
+            let now = context.date
+            let firstPass = refined.firstPassRemaining
+            let completed = firstGradedToday(refined, date: now, calendar: calendar)
+            let target = min(100, max(1, dailyNewTarget))
+            let newLeft = min(max(0, target - completed), firstPass)
+            let due = refined.stats(on: now)?.due ?? action.due
+            let future = firstPass - newLeft
+            let days = (future + target - 1) / target
+            let eta = calendar.date(byAdding: .day, value: days, to: calendar.startOfDay(for: now))
+            VStack(alignment: .leading, spacing: 13) {
+                Text(action.area.title).font(.headline)
+                Text("今天还剩 \(newLeft + due) 问").font(.title2.weight(.semibold)).monospacedDigit()
+                    .accessibilityIdentifier("today-priority-remaining")
+                HStack {
+                    Text("新背")
+                    Spacer()
+                    Text("已做 \(completed) · 剩 \(newLeft)").monospacedDigit()
+                }.font(.subheadline)
+                if completed + newLeft > 0 {
+                    ProgressView(value: Double(completed), total: Double(completed + newLeft))
+                        .accessibilityLabel("今日新背进度")
+                }
+                HStack {
+                    Text("到期复习")
+                    Spacer()
+                    Text("\(due) 问").monospacedDigit()
+                }.font(.subheadline)
+                Divider()
+                if firstPass == 0 {
+                    Text("首轮已完成").font(.headline)
+                } else if let eta {
+                    Text("首轮预计 \(eta.formatted(.dateTime.month().day())) 背完").font(.headline)
+                    Text("本科还剩 \(firstPass) 问 · 按每天 \(target) 个新问估算")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let deadline = hourly.schedule?.deadline {
+                        let gap = calendar.dateComponents([.day], from: calendar.startOfDay(for: deadline), to: eta).day ?? 0
+                        let marker = now >= deadline ? "目标时间已过" :
+                            gap > 0 ? "预计晚 \(gap) 天" : gap < 0 ? "预计提前 \(-gap) 天" : "预计同日完成"
+                        Text("目标 \(deadline.formatted(.dateTime.month().day().hour().minute())) · \(marker)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Stepper("每日新背 \(target) 问", value: $dailyNewTarget, in: 1...100)
+                    .font(.subheadline).accessibilityIdentifier("today-priority-target")
+                Button { begin(action) } label: {
+                    Label("继续背卡", systemImage: "play.fill").frame(maxWidth: .infinity, minHeight: 42)
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("today-next-study")
+            }.padding(20)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+
+    private func firstGradedToday(_ refined: RefinedMemoryStore, date: Date, calendar: Calendar) -> Int {
+        guard let engine = refined.engine else { return 0 }
+        let prefix = "refined-" + refined.subject.rawValue + ":"
+        let eligible = Set(refined.entries.map { prefix + $0.id })
+        var first: [String: Date] = [:]
+        for attempt in engine.record.attempts where eligible.contains(attempt.cardID) {
+            first[attempt.cardID] = min(first[attempt.cardID] ?? attempt.at, attempt.at)
+        }
+        return first.values.reduce(0) { $0 + (calendar.isDate($1, inSameDayAs: date) ? 1 : 0) }
     }
 
     private func nextCard(_ action: StudyHomeAction) -> some View {
@@ -265,6 +339,10 @@ struct StudyHomeView: View {
                     options.append(.init(area: .math, hasPosition: saved, due: 0))
                 }
             }
+        }
+        if Bundle.main.url(forResource: "math-practice", withExtension: "html", subdirectory: "OriginalPractice") != nil,
+           !options.contains(where: { $0.area == .math }) {
+            options.append(.init(area: .math, hasPosition: false, due: 0))
         }
 
         for area in EffectiveStudyArea.allCases {
