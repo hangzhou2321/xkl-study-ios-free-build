@@ -218,7 +218,10 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
             w.allowsLinkPreview = false; w.allowsBackForwardNavigationGestures = false
             w.navigationDelegate = self; w.uiDelegate = self
             web = w; install(w)
-            guard let url = resources.home(subject, singleQueue: singleQueue) else { fail("这门课没有原题练习入口。", terminal: true); return }
+            guard let url = resources.home(subject, singleQueue: singleQueue), resources.page(url) != nil else {
+                fail("当前安装包没有这门课的原题练习。请使用带原题的完整安装包。", terminal: true)
+                return
+            }
             open(Place(url: url), move: .home)
         } catch { fail("无法读取原题练习记录，未开始本次练习。\n\(error.localizedDescription)", terminal: true) }
     }
