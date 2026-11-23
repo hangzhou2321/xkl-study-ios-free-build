@@ -11,6 +11,30 @@ final class OriginalPracticeStorageTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at:dir) }
         try run(dir)
     }
+    func testDualReviewKeepsFirstDailyAssessmentThroughSameDayRetry() throws {
+        func review(_ previous: OriginalPracticeReview?, _ day: UInt32, _ offset: Int64,
+                    _ independent: Bool, retry: Bool = false) throws -> OriginalPracticeReview {
+            let input = OriginalPracticeReview.Input(previous: previous, day: day,
+                at: Int64(day) * 86_400_000 + offset, independent: independent, retry: retry)
+            return try input.reviewed()
+        }
+
+        let wrong = try review(nil, 20_000, 0, false)
+        XCTAssertEqual(wrong.daily, wrong.all)
+        XCTAssertEqual(wrong.daily.dueDay, 20_001)
+
+        let laterCorrect = try review(wrong, 20_000, 600_000, true, retry: true)
+        XCTAssertEqual(laterCorrect.daily, wrong.daily)
+        XCTAssertNotEqual(laterCorrect.all, wrong.all)
+        XCTAssertGreaterThan(laterCorrect.all.stability, wrong.all.stability)
+
+        let nextDayCorrect = try review(laterCorrect, 20_001, 0, true)
+        XCTAssertEqual(nextDayCorrect.daily.lastDay, 20_001)
+        XCTAssertGreaterThan(nextDayCorrect.daily.dueDay, 20_001)
+        XCTAssertThrowsError(try review(nil, 20_000, 0, true, retry: true))
+        XCTAssertThrowsError(try review(laterCorrect, 20_000, 0, true))
+    }
+
     func testDurableNamespacesRemainSeparateAndDeletionIsSelective() throws {
         try temporary { dir in
             let store = try OriginalPracticeStorage(directory:dir)

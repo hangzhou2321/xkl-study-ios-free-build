@@ -1,4 +1,44 @@
 import Foundation
+import StudyCore
+
+struct OriginalPracticeReview: Codable, Equatable {
+    typealias Memory = FSRS6Shadow.Memory
+    let daily: Memory
+    let all: Memory
+
+    struct Input: Decodable {
+        let previous: OriginalPracticeReview?
+        let day: UInt32
+        let at: Int64
+        let independent: Bool
+        let retry: Bool
+
+        func reviewed() throws -> OriginalPracticeReview {
+            guard (18_000...50_000).contains(day),
+                  (1_555_027_200_000...4_320_172_800_000).contains(at),
+                  abs(Int64(day) - at / 86_400_000) <= 1,
+                  (previous?.daily.lastDay ?? 0) <= day,
+                  (previous?.all.lastDay ?? 0) <= day else { throw AnalysisError.invalidObservation }
+            for memory in [previous?.daily, previous?.all].compactMap({ $0 }) {
+                guard (18_000...day).contains(memory.lastDay),
+                      memory.dueDay > memory.lastDay,
+                      memory.dueDay - memory.lastDay <= UInt32(FSRS6Shadow.maximumInterval),
+                      let timestamp = memory.timestampMs, (1_555_027_200_000...at).contains(timestamp)
+                else { throw AnalysisError.invalidObservation }
+            }
+            if retry, previous?.daily.lastDay != day { throw AnalysisError.invalidObservation }
+            let rating = independent ? 3 : 1
+            let all = try FSRS6Shadow.review(previous?.all, day: day, rating: rating, timestampMs: at).memory
+            let daily: Memory
+            if let existing = previous?.daily, existing.lastDay == day {
+                daily = existing
+            } else {
+                daily = try FSRS6Shadow.review(previous?.daily, day: day, rating: rating, timestampMs: at).memory
+            }
+            return OriginalPracticeReview(daily: daily, all: all)
+        }
+    }
+}
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)

@@ -137,10 +137,16 @@ private final class PracticeResources: NSObject, WKURLSchemeHandler {
 }
 
 @MainActor
-private final class PracticeMessages: NSObject, WKScriptMessageHandler {
+private final class PracticeMessages: NSObject, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
     weak var owner: PracticeController?
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         owner?.receive(message)
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        guard let owner else { replyHandler(nil, "练习页面已经关闭。"); return }
+        owner.receiveReview(message, reply: replyHandler)
     }
 }
 
@@ -214,6 +220,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
             config.setURLSchemeHandler(resources, forURLScheme: PracticeResources.scheme)
             messages.owner = self; config.userContentController.add(messages, name: "originalPracticeStore")
             config.userContentController.add(messages, name: "originalPracticeLearning")
+            config.userContentController.addScriptMessageHandler(messages, contentWorld: .page, name: "originalPracticeReview")
             let w = WKWebView(frame: .zero, configuration: config)
             w.allowsLinkPreview = false; w.allowsBackForwardNavigationGestures = false
             w.navigationDelegate = self; w.uiDelegate = self
@@ -334,6 +341,24 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
         catch { fail("练习记录未能保存，已暂停作答。请退出后重开；本次未保存的操作不能计入完成。\n\(error.localizedDescription)", terminal: true) }
     }
 
+    func receiveReview(_ message: WKScriptMessage, reply: (Any?, String?) -> Void) {
+        guard !blocked, !transitioning, documentReady, message.webView === web, message.frameInfo.isMainFrame,
+              let source = message.frameInfo.request.url, let file = resources.page(source),
+              ["single-practice.html", "math-practice.html"].contains(file.lastPathComponent),
+              let here = position?.url, resources.page(here) == file,
+              let body = message.body as? String, body.utf8.count <= 4096 else {
+            reply(nil, "当前页面无法计算复测。")
+            return
+        }
+        do {
+            let input = try JSONDecoder().decode(OriginalPracticeReview.Input.self, from: Data(body.utf8))
+            let data = try JSONEncoder().encode(input.reviewed())
+            reply(String(decoding: data, as: UTF8.self), nil)
+        } catch {
+            reply(nil, "复测记录无法计算，原记录已保留。")
+        }
+    }
+
     private func setLearning(_ active: Bool) {
         guard learningActive != active else { return }
         learningActive = active; learning(active)
@@ -393,6 +418,7 @@ private final class PracticeController: UIViewController, WKNavigationDelegate, 
         web?.stopLoading(); web?.uiDelegate = nil; web?.navigationDelegate = nil
         web?.configuration.userContentController.removeScriptMessageHandler(forName: "originalPracticeStore")
         web?.configuration.userContentController.removeScriptMessageHandler(forName: "originalPracticeLearning")
+        web?.configuration.userContentController.removeScriptMessageHandler(forName: "originalPracticeReview", contentWorld: .page)
         messages.owner = nil
     }
 }
