@@ -64,6 +64,27 @@ final class RefinedMemoryStoreTests: XCTestCase {
             }
         }
     }
+    @MainActor func testTeachingLayoutReordersFirstLearningWithoutChangingSavedSlots() throws {
+        let raw=try twoGroups()
+        let layout=try JSONSerialization.data(withJSONObject:[
+            "subject":"power","courseSHA256":StudySHA256.hex(raw),
+            "groups":["other","unit"],"chapterTitles":["other":"练习章"]
+        ])
+        let root=try workspace()
+        let old=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,now:now)
+        ready(old)
+        let oldRecord=try XCTUnwrap(old.engine?.record)
+        let current=RefinedMemoryStore(subject:.power,baseDirectory:root,courseData:raw,
+                                       teachingLayoutData:layout,now:now)
+        ready(current)
+        XCTAssertEqual(current.entries.map(\.id),["other#1","unit#1","unit#3","unit#extra-a"])
+        XCTAssertEqual(current.entries.first?.group.chapter,"练习章")
+        XCTAssertEqual(current.course?.cards.map(\.key),["other","unit"])
+        XCTAssertEqual(current.engine?.record.cardIDs,oldRecord.cardIDs)
+        XCTAssertEqual(current.engine?.record.attempts,oldRecord.attempts)
+        current.start(now:now); ready(current)
+        XCTAssertEqual(current.current?.id,"other#1")
+    }
     @MainActor func testReferenceScopeParksAnActiveAndAnAlreadyScoredQuestion() async throws {
         let raw=try twoGroups(), extra=try supplement(for:raw)
         let root=try workspace()

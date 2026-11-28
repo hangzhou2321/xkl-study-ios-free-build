@@ -120,6 +120,11 @@ final class RefinedMemoryStore: ObservableObject {
         let subject, courseSHA256: String
         let refs: [String]
     }
+    private struct TeachingLayout: Decodable {
+        let subject, courseSHA256: String
+        let groups: [String]
+        let chapterTitles: [String: String]?
+    }
     private struct Disk: Codable {
         let format: String, subject: ConceptSubject, courseSHA256: String
         let record: ProfessionalRecallRecord
@@ -144,6 +149,7 @@ final class RefinedMemoryStore: ObservableObject {
          previousSupplementData: Data? = nil,
          earlierSupplementData: Data? = nil,
          wordingData: Data? = nil, referenceScopeData: Data? = nil,
+         teachingLayoutData: Data? = nil,
          now: Date = Date(), writer: @escaping (Data,URL) throws -> Void = DurableFile.write) {
         self.subject = subject; self.writer = writer
         let base = baseDirectory ?? FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
@@ -275,6 +281,38 @@ final class RefinedMemoryStore: ObservableObject {
                 _ = try parsed.validatedDeck(for:subject)
                 supplementRefs.formUnion(refs)
             }
+            var layoutData = teachingLayoutData
+            if courseData == nil, layoutData == nil,
+               let url = Bundle.main.url(forResource:subject.rawValue+"-teaching-layout",withExtension:"json",subdirectory:"RefinedMemory") {
+                layoutData = try Self.read(url,limit:1_048_576)
+            }
+            if let layoutData {
+                let layout = try JSONDecoder().decode(TeachingLayout.self,from:layoutData)
+                let groups = Dictionary(uniqueKeysWithValues:parsed.cards.map { ($0.key,$0) })
+                let chapterTitles = layout.chapterTitles ?? [:]
+                guard layout.subject == subject.rawValue, layout.courseSHA256 == courseSHA,
+                      layout.groups.count == groups.count, Set(layout.groups) == Set(groups.keys),
+                      Set(chapterTitles.keys).isSubset(of:Set(groups.keys)),
+                      chapterTitles.values.allSatisfy({ !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty }) else {
+                    throw ExamError.invalid("教学顺序与本机课程不匹配。")
+                }
+                let rowsByGroup = Dictionary(grouping:ordered,by: { $0.0.key })
+                ordered = layout.groups.flatMap { key in
+                    (rowsByGroup[key] ?? []).map { group,row in
+                        (.init(key:group.key,title:group.title,chapter:chapterTitles[key] ?? group.chapter,
+                               evidence:group.evidence,rows:group.rows),row)
+                    }
+                }
+                parsed = RefinedMemoryCourse(subject:parsed.subject,baseSHA256:parsed.baseSHA256,
+                    cards:layout.groups.compactMap { key in
+                        groups[key].map { group in
+                            .init(key:key,title:group.title,chapter:chapterTitles[key] ?? group.chapter,
+                                  evidence:group.evidence,rows:group.rows)
+                        }
+                    })
+            }
+            // The teaching order is independent of the persisted slot registry.
+            let teachingIDs = ordered.map { namespace+$0.1.ref }
             var scopeData = referenceScopeData
             if courseData == nil, scopeData == nil,
                let url = Bundle.main.url(forResource:subject.rawValue+"-reference-scope",withExtension:"json",subdirectory:"RefinedMemory") {
@@ -351,10 +389,10 @@ final class RefinedMemoryStore: ObservableObject {
                 committedSHA = StudySHA256.hex(bytes)
                 engine = fresh
             }
-            if let slots = engine?.record.cardIDs, slots != deck.cards.map(\.id) {
+            if let slots = engine?.record.cardIDs, slots != teachingIDs {
                 let byID = Dictionary(uniqueKeysWithValues:slots.enumerated().map { ($0.element,UInt16($0.offset)) })
-                teachingSlots = try deck.cards.map { item in
-                    guard let slot = byID[item.id] else { throw ExamError.invalid("原学习记录和教学小问不能对应。") }
+                teachingSlots = try teachingIDs.map { id in
+                    guard let slot = byID[id] else { throw ExamError.invalid("原学习记录和教学小问不能对应。") }
                     return slot
                 }
             }
